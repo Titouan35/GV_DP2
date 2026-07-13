@@ -1,0 +1,199 @@
+
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<html>
+<head>
+<title>Formulaires en ligne - Accueil</title>
+
+
+
+
+<meta http-equiv="content-type" content="text/html;charset=UTF-8" />
+<meta http-equiv="Content-Style-Type" content="text/css" />
+
+
+<meta http-equiv="content-language" content="fr-FR" />
+<meta name="language" content="fr-FR" />
+
+
+
+
+<link rel="stylesheet" charset="UTF-8" type="text/css" media="screen" href="/gf/styles/gf_v2.css" />
+
+
+<script type="text/javascript" src="/gf/scripts/dtree.js" charset="UTF-8">&nbsp;</script>
+<script type="text/javascript" src="/gf/scripts/skid.js" charset="UTF-8">&nbsp;</script>
+<script type="text/javascript" src="/gf/scripts/gf.js" charset="UTF-8">&nbsp;</script>
+
+</head>
+
+<body>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="identity">
+	<table border="0" cellpadding="0" cellspacing="0" width="99%">
+		<tr>
+			<td align="left" width="20%">
+				<a href="https://www.service-public.gouv.fr" target="_blank" title="Lien s'ouvrant dans une nouvelle fen&ecirc;tre"><img src="/gf/images/logo-service-public.png;jsessionid=BEE62362346B5274F4ABFD7B584F4F94.server01" height="75" border="0" title="Lien s'ouvrant dans une nouvelle fen&ecirc;tre" alt="Aide"></a>
+			</td>
+			<td align="left" valign="top">
+				<table border="0" cellpadding="0" cellspacing="0" width="99%" height="100%">
+					<tr>
+					<!-- v2 height 90 ==> 60px -->
+						<td height="60" align="left" valign="middle">
+							<h1 style="margin-left: 1em;">Formulaires en ligne</h1>
+						</td>
+					</tr>
+					<tr>
+						<td align="right" valign="middle">
+							<a href="javascript:ouvrirAide('accueil');" title="Lien s'ouvrant dans une nouvelle fen&ecirc;tre">
+								Aide
+							</a>
+						</td>
+					</tr>
+				</table>
+			</td>
+		</tr>
+	</table>
+</div>
+
+
+
+<div class="tomthumb">Formulaires en ligne</div>
+
+
+<div class="work">
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	<div class="errors">
+	<h1>Erreur :&nbsp;</h1>
+	<ul><li>Le formulaire que vous demandez n'existe pas.</li></ul></div>
+	<br>
+	<br>
+
+
+
+
+
+
+<div class="voletprimaire">
+
+<fieldset class="cadre"><legend class="legende">Suivi ou reprise de votre d&eacute;marche</legend>
+
+<p class="instructions">Saisissez les informations relatives &agrave; votre d&eacute;marche pour la compl&eacute;ter ou suivre son &eacute;volution</p>
+
+ <form name="formAccesSuiviReprise" method="post" action="/gf/redirectTeledossierConsulterOuReprise.do;jsessionid=BEE62362346B5274F4ABFD7B584F4F94.server01">
+  
+
+  <table>
+    <tr>
+      <td style="width: 180px;" align="right"><span class="label">Num&eacute;ro de t&eacute;l&eacute;dossier :&nbsp;</span></td>
+      <td><input type="text" name="numeroTeledossier" value=""></td>
+    </tr>
+
+    <tr>
+      <td style="width: 180px;" align="right"><span class="label">Mot de passe :&nbsp;</span></td>
+
+      <td><input type="password" name="password" value=""></td>
+    </tr>
+    <tr>
+      <td style="width: 180px;"></td>
+      <td><input type="submit" value="Valider"></td>
+    </tr>
+  </table>
+  
+</form> 
+  <table>
+    <tr>
+      <td style="width: 180px;"></td>
+      <td><div style="display: none;"><form id="1776446649" method="post" action="/gf/mdpPerdu.do;jsessionid=BEE62362346B5274F4ABFD7B584F4F94.server01" class="linkmdp"></form></div><a href="javascript:submitForm('1776446649');" style="font-size:0.8em;">
+        J'ai perdu le mot de passe de ma d&eacute;marche
+      </a></td>
+    </tr>
+  </table>
+  </fieldset>
+</div>
+
+
+
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="footer">
+	<table border="0" cellpadding="0" cellspacing="0" width="99%">
+		<tr>
+			<td align="right">
+				<a href="https://www.service-public.gouv.fr/P10050" target="_blank" title="Lien s'ouvrant dans une nouvelle fen&ecirc;tre">Conditions g&eacute;n&eacute;rales d'utilisation</a>
+			</td>
+		</tr>
+		<tr>
+			<td align="right">
+				<a href="https://www.service-public.gouv.fr/P10025" target="_blank" title="Lien s'ouvrant dans une nouvelle fen&ecirc;tre">Mentions l&eacute;gales</a>
+			</td>
+		</tr>
+	</table>
+</div>
+</body>
+</html>

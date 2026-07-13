@@ -1,0 +1,109 @@
+"""Pré-remplissage du Cerfa de Déclaration Préalable.
+
+ATTENTION réglementaire (constaté le 13/07/2026) : le formulaire DP n'est
+plus le 13404 mais le **Cerfa n° 16702*03** (renumérotation des formulaires
+d'urbanisme ; source : entreprendre.service-public.gouv.fr, fiche R2028).
+Le gabarit officiel est versionné dans app/gabarits/cerfa_16702.pdf
+(AcroForm, 20 pages, 386 champs).
+
+Le pré-remplissage reste un BROUILLON : relecture obligatoire par le BE
+avant dépôt (aucune case à risque n'est cochée automatiquement).
+"""
+from __future__ import annotations
+
+from pypdf import PdfReader, PdfWriter
+
+from . import config
+from .catalogue import parametres_effectifs
+
+GABARIT = config.REPO_ROOT / "app" / "gabarits" / "cerfa_16702.pdf"
+NUMERO_CERFA = "16702*03"
+
+
+def _champs_demandeur(projet: dict) -> dict:
+    mo = projet.get("mo") or {}
+    champs: dict[str, str] = {}
+    if (mo.get("type") or "").lower() == "particulier":
+        champs["D1N_nom"] = mo.get("raison_sociale") or mo.get("representant") or ""
+    else:
+        champs["D2D_denomination"] = mo.get("raison_sociale") or ""
+        champs["D2R_raison"] = mo.get("raison_sociale") or ""
+        champs["D2S_siret"] = (mo.get("siret") or "").replace(" ", "")
+        champs["D2J_type"] = mo.get("type") or ""
+        champs["D2N_nom"] = mo.get("representant") or ""
+    # adresse du demandeur : non structurée chez nous → tout dans « voie »
+    champs["D3V_voie"] = mo.get("adresse") or ""
+    return champs
+
+
+def _champs_terrain(projet: dict) -> dict:
+    loc = projet.get("localisation") or {}
+    champs = {
+        "T2V_voie": loc.get("adresse") or "",
+        "T2L_localite": loc.get("commune") or "",
+        "T2C_code": loc.get("code_postal") or "",
+    }
+    parcelles = (loc.get("parcelles") or [])[:3]
+    suffixes = ["", "P2", "P3"]
+    total = 0
+    for parc, sfx in zip(parcelles, suffixes):
+        champs[f"T2F{sfx}_prefixe"] = parc.get("com_abs") or "000"
+        champs[f"T2S{sfx}_section"] = parc.get("section") or ""
+        champs[f"T2N{sfx}_numero"] = parc.get("numero") or ""
+        if parc.get("contenance_m2"):
+            champs[f"T2T{sfx}_superficie"] = str(parc["contenance_m2"])
+            total += parc["contenance_m2"]
+    return champs
+
+
+def _champs_projet(projet: dict) -> dict:
+    omb = projet.get("ombriere") or {}
+    if not omb.get("famille") and not omb.get("puissance_kwc"):
+        return {}
+    p = parametres_effectifs(omb)
+    desc = (
+        f"Installation d'ombrières photovoltaïques sur le parking existant : "
+        f"structure {p['famille']} en acier galvanisé, "
+        f"{p['longueur_m']:g} m x {p['profondeur_m']:g} m, "
+        f"hauteur hors tout {p['h_haut_m']:.2f} m, pente {p['pente_deg']:g} degrés, "
+        f"modules photovoltaïques full black"
+    )
+    if omb.get("puissance_kwc"):
+        desc += f", puissance {omb['puissance_kwc']:g} kWc"
+    if omb.get("nb_places"):
+        desc += f", {omb['nb_places']} places couvertes"
+    desc += ". Conforme à l'obligation de la loi APER (art. L.171-4 CCH)."
+    champs = {"C2ZD1_description": desc}
+    if omb.get("puissance_kwc"):
+        champs["C2ZE1_puissance"] = f"{omb['puissance_kwc']:g}"
+    champs["C2ZP1_crete"] = f"{p['h_haut_m']:.2f} m".replace(".", ",")
+    return champs
+
+
+def preremplir(projet: dict):
+    """Remplit le gabarit et l'écrit dans les assets du projet. Renvoie le chemin."""
+    if not GABARIT.exists():
+        raise FileNotFoundError(
+            "Gabarit Cerfa absent (app/gabarits/cerfa_16702.pdf)."
+        )
+    champs = {
+        **_champs_demandeur(projet),
+        **_champs_terrain(projet),
+        **_champs_projet(projet),
+    }
+    champs = {k: v for k, v in champs.items() if v}
+
+    reader = PdfReader(GABARIT)
+    writer = PdfWriter()
+    writer.append(reader)
+    for page in writer.pages:
+        writer.update_page_form_field_values(page, champs, auto_regenerate=False)
+    try:  # afficher les valeurs dans tous les lecteurs PDF
+        writer.set_need_appearances_writer(True)
+    except AttributeError:  # pragma: no cover - selon version pypdf
+        pass
+
+    chemin = config.assets_dir(projet["id"]) / "cerfa_16702_prerempli.pdf"
+    with open(chemin, "wb") as f:
+        writer.write(f)
+    return chemin, sorted(champs)

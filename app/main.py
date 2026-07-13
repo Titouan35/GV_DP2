@@ -12,12 +12,21 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
-from .api import routes_geo, routes_projets
+from .api import (
+    routes_documents,
+    routes_dossier,
+    routes_geo,
+    routes_planches,
+    routes_projets,
+)
 
 app = FastAPI(title=config.APP_TITLE, version=config.VERSION)
 
 app.include_router(routes_geo.router)
 app.include_router(routes_projets.router)
+app.include_router(routes_planches.router)
+app.include_router(routes_documents.router)
+app.include_router(routes_dossier.router)
 
 STATIC_DIR = config.REPO_ROOT / "app" / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

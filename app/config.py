@@ -11,6 +11,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 PROJETS_DIR = REPO_ROOT / "PROJETS"          # 1 dossier JSON par projet
+
+
+def assets_dir(projet_id: str):
+    """Dossier des fichiers du projet (planches générées, uploads, exports)."""
+    d = PROJETS_DIR / f"{projet_id}.assets"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 DP_DIR = REPO_ROOT.parent                     # Innovation/OUTILS/DP
 COUPES_DIR = DP_DIR / "COUPES"                # coupes types Solstyce START PLAINE
 

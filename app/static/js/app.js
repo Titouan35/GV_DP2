@@ -121,6 +121,8 @@ function renderChrome() {
   $("#proj-badge").hidden = !p;
   if (p) $("#proj-nom").textContent = p.nom;
   $("#btn-save").disabled = !p;
+  $("#btn-generer").disabled = !p;
+  $("#btn-generer").title = p ? "Aller à l'étape Aperçu & export" : "Créez d'abord un projet";
 
   // stepper
   const nav = $("#stepper");
@@ -197,7 +199,10 @@ function render() {
   if (state.etape === 1) return renderEtapeProjet(main);
   if (state.etape === 2) return renderEtapeLocalisation(main);
   if (state.etape === 3) return renderEtapeCaracteristiques(main);
-  return renderPlaceholder(main);
+  if (state.etape === 4) return renderEtapePieces(main);
+  if (state.etape === 5) return renderEtapeInsertion(main);
+  if (state.etape === 6) return renderEtapeNotice(main);
+  if (state.etape === 7) return renderEtapeExport(main);
 }
 
 // ---------------- accueil ----------------
@@ -635,36 +640,230 @@ function renderEtapeCaracteristiques(main) {
     </div>
     <p class="sub" style="margin-top:6px">La puissance pilote le régime : ≥ 3 000 kWc bascule le dossier en permis de construire.</p>
     <div class="actionsrow">
+      <button class="btn" id="btn-apercus">Mettre à jour les aperçus DP3 / DP4</button>
       <button class="btn navy" id="btn-suivant">Continuer vers les pièces du BE</button>
+    </div>
+    <div class="grid" style="margin-top:18px" id="apercus" hidden>
+      <div class="card"><div class="hd"><span class="ti-title">Aperçu DP3 · Coupe</span></div>
+        <img id="img-dp3" class="planche-img" alt="Coupe DP3" /></div>
+      <div class="card"><div class="hd"><span class="ti-title">Aperçu DP4 · Façades / toiture</span></div>
+        <img id="img-dp4" class="planche-img" alt="Façades DP4" /></div>
     </div>`;
   brancherChamps(main);
+  const chargerApercus = async () => {
+    if (!state.projet.ombriere?.famille) { toast("Choisissez d'abord une famille de structure.", "err"); return; }
+    await sauvegarder();
+    $("#apercus").hidden = false;
+    const t = Date.now();
+    $("#img-dp3").src = `/api/projets/${state.projet.id}/planches/dp3_coupe.png?regen=1&t=${t}`;
+    $("#img-dp4").src = `/api/projets/${state.projet.id}/planches/dp4_facades.png?regen=1&t=${t}`;
+  };
+  $("#btn-apercus").addEventListener("click", () => chargerApercus().catch(() => {}));
   $("#btn-suivant").addEventListener("click", async () => { await sauvegarder(); allerEtape(4); });
 }
 
-// ---------------- étapes 4-7 : en construction ----------------
-const PLACEHOLDERS = {
-  4: { titre: "Pièces du bureau d'études", texte: "Upload du plan de masse (DP2), du photomontage officiel DP6 et des photos DP7/DP8. La coupe DP3 et les façades DP4 seront générées depuis le modèle paramétrique, avec repli upload.", phase: "Phases 2-3 de la roadmap" },
-  5: { titre: "Insertion IA (visuel commercial)", texte: "Photo du site + zone d'implantation tracée + repère d'échelle + consignes libres → variantes photoréalistes. Réservé au commercial, jamais en pièce DP6. Prérequis : clé API image (Gemini ou Azure OpenAI).", phase: "Phase 5 de la roadmap" },
-  6: { titre: "Notice descriptive (DP11)", texte: "Gabarit 7 sections pré-rempli depuis la saisie, les APIs (GPU, Géorisques) et le modèle d'ombrière, brouillon IA relu et validé humainement avant export.", phase: "Phase 4 de la roadmap" },
-  7: { titre: "Aperçu & export", texte: "Assemblage PowerPoint 16:9 à la charte Greenvolt (une slide par pièce), export PDF prêt à déposer et Cerfa 13404 pré-rempli.", phase: "Phase 6 de la roadmap" },
-};
+// ---------------- étape 4 : pièces du BE (uploads) ----------------
+const PIECES_UPLOAD = [
+  { code: "dp2", titre: "DP2 · Plan de masse", note: "site-spécifique, fourni par le BE" },
+  { code: "dp3", titre: "DP3 · Coupe (repli BE)", note: "facultatif : remplace la coupe paramétrique" },
+  { code: "dp4", titre: "DP4 · Façades (repli BE)", note: "facultatif : remplace les façades paramétriques" },
+  { code: "dp6", titre: "DP6 · Photomontage d'insertion", note: "pièce officielle, jamais générée par IA" },
+  { code: "dp7", titre: "DP7 · Photo environnement proche", note: "photo datée et repérée" },
+  { code: "dp8", titre: "DP8 · Photo paysage lointain", note: "photo datée et repérée" },
+];
 
-function renderPlaceholder(main) {
-  const ph = PLACEHOLDERS[state.etape];
-  const step = STEPS.find((s) => s.n === state.etape);
+function renderEtapePieces(main) {
   main.innerHTML = `
-    <div class="crumb">Étape ${state.etape} / 7</div>
-    <h1>${esc(step.titre)}</h1>
-    <p class="sub">&nbsp;</p>
-    <div class="placeholder">
-      <b>${esc(ph.titre)}</b>
-      ${esc(ph.texte)}
-      <br /><span class="phase-badge">En construction · ${esc(ph.phase)}</span>
+    <div class="crumb">Étape 4 / 7</div>
+    <h1>Pièces du bureau d'études</h1>
+    <p class="sub">PDF, PNG ou JPG (40 Mo max). Un fichier par pièce ; le dernier envoi remplace le précédent.</p>
+    <div class="home-list" id="slots"></div>`;
+  const box = $("#slots");
+  for (const piece of PIECES_UPLOAD) {
+    const doc = state.projet.documents?.[piece.code];
+    const div = document.createElement("div");
+    div.className = "card upload-slot";
+    div.innerHTML = `
+      <div class="bd" style="display:flex;align-items:center;gap:14px">
+        <span class="st ${doc ? "prete" : "en_attente"}" style="width:10px;height:10px;border-radius:50%;flex:none;background:${doc ? "var(--gv-green)" : "var(--gv-grey)"}"></span>
+        <span style="flex:1"><b style="color:var(--gv-navy)">${esc(piece.titre)}</b>
+          <small style="display:block;color:var(--muted)">${doc ? esc(doc.nom_fichier) + " · " + esc((doc.date || "").slice(0, 10)) : esc(piece.note)}</small></span>
+        ${doc ? `<a class="btn" href="/api/projets/${state.projet.id}/documents/${piece.code}" target="_blank">Voir</a>
+                 <button class="btn" data-del="${piece.code}">Retirer</button>` : ""}
+        <label class="btn navy" style="cursor:pointer">${doc ? "Remplacer" : "Téléverser"}
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg" data-code="${piece.code}" hidden /></label>
+      </div>`;
+    box.appendChild(div);
+  }
+  box.querySelectorAll("input[type=file]").forEach((inp) => {
+    inp.addEventListener("change", async () => {
+      if (!inp.files.length) return;
+      const fd = new FormData();
+      fd.append("fichier", inp.files[0]);
+      let resp;
+      try {
+        resp = await fetch(`/api/projets/${state.projet.id}/documents/${inp.dataset.code}`, { method: "POST", body: fd });
+      } catch { toast("Serveur injoignable.", "err"); return; }
+      if (!resp.ok) { toast((await resp.json()).detail || "Échec de l'envoi.", "err"); return; }
+      const data = await resp.json();
+      state.projet = data.projet; state.evaluation = data.evaluation;
+      toast("Pièce enregistrée.", "ok");
+      render();
+    });
+  });
+  box.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const data = await api(`/api/projets/${state.projet.id}/documents/${btn.dataset.del}`, { method: "DELETE" });
+      state.projet = data.projet; state.evaluation = data.evaluation;
+      render();
+    });
+  });
+}
+
+// ---------------- étape 5 : insertion IA (squelette phase 5) ----------------
+async function renderEtapeInsertion(main) {
+  main.innerHTML = `
+    <div class="crumb">Étape 5 / 7</div>
+    <h1>Insertion IA (visuel commercial)</h1>
+    <p class="sub">Génération photoréaliste pour les fiches d'emprise et présentations. Étiquetée « visuel IA », jamais utilisée en pièce DP6.</p>
+    <div id="ia-statut" class="placeholder">Vérification de la configuration…</div>`;
+  try {
+    const s = await api("/api/insertion/statut");
+    const box = $("#ia-statut");
+    if (s.configure) {
+      box.innerHTML = `<b>Module configuré (${esc(s.fournisseur)})</b>
+        L'interface de génération (photo du site, zone d'implantation, consignes libres, variantes) arrive dans la suite de la phase 5.`;
+    } else {
+      box.innerHTML = `<b>Clé API à créer (action Florent, ~10 min)</b>
+        <div style="text-align:left;max-width:560px;margin:14px auto 0">
+          ${s.guide.map((l) => `<div style="margin-bottom:7px">${esc(l)}</div>`).join("")}
+          <div style="margin-top:12px;color:var(--gv-navy);font-weight:500">
+            ${s.rappels.map((l) => `<div>· ${esc(l)}</div>`).join("")}
+          </div>
+        </div>
+        <span class="phase-badge">Phase 5 · en attente de la clé API</span>`;
+    }
+  } catch { /* toast affiché */ }
+}
+
+// ---------------- étape 6 : notice descriptive ----------------
+const NOTICE_SECTIONS = [
+  ["presentation", "1. Présentation du projet et du demandeur"],
+  ["etat_initial", "2. État initial du terrain et de ses abords"],
+  ["description", "3. Description du projet"],
+  ["insertion", "4. Insertion paysagère et aspect extérieur"],
+  ["reglementaire", "5. Contexte réglementaire, servitudes et risques"],
+  ["acces_reseaux", "6. Accès, réseaux et raccordement"],
+  ["chantier", "7. Chantier et remise en état"],
+];
+
+function renderEtapeNotice(main) {
+  const n = state.projet.notice || { sections: {} };
+  main.innerHTML = `
+    <div class="crumb">Étape 6 / 7</div>
+    <h1>Notice descriptive (DP11)</h1>
+    <p class="sub">Brouillon généré depuis la saisie et les données officielles (PLU, Géorisques). À relire et valider avant export.</p>
+    <div class="actionsrow" style="margin:0 0 16px">
+      <button class="btn navy" id="btn-gen-notice">Générer le brouillon</button>
+      <button class="btn" id="btn-regen-notice" title="Écrase les 7 sections avec un nouveau brouillon">Tout regénérer</button>
+      <label class="chip ${n.valide_humain ? "ok" : ""}" style="cursor:pointer;padding:8px 14px">
+        <input type="checkbox" id="chk-valide" ${n.valide_humain ? "checked" : ""} style="margin-right:6px" />
+        Notice relue et validée
+      </label>
+    </div>
+    <div class="home-list" id="notice-sections"></div>`;
+  const box = $("#notice-sections");
+  for (const [cle, titre] of NOTICE_SECTIONS) {
+    const div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `<div class="hd"><span class="ti-title">${esc(titre)}</span></div>
+      <div class="bd"><textarea class="input notice-ta" data-cle="${cle}" rows="4">${esc(n.sections?.[cle] || "")}</textarea></div>`;
+    box.appendChild(div);
+  }
+  box.querySelectorAll("textarea").forEach((ta) => {
+    ta.addEventListener("input", () => {
+      state.projet.notice.sections[ta.dataset.cle] = ta.value;
+      state.projet.notice.valide_humain = false;
+      sauvegarderBientot();
+    });
+  });
+  const generer = async (force) => {
+    const data = await api(`/api/projets/${state.projet.id}/notice/generer?force=${force}`, { method: "POST" });
+    state.projet = data.projet; state.evaluation = data.evaluation;
+    toast("Brouillon de notice généré.", "ok");
+    render();
+  };
+  $("#btn-gen-notice").addEventListener("click", () => generer(0).catch(() => {}));
+  $("#btn-regen-notice").addEventListener("click", () => generer(1).catch(() => {}));
+  $("#chk-valide").addEventListener("change", (e) => {
+    state.projet.notice.valide_humain = e.target.checked;
+    sauvegarder(false).catch(() => {});
+  });
+}
+
+// ---------------- étape 7 : aperçu & export ----------------
+const PLANCHES_APERCU = [
+  ["dp1_situation", "DP1 · Situation"],
+  ["dp1_cadastral", "DP1 · Cadastre"],
+  ["dp1_aerien", "DP1 · Vue aérienne"],
+  ["dp3_coupe", "DP3 · Coupe"],
+  ["dp4_facades", "DP4 · Façades"],
+];
+
+function renderEtapeExport(main) {
+  main.innerHTML = `
+    <div class="crumb">Étape 7 / 7</div>
+    <h1>Aperçu & export</h1>
+    <p class="sub">Vérifiez les planches, pré-remplissez le Cerfa puis assemblez le dossier PowerPoint (export PDF pour le dépôt).</p>
+    <div class="actionsrow" style="margin:0 0 8px">
+      <button class="btn" id="btn-cerfa">Pré-remplir le Cerfa 16702</button>
+      <button class="btn navy" id="btn-pptx">Assembler le dossier (PPTX)</button>
+      <button class="btn primary" id="btn-pdf">Exporter en PDF</button>
+    </div>
+    <div id="export-liens" class="sub" style="min-height:20px"></div>
+    <div class="gallery" id="gallery">
+      ${PLANCHES_APERCU.map(([code, titre]) => `
+        <div class="card"><div class="hd"><span class="ti-title">${esc(titre)}</span>
+          <span class="link" data-regen="${code}">régénérer</span></div>
+          <img class="planche-img" id="pl-${code}" alt="${esc(titre)}" /></div>`).join("")}
     </div>`;
+
+  const chargerImg = (code, regen) => {
+    const img = $(`#pl-${code}`);
+    img.src = `/api/projets/${state.projet.id}/planches/${code}.png?regen=${regen ? 1 : 0}&t=${Date.now()}`;
+    img.onerror = () => { img.alt = "Planche indisponible (complétez les étapes 2-3)"; img.style.opacity = 0.25; };
+  };
+  PLANCHES_APERCU.forEach(([code]) => chargerImg(code, false));
+  main.querySelectorAll("[data-regen]").forEach((el) =>
+    el.addEventListener("click", () => chargerImg(el.dataset.regen, true)));
+
+  const liens = $("#export-liens");
+  $("#btn-cerfa").addEventListener("click", async () => {
+    const data = await api(`/api/projets/${state.projet.id}/cerfa`, { method: "POST" });
+    state.projet = data.projet; state.evaluation = data.evaluation;
+    renderChrome();
+    liens.innerHTML = `Cerfa ${esc(data.cerfa)} pré-rempli (${data.champs_remplis} champs) —
+      <a href="/api/projets/${state.projet.id}/cerfa.pdf" target="_blank">ouvrir le PDF</a> (brouillon à relire).`;
+    toast("Cerfa pré-rempli.", "ok");
+  });
+  $("#btn-pptx").addEventListener("click", async () => {
+    liens.textContent = "Assemblage en cours (génération des planches)…";
+    const data = await api(`/api/projets/${state.projet.id}/dossier`, { method: "POST" });
+    liens.innerHTML = `Dossier assemblé : <a href="${esc(data.telechargement)}">${esc(data.fichier)}</a>`
+      + (data.avertissements.length ? `<br />Avertissements : ${esc(data.avertissements.join(" ; "))}` : "");
+    toast("Dossier PPTX assemblé.", "ok");
+  });
+  $("#btn-pdf").addEventListener("click", async () => {
+    liens.textContent = "Export PDF via PowerPoint…";
+    const data = await api(`/api/projets/${state.projet.id}/dossier/pdf`, { method: "POST" });
+    liens.innerHTML = `PDF prêt : <a href="${esc(data.telechargement)}">${esc(data.fichier)}</a>`;
+    toast("PDF exporté.", "ok");
+  });
 }
 
 // ---------------- init ----------------
 $("#btn-save").addEventListener("click", () => sauvegarder(false).catch(() => {}));
 $("#btn-accueil").addEventListener("click", () => { state.etape = 0; render(); });
+$("#btn-generer").addEventListener("click", () => allerEtape(7));
 
 render();

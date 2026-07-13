@@ -6,13 +6,14 @@ from app.regles import PIECES_DP, completude, determiner_regime, evaluer
 def test_regime_dp_par_defaut():
     r = determiner_regime(500, False)
     assert r["regime"] == "DP"
-    assert r["cerfa"] == "13404"
+    # renumérotation 2025-2026 : la DP est passée du 13404 au 16702*03
+    assert r["cerfa"] == "16702*03"
 
 
 def test_regime_pc_si_3mwc():
     r = determiner_regime(3000, False)
     assert r["regime"] == "PC"
-    assert r["cerfa"] == "13409"
+    assert r["cerfa"].startswith("16700")
     assert any("3 MWc" in raison for raison in r["raisons"])
 
 

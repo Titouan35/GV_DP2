@@ -27,8 +27,14 @@ PIECES_DP = [
     {"code": "dp7", "titre": "DP7 · Photo environnement proche", "mode": "be"},
     {"code": "dp8", "titre": "DP8 · Photo paysage lointain", "mode": "be"},
     {"code": "dp11", "titre": "DP11 · Notice descriptive", "mode": "auto"},
-    {"code": "cerfa", "titre": "Cerfa 13404 pré-rempli", "mode": "auto"},
+    {"code": "cerfa", "titre": "Cerfa 16702 (DP) pré-rempli", "mode": "auto"},
 ]
+
+# Renumérotation 2025-2026 des formulaires d'urbanisme : la DP « autres
+# constructions » n'est plus le 13404 mais le 16702*03 (vérifié le
+# 13/07/2026 sur entreprendre.service-public.gouv.fr, fiche R2028).
+CERFA_DP = "16702*03"
+CERFA_PC = "16700 (à vérifier)"
 
 
 def determiner_regime(puissance_kwc: float | None, secteur_abf: bool | None) -> dict:
@@ -46,7 +52,7 @@ def determiner_regime(puissance_kwc: float | None, secteur_abf: bool | None) -> 
     return {
         "regime": regime,
         "raisons": raisons,
-        "cerfa": "13404" if regime == REGIME_DP else "13409",
+        "cerfa": CERFA_DP if regime == REGIME_DP else CERFA_PC,
     }
 
 
@@ -67,16 +73,22 @@ def _statut_piece(piece: dict, projet: Projet) -> dict:
             statut = "prete" if loc_ok else "a_completer"
             detail = "générée (IGN)" if loc_ok else "localisation à valider"
         elif code == "dp11":
-            statut = "a_generer"
-            detail = "brouillon à générer (phase 4)"
+            sections = projet.notice.sections or {}
+            if any((v or "").strip() for v in sections.values()):
+                if projet.notice.valide_humain:
+                    statut, detail = "prete", "relue et validée"
+                else:
+                    statut, detail = "a_completer", "brouillon à relire et valider"
+            else:
+                statut, detail = "a_generer", "brouillon à générer (étape 6)"
         else:  # cerfa
             statut = "a_generer"
-            detail = "pré-remplissage (phase 4)"
+            detail = "à pré-remplir (étape 7)"
         return {**piece, "statut": statut, "detail": detail}
 
     if mode == "mixte":
         if code in ("dp3", "dp4") and projet.ombriere.famille:
-            return {**piece, "statut": "a_generer", "detail": "paramétrique (phase 2)"}
+            return {**piece, "statut": "prete", "detail": "générée (paramétrique)"}
         return {**piece, "statut": "en_attente", "detail": "tracé/upload BE attendu"}
 
     return {**piece, "statut": "en_attente", "detail": "upload BE attendu"}
