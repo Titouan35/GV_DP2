@@ -16,6 +16,7 @@ from .api import (
     routes_documents,
     routes_dossier,
     routes_geo,
+    routes_insertion,
     routes_planches,
     routes_projets,
 )
@@ -27,6 +28,7 @@ app.include_router(routes_projets.router)
 app.include_router(routes_planches.router)
 app.include_router(routes_documents.router)
 app.include_router(routes_dossier.router)
+app.include_router(routes_insertion.router)
 
 STATIC_DIR = config.REPO_ROOT / "app" / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

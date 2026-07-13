@@ -76,6 +76,17 @@ class Notice(BaseModel):
     valide_humain: bool = False
 
 
+class Insertion(BaseModel):
+    """Insertion IA (visuel commercial, jamais pièce DP6). Cf. PLAN §6 bis."""
+    photo: Optional[str] = None            # chemin relatif de la photo du site
+    zone: Optional[list[float]] = None     # [x0, y0, x1, y1] normalisés 0-1
+    repere_distance_m: float = 2.5         # distance connue au sol (défaut : place)
+    repere_desc: str = "la largeur d'une place de stationnement"
+    consignes: str = ""                    # texte libre de l'utilisateur
+    variantes: list[dict] = Field(default_factory=list)  # {fichier, prompt, date}
+    retenue: Optional[str] = None          # fichier de la variante retenue
+
+
 class Projet(BaseModel):
     id: Optional[str] = None
     nom: str
@@ -88,6 +99,7 @@ class Projet(BaseModel):
     ombriere: Ombriere = Field(default_factory=Ombriere)
     urbanisme: Urbanisme = Field(default_factory=Urbanisme)
     notice: Notice = Field(default_factory=Notice)
+    insertion: Insertion = Field(default_factory=Insertion)
     # Uploads BE : {code_piece: {nom_fichier, chemin, date}}
     documents: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
