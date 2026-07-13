@@ -1,0 +1,16 @@
+# Environnement Python (propre à chaque machine, cf. README)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Données projets (dossiers clients, jamais versionnés)
+PROJETS/
+
+# Config locale par poste
+config.local.json
+
+# OS / OneDrive
+.DS_Store
+Thumbs.db
+~$*

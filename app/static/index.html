@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GV_DP · Déclaration Préalable — Ombrières</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2305DB79' d='M13 2 4 14h6l-1 8 9-12h-6z'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
+<link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="logo" title="Greenvolt Next">
+      <span class="wordmark">greenvolt</span><span class="next">next</span>
+    </div>
+    <div class="vdiv"></div>
+    <div class="toolname">Déclaration préalable<small>Ombrières photovoltaïques de parking</small></div>
+    <div class="spacer"></div>
+    <div class="proj" id="proj-badge" hidden><span id="proj-nom"></span></div>
+    <button class="btn" id="btn-accueil" title="Retour à la liste des projets">Projets</button>
+    <button class="btn" id="btn-save" disabled>Enregistrer</button>
+    <button class="btn primary" id="btn-generer" disabled title="Disponible en phase 6 (assemblage)">Générer le dossier</button>
+  </header>
+
+  <div class="body">
+
+    <aside class="side" id="sidebar">
+      <h4>Étapes du dossier</h4>
+      <nav id="stepper"></nav>
+      <div class="grow"></div>
+      <div class="regime" id="regime-box">
+        <div class="t" id="regime-titre">Déclaration préalable</div>
+        <div class="s" id="regime-detail">&lt; 3 MWc, hors secteur ABF · Cerfa 13404</div>
+      </div>
+    </aside>
+
+    <main class="main" id="main">
+      <!-- contenu de l'étape active, rendu par app.js -->
+    </main>
+
+    <aside class="rightpanel" id="rightpanel">
+      <div class="card">
+        <div class="hd"><span class="ti-title">Complétude du dossier</span></div>
+        <div class="prog">
+          <div class="ring" id="ring" style="--p:0"><span id="ring-txt">0/12</span></div>
+          <div class="txt"><b id="prog-label">Dossier vide</b><br /><span id="prog-sub">Renseignez les étapes</span></div>
+        </div>
+        <div id="pieces-list"></div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
