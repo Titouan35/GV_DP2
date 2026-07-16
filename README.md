@@ -43,7 +43,9 @@ tests/             # pytest ; tests réseau marqués `live`, exclus par défaut
 - [x] Phase 3 — Planches cartographiques DP1 à l'échelle (WMS GetMap, Lambert-93)
 - [x] Phase 4 — Notice DP11 + Cerfa 16702 pré-rempli
 - [x] Phase 5 — Module Insertion IA : **générateur de prompt sans API** (cible ChatGPT)
-- [x] Phase 6 — Assemblage PPTX + export PDF (PowerPoint)
+- [x] Phase 6 — Assemblage PPTX + export PDF, mise en page fidèle à la maquette
+      Claude Design « DP_Template » (page de garde, cartouche + badge par pièce,
+      notice 2 colonnes, DP6 avant/après) ; images optimisées (JPEG, EXIF, 2400 px)
 - [x] Phase 7 — Conteneurisation Azure (Dockerfile + doc) ; reste test utilisateur BE
 
 ## Insertion IA (étape 5) : générateur de prompt, sans clé

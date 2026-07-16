@@ -22,5 +22,8 @@ def test_dossier_pptx_offline(tmp_path, monkeypatch):
     assert avertissements == []
 
     prs = Presentation(str(chemin))
-    # garde + 3 placeholders DP1 + DP2 + DP3 + DP4 + DP6/7/8 + notice (4) + cerfa + checklist
-    assert len(prs.slides) >= 12
+    # maquette : garde + DP1 fusion + aérienne + DP2 + DP3 + DP4 + notice
+    # + DP6 + photos DP7/8 + cerfa + checklist = 11 planches
+    assert len(prs.slides) == 11
+    # format 16:9 de la maquette (1280 x 720 px)
+    assert prs.slide_width == assemblage.P(1280)
