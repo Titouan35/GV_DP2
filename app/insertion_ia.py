@@ -95,9 +95,13 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
     ]
     if plan_dispo:
         b2_lignes.append(
-            "Un PLAN DE MASSE est joint : il porte l'implantation réelle et "
-            "l'orientation des rangées d'ombrières — respecte-les précisément "
-            "(position, sens, nombre de rangées)."
+            "IMPÉRATIF, LE PLAN DE MASSE JOINT FAIT FOI : reproduis EXACTEMENT le nombre "
+            "de rangées d'ombrières, leur position et leur orientation telles qu'elles "
+            "figurent sur le plan, par rapport au bâtiment, à l'entrée et aux limites du "
+            "parking. Commence par repérer sur la photo les mêmes éléments que sur le plan "
+            "(façade du magasin, entrée, îlots, bordures, mâts) pour caler l'implantation, "
+            "puis pose les ombrières aux mêmes emplacements. Ne couvre QUE les rangées "
+            "indiquées au plan, ni plus, ni moins, et respecte le sens de la pente."
         )
     else:
         b2_lignes.append(
@@ -165,6 +169,13 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         b4_lignes.append(
             f"La garde au sol sous la panne basse est d'environ {_fmt(p.get('h_bas_m'), ' m')} "
             "(passage véhicule dessous). Dimensionne l'ombrière en cohérence avec ces repères."
+        )
+    echelle_desc = (ins.get("echelle_desc") or "").strip()
+    echelle_d = ins.get("echelle_distance_m")
+    if echelle_desc and echelle_d:
+        b4_lignes.append(
+            f"Repère d'échelle relevé sur la photo : {echelle_desc} mesure environ "
+            f"{_fmt(echelle_d, ' m')} ; sers-t'en pour dimensionner l'ombrière à la bonne taille."
         )
     b4 = " ".join(b4_lignes)
 

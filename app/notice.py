@@ -26,91 +26,51 @@ SECTIONS = [
     ("chantier", "7. Chantier et remise en état"),
 ]
 
-# Notice type (balises {{variable}}), modelée sur le dossier Soufflenheim.
+# Notice type (balises {{variable}}), synthétique, sur la trame Soufflenheim.
 TEMPLATES: dict[str, str] = {
     "presentation": (
         "Le présent dossier de déclaration préalable est déposé par {{raison_sociale}}, "
         "représentée par {{representant}} (SIRET {{siret}}). Il porte sur l'installation "
         "d'ombrières photovoltaïques sur le parc de stationnement existant situé {{adresse}}, "
-        "sur la commune de {{commune}} ({{code_postal}}). L'opération a pour objet la "
-        "production d'électricité d'origine renouvelable tout en assurant l'ombrage et la "
-        "protection des véhicules stationnés contre les intempéries. Elle s'inscrit dans le "
-        "cadre de l'obligation d'équipement des parcs de stationnement extérieurs prévue par "
-        "la loi n° 2023-175 du 10 mars 2023 (loi APER, article L.171-4 du code de la "
-        "construction et de l'habitation). Le maître d'ouvrage assurera l'exploitation de la "
-        "centrale sur toute sa durée de vie, l'usage de stationnement du site demeurant inchangé."
+        "à {{commune}} ({{code_postal}}). Le projet s'inscrit dans le cadre de la loi APER "
+        "(loi n° 2023-175 du 10 mars 2023) et n'altère pas l'usage de stationnement du site."
     ),
     "etat_initial": (
-        "Le terrain d'assiette du projet correspond aux parcelles cadastrales {{parcelles}}, "
-        "sur le territoire de la commune de {{commune}} (code INSEE {{code_insee}}), pour une "
-        "superficie totale de {{surface}}. Il s'agit d'une aire de stationnement déjà aménagée "
-        "et imperméabilisée, dont l'usage et la desserte sont conservés en l'état. Le relief du "
-        "site est faiblement marqué, ce qui permet une implantation des ombrières sans "
-        "modification sensible de la topographie. Les abords immédiats conservent leur "
-        "configuration actuelle : voies de circulation, cheminements piétons, espaces verts et "
-        "clôtures existantes. L'accès au site s'effectue depuis la voirie publique attenante, "
-        "sans création de nouvel accès."
+        "Le terrain d'assiette correspond aux parcelles {{parcelles}}, sur la commune de "
+        "{{commune}} (INSEE {{code_insee}}), pour une superficie de {{surface}}. Il s'agit "
+        "d'une aire de stationnement existante, déjà aménagée et imperméabilisée, dont l'usage "
+        "et les accès sont conservés en l'état."
     ),
     "description": (
-        "Le projet consiste en la construction d'une ombrière photovoltaïque de coupe "
-        "{{coupe}}, de {{longueur}} de longueur et {{largeur}} de largeur, portée par une "
-        "structure métallique galvanisée. La couverture est constituée de {{nb_travees}} "
-        "travées d'un entraxe de {{entraxe}} et d'une {{toiture}} inclinée à {{pente}}, dont le "
-        "point haut culmine à {{hauteur_max}} et le point bas s'établit à {{hauteur_bas}} "
-        "au-dessus du sol fini. La couverture est assurée par des modules photovoltaïques full "
-        "black d'une puissance unitaire de {{module_puissance}} et de dimensions "
-        "{{module_dimensions}}, pour une puissance totale installée de {{puissance_kwc}}. Aucun "
-        "terrassement significatif n'est nécessaire, le parc de stationnement étant déjà "
-        "réalisé, et les fondations se limitent aux massifs des poteaux support. Les eaux "
-        "pluviales interceptées par la couverture sont collectées par gouttières et descentes, "
-        "puis dirigées vers le dispositif de gestion des eaux pluviales existant du parking. Le "
-        "nombre de places de stationnement demeure inchangé, soit {{nb_places}} places, qui "
-        "restent couvertes et utilisables après travaux."
+        "Le projet consiste à installer une ombrière photovoltaïque de coupe {{coupe}}, de "
+        "{{longueur}} sur {{largeur}}, en structure métallique galvanisée : {{nb_travees}} "
+        "travées d'entraxe {{entraxe}}, {{toiture}} à {{pente}}, hauteur maximale {{hauteur_max}} "
+        "et point bas {{hauteur_bas}}. Elle reçoit des modules photovoltaïques full black"
+        "{{modules_detail}} pour une puissance de {{puissance_kwc}}, et couvre {{nb_places}} "
+        "places qui restent utilisables. Aucun terrassement significatif n'est nécessaire, les "
+        "fondations se limitant aux massifs des poteaux."
     ),
     "insertion": (
-        "L'ombrière présente une volumétrie simple et régulière, d'une hauteur comparable aux "
-        "équipements techniques usuels d'un parc de stationnement. La structure métallique "
-        "reçoit une teinte neutre et les modules, de teinte sombre et non réfléchissante, "
-        "limitent les reflets et l'impact visuel depuis les espaces environnants. La végétation "
-        "existante en périphérie du site participe à l'insertion de l'ouvrage et atténue sa "
-        "perception depuis les abords habités, notamment les habitations les plus proches. Le "
-        "document graphique d'insertion paysagère joint au dossier illustre la perception du "
-        "projet avant et après travaux depuis l'espace public. L'aspect extérieur de "
-        "l'installation, sobre et homogène, garantit une intégration cohérente avec le caractère "
-        "du site et de son environnement."
+        "L'ombrière présente une volumétrie simple et régulière, de teinte neutre, avec des "
+        "modules sombres non réfléchissants qui limitent l'impact visuel. Le document graphique "
+        "d'insertion (pièce DP6) illustre le projet avant et après travaux depuis l'espace public."
     ),
     "reglementaire": (
-        "Au regard du document d'urbanisme en vigueur, le terrain relève du {{zonage}}, dont le "
-        "règlement admet le projet dans les conditions rappelées au dossier. {{abf}} {{risques}} "
-        "Le maître d'ouvrage veillera au respect des servitudes d'utilité publique éventuellement "
-        "applicables au site. Compte tenu de sa nature et de ses caractéristiques, le projet "
-        "relève du régime de la déclaration préalable au titre de l'article R.421-9 du code de "
-        "l'urbanisme, tel que modifié pour les ombrières photovoltaïques de parc de stationnement."
+        "Au document d'urbanisme, le terrain relève du {{zonage}}. {{abf}} {{risques}} Compte "
+        "tenu de ses caractéristiques, le projet relève de la déclaration préalable (article "
+        "R.421-9 du code de l'urbanisme)."
     ),
     "acces_reseaux": (
-        "Les accès au parc de stationnement et les circulations intérieures sont conservés à "
-        "l'identique, sans création de voirie nouvelle. L'électricité produite par la centrale "
-        "est injectée sur le réseau public de distribution géré par Enedis, via un point de "
-        "livraison implanté à proximité de la limite de propriété. L'emplacement du point de "
-        "livraison figurant sur les pièces graphiques n'est donné qu'à titre indicatif, son "
-        "positionnement définitif ainsi que celui d'un éventuel transformateur relevant de "
-        "l'appréciation finale du gestionnaire de réseau. Les câbles cheminent en partie haute "
-        "sous la structure des ombrières, puis en tranchée souterraine jusqu'au point de "
-        "livraison, sans incidence sur les autres réseaux. La demande de raccordement sera "
-        "déposée auprès du gestionnaire de réseau parallèlement à l'instruction du présent "
-        "dossier. La défense extérieure contre l'incendie du site n'est pas modifiée par le projet."
+        "Les accès et circulations du parking sont conservés. L'électricité produite est injectée "
+        "sur le réseau public de distribution (Enedis) via un point de livraison à proximité, les "
+        "câbles cheminant sous les ombrières puis en souterrain. La demande de raccordement sera "
+        "déposée en parallèle de l'instruction."
     ),
     "chantier": (
-        "Les travaux comprennent la réalisation des massifs de fondation, le montage de la "
-        "charpente métallique, la pose des modules photovoltaïques et le câblage électrique de "
-        "l'installation. Le chantier est organisé par zones successives afin de maintenir autant "
-        "que possible l'exploitation du parc de stationnement pendant la durée des travaux. Aucun "
-        "terrassement significatif n'est prévu, le sol du parking étant déjà aménagé et "
-        "imperméabilisé. Les emprises de chantier et les installations provisoires sont limitées "
-        "au strict nécessaire et signalées pour la sécurité des usagers. À l'issue des travaux, "
-        "les zones concernées sont nettoyées et remises en état, y compris le marquage au sol des "
-        "places de stationnement. La durée prévisionnelle du chantier est de quelques semaines à "
-        "quelques mois selon la surface du parc et la puissance installée."
+        "Les travaux (massifs de fondation, montage de la charpente, pose des modules, câblage) "
+        "sont réalisés par zones pour maintenir l'exploitation du parking. À l'issue du chantier, "
+        "les emprises sont nettoyées et le marquage au sol rétabli. La durée prévisionnelle est "
+        "de quelques semaines."
     ),
 }
 
@@ -157,6 +117,11 @@ def _valeurs(projet: dict) -> dict[str, str]:
     )
     double = bool(p and p.get("double"))
     toiture = ("toiture à double pente (structure en T)" if double else "toiture monopente")
+    md = ", ".join(filter(None, [
+        f"{omb['module_puissance_wc']:g} Wc" if omb.get("module_puissance_wc") else None,
+        omb.get("module_dimensions"),
+    ]))
+    modules_detail = f" de {md}" if md else ""
 
     def num(v, suf="", dec=False):
         if v in (None, ""):
@@ -176,6 +141,7 @@ def _valeurs(projet: dict) -> dict[str, str]:
         "surface": f"{surface:,} m²".replace(",", " ") if surface else "—",
         "coupe": libelle_coupe(omb.get("famille")) if omb.get("famille") else "—",
         "toiture": toiture,
+        "modules_detail": modules_detail,
         "longueur": num(p["longueur_m"], " m") if p else "—",
         "largeur": num(omb.get("largeur_m") or (p["profondeur_m"] if p else None), " m"),
         "nb_travees": str(p["nb_travees"]) if p else "—",

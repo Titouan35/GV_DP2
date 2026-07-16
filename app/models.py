@@ -16,6 +16,8 @@ class MaitreOuvrage(BaseModel):
     representant: Optional[str] = None
     siret: Optional[str] = None
     adresse: Optional[str] = None
+    email: Optional[str] = None
+    telephone: Optional[str] = None
 
 
 class Parcelle(BaseModel):
@@ -90,6 +92,8 @@ class Insertion(BaseModel):
     photo: Optional[str] = None            # chemin relatif de la photo du site
     consignes: str = ""                    # consignes libres pour le prompt
     affinage: str = ""                     # dernières consignes de correction (affiner le prompt)
+    echelle_desc: str = ""                 # ce que représente le repère d'échelle (ex. « largeur d'une place »)
+    echelle_distance_m: Optional[float] = None  # distance réelle du repère (m), reportée au prompt
     prompt: Optional[str] = None           # dernier prompt généré (traçabilité)
     images: list[dict] = Field(default_factory=list)  # images ré-importées {fichier, date, etiquette}
     retenue: Optional[str] = None          # image retenue (fiche d'emprise)

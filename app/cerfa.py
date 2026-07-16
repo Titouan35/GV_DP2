@@ -11,6 +11,8 @@ avant dépôt (aucune case à risque n'est cochée automatiquement).
 """
 from __future__ import annotations
 
+from datetime import date
+
 from pypdf import PdfReader, PdfWriter
 
 from . import config
@@ -18,6 +20,8 @@ from .catalogue import parametres_effectifs
 
 GABARIT = config.REPO_ROOT / "app" / "gabarits" / "cerfa_16702.pdf"
 NUMERO_CERFA = "16702*03"
+
+COCHE = "/Oui"  # état « coché » des cases du gabarit
 
 
 def _champs_demandeur(projet: dict) -> dict:
@@ -33,6 +37,10 @@ def _champs_demandeur(projet: dict) -> dict:
         champs["D2N_nom"] = mo.get("representant") or ""
     # adresse du demandeur : non structurée chez nous → tout dans « voie »
     champs["D3V_voie"] = mo.get("adresse") or ""
+    champs["D3T_telephone"] = mo.get("telephone") or ""
+    if mo.get("email"):
+        champs["D5GE1_email"] = mo["email"]
+        champs["D5A_acceptation"] = COCHE  # accepte l'échange par voie électronique
     return champs
 
 
@@ -68,16 +76,34 @@ def _champs_projet(projet: dict) -> dict:
         f"hauteur hors tout {p['h_haut_m']:.2f} m, pente {p['pente_deg']:g} degrés, "
         f"modules photovoltaïques full black"
     )
+    if omb.get("module_puissance_wc"):
+        desc += f" de {omb['module_puissance_wc']:g} Wc"
     if omb.get("puissance_kwc"):
         desc += f", puissance {omb['puissance_kwc']:g} kWc"
     if omb.get("nb_places"):
         desc += f", {omb['nb_places']} places couvertes"
     desc += ". Conforme à l'obligation de la loi APER (art. L.171-4 CCH)."
-    champs = {"C2ZD1_description": desc}
+    champs = {
+        "C2ZD1_description": desc,
+        "C2ZA1_nouvelle": COCHE,  # une ombrière est une construction nouvelle
+    }
     if omb.get("puissance_kwc"):
         champs["C2ZE1_puissance"] = f"{omb['puissance_kwc']:g}"
     champs["C2ZP1_crete"] = f"{p['h_haut_m']:.2f} m".replace(".", ",")
+    # stationnement inchangé avant / après travaux
+    if omb.get("nb_places"):
+        champs["S1A_stationnementavant"] = str(omb["nb_places"])
+        champs["S1M_stationnementapres"] = str(omb["nb_places"])
     return champs
+
+
+def _champs_engagement(projet: dict) -> dict:
+    """Cadre d'engagement du déclarant : lieu (commune) + date du jour."""
+    loc = projet.get("localisation") or {}
+    return {
+        "E1L_lieu": loc.get("commune") or "",
+        "E1D_date": date.today().strftime("%d/%m/%Y"),
+    }
 
 
 def preremplir(projet: dict):
@@ -90,6 +116,7 @@ def preremplir(projet: dict):
         **_champs_demandeur(projet),
         **_champs_terrain(projet),
         **_champs_projet(projet),
+        **_champs_engagement(projet),
     }
     champs = {k: v for k, v in champs.items() if v}
 

@@ -67,6 +67,13 @@ def enregistrer_consignes(projet_id: str, corps: dict = Body(...)):
         projet.insertion.consignes = str(corps["consignes"])[:2000]
     if "affinage" in corps:
         projet.insertion.affinage = str(corps["affinage"])[:2000]
+    if "echelle_desc" in corps:
+        projet.insertion.echelle_desc = str(corps["echelle_desc"])[:200]
+    if "echelle_distance_m" in corps:
+        try:
+            projet.insertion.echelle_distance_m = float(corps["echelle_distance_m"]) or None
+        except (TypeError, ValueError):
+            projet.insertion.echelle_distance_m = None
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet}
