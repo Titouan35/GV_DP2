@@ -60,6 +60,38 @@ async def uploader_photo(projet_id: str, fichier: UploadFile):
 
 # ------------------------------------------------------------------ consignes
 
+@router.get("/{projet_id}/insertion/photos-disponibles")
+def photos_disponibles(projet_id: str):
+    """Photos déjà importées dans les Pièces BE (utilisables comme base d'insertion)."""
+    projet = _charger(projet_id)
+    libelles = {"dp7": "Photo environnement proche (DP7)",
+                "dp8": "Photo paysage lointain (DP8)",
+                "dp6": "Photomontage (DP6)"}
+    dispo = []
+    for code, libelle in libelles.items():
+        doc = (projet.documents or {}).get(code)
+        if doc and Path(doc.get("fichier", "")).suffix.lower() in EXTENSIONS:
+            dispo.append({"code": code, "libelle": libelle,
+                          "url": f"/api/projets/{projet_id}/documents/{code}/image"})
+    return {"photos": dispo, "actuelle": projet.insertion.photo}
+
+
+@router.put("/{projet_id}/insertion/photo-piece")
+def photo_depuis_piece(projet_id: str, corps: dict = Body(...)):
+    """Réutilise une photo des Pièces BE (DP7/DP8/DP6) comme photo du site."""
+    code = corps.get("code")
+    projet = _charger(projet_id)
+    doc = (projet.documents or {}).get(code)
+    if not doc:
+        raise HTTPException(status_code=400, detail="Pièce introuvable.")
+    if Path(doc.get("fichier", "")).suffix.lower() not in EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Cette pièce n'est pas une image (un PDF ne peut pas servir de photo).")
+    projet.insertion.photo = doc["fichier"]
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
 @router.put("/{projet_id}/insertion/consignes")
 def enregistrer_consignes(projet_id: str, corps: dict = Body(...)):
     projet = _charger(projet_id)

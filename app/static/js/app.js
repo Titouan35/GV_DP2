@@ -1072,6 +1072,7 @@ function renderInsertionAtelier(s) {
             </div>
             <div id="ins-photo-vide" class="placeholder" style="${ins.photo ? "display:none" : ""};padding:22px">
               <b>Ajoute une photo du parking</b>Nette, à hauteur d'œil, zone d'implantation dégagée.</div>
+            <div id="ins-photo-choices" style="${ins.photo ? "display:none" : ""};margin-top:10px"></div>
           </div>
           <div class="field" id="ins-scale-field" style="${ins.photo ? "" : "display:none"}">
             <label>Repère d'échelle sur la photo <span class="hint">(aide l'IA à dimensionner)</span></label>
@@ -1117,6 +1118,7 @@ function renderInsertionAtelier(s) {
   const fichier = $("#ins-photo");
   fichier.addEventListener("change", () => uploaderPhotoSite(fichier).catch(() => {}));
   if (ins.photo) initPhotoScale(ins);
+  else chargerPhotosDispo();
   const sauverEchelle = () => {
     api(`/api/projets/${state.projet.id}/insertion/consignes`, {
       method: "PUT",
@@ -1165,6 +1167,32 @@ function renderInsertionAtelier(s) {
   // si un prompt a déjà été généré, on le réaffiche
   if (ins.prompt) renderSortiePrompt(ins.prompt, s.mode_emploi);
   renderGalerie();
+}
+
+// réutiliser une photo déjà importée dans les Pièces BE (DP7/DP8/DP6)
+async function chargerPhotosDispo() {
+  const box = $("#ins-photo-choices");
+  if (!box) return;
+  let data;
+  try { data = await api(`/api/projets/${state.projet.id}/insertion/photos-disponibles`); }
+  catch { return; }
+  if (!data.photos.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="hint" style="margin-bottom:6px">Ou réutilise une photo déjà importée dans les Pièces BE :</div>
+    <div class="photo-choices">${data.photos.map((p) => `
+      <button class="photo-choice" data-code="${esc(p.code)}" title="${esc(p.libelle)}">
+        <img src="${esc(p.url)}?t=${Date.now()}" alt="${esc(p.libelle)}" />
+        <span>${esc(p.libelle)}</span>
+      </button>`).join("")}</div>`;
+  box.querySelectorAll(".photo-choice").forEach((b) => b.addEventListener("click", async () => {
+    try {
+      const d = await api(`/api/projets/${state.projet.id}/insertion/photo-piece`, {
+        method: "PUT", body: JSON.stringify({ code: b.dataset.code }),
+      });
+      state.projet = d.projet;
+      toast("Photo reprise depuis les pièces BE.", "ok");
+      renderEtapeInsertion($("#main"));
+    } catch { /* toast déjà affiché */ }
+  }));
 }
 
 // repère d'échelle sur la photo d'insertion (2 points, aide visuelle)
