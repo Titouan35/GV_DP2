@@ -18,14 +18,26 @@ router = APIRouter(prefix="/api", tags=["dossier"])
 @router.post("/projets/{projet_id}/notice/generer")
 def generer_notice(projet_id: str, force: int = 0):
     projet = _charger(projet_id)
-    sections = notice.generer_sections(projet.model_dump())
+    data = projet.model_dump()
+    sections = notice.generer_sections(data)
     for cle, texte in sections.items():
         if force or not (projet.notice.sections.get(cle) or "").strip():
             projet.notice.sections[cle] = texte
     projet.notice.genere_par_ia = False  # gabarit déterministe (pas de LLM)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet, "evaluation": regles.evaluer(projet)}
+    return {
+        "projet": projet,
+        "evaluation": regles.evaluer(projet),
+        "variables": notice.variables(data),
+    }
+
+
+@router.get("/projets/{projet_id}/notice/variables")
+def variables_notice(projet_id: str):
+    """Valeurs concrètes du projet à surligner dans la notice (relecture)."""
+    projet = _charger(projet_id)
+    return {"variables": notice.variables(projet.model_dump())}
 
 
 @router.post("/projets/{projet_id}/cerfa")

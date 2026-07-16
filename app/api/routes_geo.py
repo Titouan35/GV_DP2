@@ -26,6 +26,12 @@ def api_geocode(q: str = Query(min_length=3), limit: int = 5):
     return {"resultats": _proteger(geocode.rechercher_adresse, q, limit)}
 
 
+@router.get("/reverse-geocode")
+def api_reverse_geocode(lon: float, lat: float):
+    """Coordonnées → commune + INSEE (marqueur déplaçable, clic carte, saisie GPS)."""
+    return {"resultat": _proteger(geocode.geocoder_inverse, lon, lat)}
+
+
 @router.get("/parcelles/suggest")
 def api_parcelles_suggest(lon: float, lat: float):
     parcelles = _proteger(cadastre.parcelles_par_position, lon, lat)

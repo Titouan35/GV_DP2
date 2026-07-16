@@ -28,7 +28,7 @@ def test_prompt_reprend_type_consignes_affinage():
     # 6 blocs identifiables
     for bloc in ("RÔLE", "LA SCÈNE", "L'OBJET", "ÉCHELLE", "LUMIÈRE", "CONSIGNES"):
         assert bloc in prompt
-    assert "START PLAINE Double" in prompt
+    assert "Double" in prompt          # libellé court de la coupe (Mono/Double)
     assert "full black" in prompt
     assert "2,50 m" in prompt              # repère d'échelle place de parking
     assert "60 places" in prompt

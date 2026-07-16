@@ -15,6 +15,20 @@ from __future__ import annotations
 
 import math
 
+# Libellés « Coupe » présentés à l'utilisateur ; la clé du catalogue reste
+# l'identifiant interne (rétro-compatible avec les projets existants).
+LIBELLE_COUPE: dict[str, str] = {
+    "START PLAINE Bas": "Mono Bas",
+    "START PLAINE Haut": "Mono Haut",
+    "START PLAINE Double": "Double",
+}
+
+
+def libelle_coupe(famille: str | None) -> str:
+    """Nom court de la coupe (Mono Bas / Mono Haut / Double)."""
+    return LIBELLE_COUPE.get(famille or "", famille or "—")
+
+
 # profondeur = dimension couverte dans le sens de la pente (une place ~5 m)
 CATALOGUE: dict[str, dict] = {
     "START PLAINE Bas": {

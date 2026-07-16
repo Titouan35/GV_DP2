@@ -57,13 +57,8 @@ body {
   padding: 0 22px; background: var(--card); border-bottom: 1px solid var(--line);
   flex: none;
 }
-.logo { display: flex; align-items: baseline; gap: 6px; }
-.logo .wordmark {
-  font-weight: 600; font-size: 20px; letter-spacing: -0.4px;
-  background: var(--grad); -webkit-background-clip: text; background-clip: text;
-  color: transparent;
-}
-.logo .next { font-weight: 600; font-size: 13px; color: var(--gv-violet); }
+.logo { display: flex; align-items: center; }
+.logo img { height: 30px; width: auto; display: block; }
 .vdiv { width: 1px; height: 26px; background: var(--line); }
 .toolname { font-weight: 500; color: var(--gv-navy); font-size: 14px; }
 .toolname small { display: block; font-weight: 400; font-size: 11.5px; color: var(--muted); }
@@ -160,8 +155,27 @@ body {
 .geo-results button small { color: var(--muted); }
 
 /* carte */
-#map { height: 420px; }
+#map { height: 600px; }
+.grid-map { grid-template-columns: minmax(0, 1fr) 340px; }
+.grid-map #map { border-radius: 0 0 var(--r-lg) var(--r-lg); }
 .leaflet-container { font-family: inherit; font-size: 12px; }
+.hint { color: var(--faint); font-weight: 400; font-size: 11.5px; }
+
+/* blocs repliables (synthèse urbanisme, maître d'ouvrage) */
+.foldable { border: 1px solid var(--line); border-radius: var(--r); margin: 16px 0 0; background: var(--card); }
+.foldable > summary {
+  cursor: pointer; padding: 12px 16px; font-size: 13px; font-weight: 600;
+  color: var(--gv-navy); list-style: none; user-select: none;
+}
+.foldable > summary::-webkit-details-marker { display: none; }
+.foldable > summary::before {
+  content: "\25B8"; display: inline-block; margin-right: 8px;
+  color: var(--gv-violet); transition: transform .15s;
+}
+.foldable[open] > summary::before { transform: rotate(90deg); }
+.foldable[open] > summary { border-bottom: 1px solid var(--line); }
+.foldable .chips { padding: 12px 16px; }
+.foldable .formgrid { max-width: none; padding: 12px 16px 4px; }
 
 /* parcelles */
 .note {
@@ -273,7 +287,12 @@ body {
 .planche-img { display: block; width: 100%; height: auto; background: var(--bg); min-height: 60px; }
 .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
 .notice-ta { height: auto; min-height: 96px; padding: 10px 13px; resize: vertical; line-height: 1.5; font-size: 13.5px; }
+.notice-preview { line-height: 1.65; font-size: 13.5px; color: var(--ink); white-space: pre-wrap; }
+mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3px; padding: 0 2px; }
+.notice-sec .hd .link { flex: none; }
 .upload-slot { margin-bottom: 10px; }
+.dropzone-slot { transition: border-color .15s, background .15s; }
+.dropzone-slot.over { border-color: var(--gv-green); background: var(--gv-green-l); }
 .link { color: var(--gv-violet); font-size: 12px; font-weight: 500; cursor: pointer; }
 .link:hover { text-decoration: underline; }
 
@@ -300,6 +319,8 @@ body {
 .mode-emploi { margin: 8px 0 14px; padding-left: 20px; color: var(--ink); font-size: 12.5px; }
 .mode-emploi li { margin-bottom: 4px; }
 
+.kit-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 4px; }
+.kit-head span { font-size: 12.5px; font-weight: 600; color: var(--gv-navy); }
 .kit-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 8px; }
 .kit-item { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--card); }
 .kit-item.off { opacity: 0.85; }
@@ -314,6 +335,14 @@ body {
 .kit-lbl small { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
 
 .card.retenue { border-color: var(--gv-green); box-shadow: 0 0 0 2px var(--gv-green-l); }
+
+/* outil de mesure sur le plan de masse */
+.mesure-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 16px 4px; }
+.mesure-status { padding: 4px 16px 8px; font-size: 12.5px; color: var(--muted); }
+.mesure-status b { color: var(--gv-navy); }
+.warn-txt { color: var(--amber); font-weight: 600; }
+.mesure-canvas-wrap { padding: 0 16px 14px; overflow: auto; }
+#mesure-canvas { max-width: 100%; border: 1px solid var(--line); border-radius: var(--r); cursor: crosshair; display: block; }
 
 @media (max-width: 1100px) {
   .rightpanel { display: none; }

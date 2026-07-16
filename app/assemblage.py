@@ -73,16 +73,22 @@ def _bandeau(slide, assets: Path, titre: str, sous_titre: str = ""):
            "greenvolt next", taille=14, gras=True, couleur=VIOLET)
 
 
-def _image_plein_cadre(slide, chemin_img: Path):
-    """Insère une image ajustée dans la zone sous le bandeau."""
+def _image_dans_zone(slide, chemin_img: Path, zone):
+    """Insère une image ajustée (contain) dans une zone (x, y, w, h) en EMU."""
     with Image.open(chemin_img) as im:
         iw, ih = im.size
-    zone = (Inches(0.35), Inches(1.25), Inches(12.63), Inches(6.05))
-    ratio = min(zone[2] / iw, zone[3] / ih)
-    w, h = int(iw * ratio), int(ih * ratio)
-    x = int(zone[0] + (zone[2] - w) / 2)
-    y = int(zone[1] + (zone[3] - h) / 2)
-    slide.shapes.add_picture(str(chemin_img), x, y, w, h)
+    x, y, w, h = zone
+    ratio = min(w / iw, h / ih)
+    w2, h2 = int(iw * ratio), int(ih * ratio)
+    cx = int(x + (w - w2) / 2)
+    cy = int(y + (h - h2) / 2)
+    slide.shapes.add_picture(str(chemin_img), cx, cy, w2, h2)
+
+
+def _image_plein_cadre(slide, chemin_img: Path):
+    """Insère une image ajustée dans la zone sous le bandeau."""
+    _image_dans_zone(slide, chemin_img,
+                     (Inches(0.35), Inches(1.25), Inches(12.63), Inches(6.05)))
 
 
 def _pdf_en_images(chemin_pdf: Path, assets: Path, prefixe: str,
@@ -172,7 +178,28 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
         if code == "garde":
             continue
 
-        if code in ("dp1_situation", "dp1_cadastral", "dp1_aerien"):
+        # DP1 situation + cadastral fusionnés sur une slide (moitié / moitié)
+        if code == "dp1_situation":
+            a = generees.get("dp1_situation")
+            b = generees.get("dp1_cadastral")
+            if a or b:
+                slide = _slide(prs)
+                _bandeau(slide, assets, "DP1 · Plan de situation et cadastral", sous_titre_std)
+                demi_w = Inches(6.15)
+                if a:
+                    _texte(slide, Inches(0.4), Inches(1.18), demi_w, Inches(0.3),
+                           "Plan de situation", 13, True, MUTED)
+                    _image_dans_zone(slide, a, (Inches(0.35), Inches(1.55), demi_w, Inches(5.55)))
+                if b:
+                    _texte(slide, Inches(6.83), Inches(1.18), demi_w, Inches(0.3),
+                           "Plan cadastral", 13, True, MUTED)
+                    _image_dans_zone(slide, b, (Inches(6.83), Inches(1.55), demi_w, Inches(5.55)))
+            else:
+                _slide_placeholder(prs, assets, piece)
+            continue
+        if code == "dp1_cadastral":
+            continue  # déjà placé avec la situation
+        if code == "dp1_aerien":
             if code in generees:
                 slide = _slide(prs)
                 _bandeau(slide, assets, piece["titre"], sous_titre_std)

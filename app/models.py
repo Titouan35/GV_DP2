@@ -47,18 +47,22 @@ class Localisation(BaseModel):
 
 
 class Ombriere(BaseModel):
-    famille: Optional[str] = None  # catalogue coupes types (START PLAINE Bas/Haut/Double)
+    famille: Optional[str] = None  # coupe (clé catalogue : START PLAINE Bas/Haut/Double ; libellé Mono Bas/Mono Haut/Double)
     longueur_m: Optional[float] = None
     largeur_m: Optional[float] = None
+    orientation: Optional[float] = None  # azimut en degrés (dérivé du plan de masse, modifiable)
     nb_travees: Optional[int] = None
     entraxe_m: Optional[float] = None
     pente_deg: Optional[float] = None
-    garde_au_sol_m: Optional[float] = None
-    hauteur_hors_tout_m: Optional[float] = None
-    type_module: Optional[str] = None
-    orientation: Optional[str] = None
+    garde_au_sol_m: Optional[float] = None      # hauteur bas de pente (UI)
+    hauteur_hors_tout_m: Optional[float] = None  # hauteur maximale (UI)
+    module_puissance_wc: Optional[float] = None  # puissance unitaire d'un module
+    module_dimensions: Optional[str] = None      # ex. "1762 x 1134 mm"
+    type_module: Optional[str] = None            # legacy (remplacé par puissance + dimensions)
     puissance_kwc: Optional[float] = None
     nb_places: Optional[int] = None
+    # calibrage de l'outil de mesure sur le plan de masse (px/m)
+    echelle_plan_px_par_m: Optional[float] = None
 
 
 class Urbanisme(BaseModel):

@@ -101,6 +101,33 @@ def servir_kit(projet_id: str, role: str, t: int = 0):
     return FileResponse(chemin)
 
 
+@router.get("/{projet_id}/insertion/kit.zip")
+def telecharger_kit(projet_id: str):
+    """Télécharge d'un coup les images disponibles du kit (à joindre dans ChatGPT)."""
+    import io
+    import zipfile
+
+    from fastapi.responses import Response
+
+    projet = _charger(projet_id).model_dump()
+    noms = {"photo": "1_photo_site", "plan": "2_plan_de_masse", "coupe": "3_coupe"}
+    buf = io.BytesIO()
+    n = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for role, base in noms.items():
+            chemin = insertion_ia.image_kit(projet, role)
+            if chemin and Path(chemin).exists():
+                z.write(chemin, f"{base}{Path(chemin).suffix}")
+                n += 1
+    if not n:
+        raise HTTPException(status_code=400, detail="Aucune image de kit disponible (ajoutez au moins la photo du site).")
+    return Response(
+        buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="kit_insertion_{projet_id}.zip"'},
+    )
+
+
 # ------------------------------------------------------------------ ré-import (drop zone)
 
 @router.post("/{projet_id}/insertion/import")

@@ -22,7 +22,7 @@ from pathlib import Path
 import pypdfium2 as pdfium
 
 from . import config
-from .catalogue import CATALOGUE, parametres_effectifs
+from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
 
 # ------------------------------------------------------------------ descriptif
 
@@ -111,17 +111,26 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         double = p.get("double")
         forme = "double pente (structure en T, poteau central)" if double else \
             f"monopente (poteau côté {p.get('poteau', 'haut')})"
+        omb = projet.get("ombriere") or {}
+        modules = "Couverture de modules photovoltaïques full black (noirs mats, non réfléchissants), sous-face claire."
+        if omb.get("module_puissance_wc") or omb.get("module_dimensions"):
+            det = ", ".join(filter(None, [
+                f"{omb['module_puissance_wc']:g} Wc" if omb.get("module_puissance_wc") else None,
+                omb.get("module_dimensions"),
+            ]))
+            modules = ("Couverture de modules photovoltaïques full black (noirs mats, non "
+                       f"réfléchissants) de {det}, sous-face claire.")
         b3 = (
             "L'OBJET — Ombrière de parking type « {fam} », {forme}. "
             "Dimensions : {L} de long sur {prof} de profondeur couverte, {trav} travées "
-            "à {entr} d'entraxe, pente {pente}. Hauteur hors-tout ≈ {hh} au point haut, "
+            "à {entr} d'entraxe, pente {pente}. Hauteur maximale ≈ {hh} au point haut, "
             "≈ {hb} au point bas. Structure en acier galvanisé gris clair avec fines "
             "bandes bleues sur les poteaux ; poteaux caisson, arbalétrier effilé et "
-            "bracon. Couverture de modules photovoltaïques full black (noirs mats, non "
-            "réfléchissants), sous-face claire. {coupe}"
+            "bracon. {modules} {coupe}"
         ).format(
-            fam=p.get("famille", "ombrière PV"),
+            fam=libelle_coupe(p.get("famille")),
             forme=forme,
+            modules=modules,
             L=_fmt(p.get("longueur_m"), " m"),
             prof=_fmt(p.get("profondeur_m"), " m"),
             trav=_fmt(p.get("nb_travees")),

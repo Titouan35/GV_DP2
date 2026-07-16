@@ -10,7 +10,7 @@ import math
 
 from PIL import Image, ImageDraw
 
-from ..catalogue import parametres_effectifs
+from ..catalogue import libelle_coupe, parametres_effectifs
 from . import base
 from .base import (
     BLANC, BLEU_BANDE, ENCRE, GRIS, MUTED, NAVY, PANNEAU, Planche,
@@ -138,7 +138,7 @@ def dessiner_coupe(projet: dict) -> Image.Image:
     cote_horizontale(dr, X(0), X(prof), sol_y + int(0.55 * k),
                      f"{prof:.2f} m couverts".replace(".", ","))
     dr.text((X(prof / 2), Y(max(p['h_haut_m'], p['h_bas_m']) + 0.75)),
-            f"{p['famille']} · pente {p['pente_deg']:g}° · structure acier galvanisé, bandes bleues · modules full black",
+            f"Coupe {libelle_coupe(p['famille'])} · pente {p['pente_deg']:g}° · structure acier galvanisé, bandes bleues · modules full black",
             font=police(26, True), fill=NAVY, anchor="ma")
 
     m_par_px = 1 / k

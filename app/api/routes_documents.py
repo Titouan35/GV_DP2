@@ -81,3 +81,27 @@ def telecharger_document(projet_id: str, code: str):
     if not chemin.exists():
         raise HTTPException(status_code=404, detail="Fichier manquant sur le disque.")
     return FileResponse(chemin, filename=doc["nom_fichier"])
+
+
+@router.get("/{projet_id}/documents/{code}/image")
+def apercu_document_image(projet_id: str, code: str):
+    """Rend la pièce en PNG (1re page si PDF) pour l'outil de mesure du plan."""
+    from fastapi.responses import FileResponse
+
+    projet = _charger(projet_id)
+    doc = projet.documents.get(code)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Pièce non fournie.")
+    chemin = config.PROJETS_DIR / doc["fichier"]
+    if not chemin.exists():
+        raise HTTPException(status_code=404, detail="Fichier manquant sur le disque.")
+    if chemin.suffix.lower() != ".pdf":
+        return FileResponse(chemin)
+    import pypdfium2 as pdfium
+    sortie = config.assets_dir(projet_id) / f"apercu_{code}.png"
+    pdf = pdfium.PdfDocument(str(chemin))
+    try:
+        pdf[0].render(scale=200 / 72).to_pil().save(sortie)
+    finally:
+        pdf.close()
+    return FileResponse(sortie, media_type="image/png")

@@ -36,3 +36,30 @@ def rechercher_adresse(q: str, limit: int = 5) -> list[dict]:
             }
         )
     return resultats
+
+
+def geocoder_inverse(lon: float, lat: float) -> dict | None:
+    """Point (lon, lat) → adresse, commune et code INSEE les plus proches.
+
+    Sert quand l'utilisateur déplace le marqueur, clique sur la carte ou saisit
+    des coordonnées : on récupère la commune/INSEE pour le zonage et les risques.
+    """
+    url = config.GEOCODAGE_URL.rsplit("/", 1)[0] + "/reverse"
+    data = get_json(
+        "Géocodage inverse",
+        url,
+        {"lon": lon, "lat": lat, "index": "address", "limit": 1},
+    )
+    feats = data.get("features") or []
+    if not feats:
+        return None
+    props = feats[0].get("properties", {})
+    coords = (feats[0].get("geometry") or {}).get("coordinates") or [lon, lat]
+    return {
+        "label": props.get("label"),
+        "code_insee": props.get("citycode"),
+        "commune": props.get("city"),
+        "code_postal": props.get("postcode"),
+        "lon": coords[0],
+        "lat": coords[1],
+    }
