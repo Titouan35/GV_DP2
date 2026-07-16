@@ -1,0 +1,12 @@
+# Contexte de build minimal : seuls app/ + requirements.txt sont nécessaires.
+.venv/
+PROJETS/
+**/__pycache__/
+**/*.pyc
+app/_archive/
+tests/
+.git/
+.gitignore
+*.md
+Lancer GV_DP.bat
+pytest.ini

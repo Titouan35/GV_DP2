@@ -36,11 +36,16 @@ _FONT_CANDIDATES = [
     "C:/Windows/Fonts/arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
+    # Linux (conteneur Azure) : DejaVu / Liberation installées via le Dockerfile
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ]
 _FONT_BOLD_CANDIDATES = [
     "C:/Windows/Fonts/segoeuib.ttf",
     "C:/Windows/Fonts/arialbd.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 ]
 _font_cache: dict[tuple, ImageFont.FreeTypeFont] = {}
 

@@ -720,94 +720,141 @@ function renderEtapePieces(main) {
   });
 }
 
-// ---------------- étape 5 : insertion IA ----------------
-const insState = { drawing: null };
-
-function urlFichier(chemin) {
+// ---------------- étape 5 : insertion IA (générateur de prompt, sans API) ----------------
+function urlInsertion(chemin) {
   return `/api/projets/${state.projet.id}/insertion/fichier?chemin=${encodeURIComponent(chemin)}&t=${Date.now()}`;
+}
+
+async function copierPressePapier(txt) {
+  try {
+    await navigator.clipboard.writeText(txt);
+    return true;
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = txt;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch { ok = false; }
+    ta.remove();
+    return ok;
+  }
+}
+
+function resumeOmbriere() {
+  const o = state.projet.ombriere || {};
+  if (!o.famille) return "Type d'ombrière non renseigné (étape 3) — le prompt restera générique.";
+  const bits = [o.famille];
+  if (o.puissance_kwc) bits.push(`${o.puissance_kwc} kWc`);
+  if (o.nb_places) bits.push(`${o.nb_places} places`);
+  if (o.hauteur_hors_tout_m) bits.push(`h. ${o.hauteur_hors_tout_m} m`);
+  return bits.join(" · ");
 }
 
 async function renderEtapeInsertion(main) {
   main.innerHTML = `
     <div class="crumb">Étape 5 / 7</div>
-    <h1>Insertion IA (visuel commercial)</h1>
-    <p class="sub">Génération photoréaliste pour les fiches d'emprise et présentations. Étiquetée « visuel IA », jamais utilisée en pièce DP6.</p>
-    <div id="ia-statut" class="placeholder">Vérification de la configuration…</div>`;
+    <h1>Insertion IA · générateur de prompt</h1>
+    <p class="sub">Prépare le prompt et le kit d'images pour générer un visuel d'insertion dans <b>ton ChatGPT</b>.
+      Aucune clé, aucun coût, aucune donnée sortante. Visuel « visuel IA » réservé au commercial, jamais utilisé en pièce DP6.</p>
+    <div id="ia-statut" class="placeholder">Chargement…</div>`;
   let s;
   try { s = await api(`/api/projets/${state.projet.id}/insertion/statut`); }
   catch { return; }
-
-  if (!s.configure) {
-    $("#ia-statut").innerHTML = `<b>Clé API à créer (action Florent, ~10 min)</b>
-      <div style="text-align:left;max-width:580px;margin:14px auto 0">
-        ${s.guide.map((l) => `<div style="margin-bottom:7px">${esc(l)}</div>`).join("")}
-        <div style="margin-top:12px;color:var(--gv-navy);font-weight:500">
-          ${s.rappels.map((l) => `<div>· ${esc(l)}</div>`).join("")}
-        </div>
-      </div>
-      <span class="phase-badge">Fournisseur ${esc(s.fournisseur)} · modèle ${esc(s.modele)} · en attente de la clé</span>`;
-    return;
-  }
   renderInsertionAtelier(s);
 }
 
 function renderInsertionAtelier(s) {
   const ins = state.projet.insertion || {};
   const main = $("#main");
+  const etat = s.etat || {};
   main.querySelector("#ia-statut").outerHTML = `
-    <div class="chip ok" style="margin-bottom:14px">Module actif · ${esc(s.fournisseur)} · ${esc(s.modele)}</div>
     <div class="grid">
       <div class="card">
-        <div class="hd"><span class="ti-title">Photo du site & zone d'implantation</span>
-          <label class="link" style="cursor:pointer">${ins.photo ? "changer" : "téléverser"}
-            <input type="file" id="ins-photo" accept=".png,.jpg,.jpeg" hidden /></label></div>
+        <div class="hd"><span class="ti-title">1 · Inputs</span></div>
         <div class="bd">
-          <div id="ins-canvas-wrap" style="position:relative;${ins.photo ? "" : "display:none"}">
-            <img id="ins-img" style="width:100%;display:block;border-radius:8px" />
-            <canvas id="ins-canvas" style="position:absolute;inset:0;cursor:crosshair"></canvas>
+          <div class="field">
+            <label>Photo du site
+              <span style="float:right"><label class="link" style="cursor:pointer">${ins.photo ? "changer" : "téléverser"}
+                <input type="file" id="ins-photo" accept=".png,.jpg,.jpeg,.webp" hidden /></label></span></label>
+            <div id="ins-photo-wrap" style="${ins.photo ? "" : "display:none"}">
+              <img id="ins-photo-img" style="width:100%;display:block;border-radius:8px;border:1px solid var(--gv-grey)" />
+            </div>
+            <div id="ins-photo-vide" class="placeholder" style="${ins.photo ? "display:none" : ""};padding:22px">
+              <b>Ajoute une photo du parking</b>Nette, à hauteur d'œil, zone d'implantation dégagée.</div>
           </div>
-          <div id="ins-nophoto" class="placeholder" style="${ins.photo ? "display:none" : ""}">
-            <b>Ajoutez une photo du parking</b>Haute résolution, à hauteur d'œil, zone d'implantation dégagée.</div>
-          <p class="sub" style="margin:10px 0 0">Glissez pour tracer le rectangle d'implantation. L'IA pose l'ombrière dans cette zone puis efface le tracé.</p>
+          <div class="field"><label>Consignes libres (facultatif)</label>
+            <textarea class="input notice-ta" id="ins-consignes" rows="3"
+              placeholder="Ex. : deux rangées face à face, garder le mât d'éclairage visible, vue depuis l'entrée">${esc(ins.consignes || "")}</textarea></div>
+          <div class="note" style="margin-top:4px">Type d'ombrière (étape 3) : <b>${esc(resumeOmbriere())}</b></div>
+          <button class="btn primary" id="ins-generer" style="width:100%;margin-top:14px">Générer le prompt</button>
         </div>
       </div>
+
       <div class="card">
-        <div class="hd"><span class="ti-title">Réglages</span></div>
-        <div class="bd">
-          <div class="field"><label>Repère d'échelle (distance connue au sol)</label>
-            <input class="input" id="ins-desc" value="${esc(ins.repere_desc || "la largeur d'une place de stationnement")}" /></div>
-          <div class="field"><label>Distance en mètres</label>
-            <input class="input" id="ins-dist" type="number" step="0.1" value="${ins.repere_distance_m ?? 2.5}" /></div>
-          <div class="field"><label>Consignes libres</label>
-            <textarea class="input notice-ta" id="ins-consignes" rows="3" placeholder="Ex. : deux rangées face à face, garder le mât d'éclairage visible">${esc(ins.consignes || "")}</textarea></div>
-          <div class="field"><label>Nombre de variantes</label>
-            <select class="input" id="ins-nb"><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
-          <button class="btn primary" id="ins-generer" style="width:100%">Générer l'insertion IA</button>
-          <div id="ins-progress" class="sub" style="margin-top:10px"></div>
+        <div class="hd"><span class="ti-title">2 · Prompt & kit à joindre</span></div>
+        <div class="bd" id="ins-sortie">
+          <div class="placeholder" style="padding:22px"><b>Le prompt apparaîtra ici</b>Clique « Générer le prompt » : il est copié dans le presse-papier et le kit d'images s'affiche.</div>
         </div>
       </div>
     </div>
-    <h3 style="color:var(--gv-navy);margin:26px 0 10px">Variantes générées</h3>
-    <div class="gallery" id="ins-galerie"></div>`;
 
+    <div class="card" style="margin-top:18px">
+      <div class="hd"><span class="ti-title">3 · Image générée</span>
+        <span style="font-size:11px;color:var(--muted)">glisse ici l'image obtenue dans ChatGPT</span></div>
+      <div class="bd">
+        <div id="ins-drop" class="dropzone">
+          <input type="file" id="ins-import" accept=".png,.jpg,.jpeg,.webp" hidden />
+          <b>Dépose l'image ici</b><span>ou clique pour choisir un fichier (PNG, JPG, WEBP)</span>
+        </div>
+        <div class="gallery" id="ins-galerie" style="margin-top:16px"></div>
+        <div class="actionsrow" style="margin-top:12px">
+          <button class="btn navy" id="ins-fiche" ${ins.retenue ? "" : "disabled"}>Générer la fiche de validation d'emprise (PPTX)</button>
+          <span id="ins-fiche-lien" class="sub"></span>
+        </div>
+      </div>
+    </div>`;
+
+  // photo
   const fichier = $("#ins-photo");
   fichier.addEventListener("change", () => uploaderPhotoSite(fichier).catch(() => {}));
-  if (ins.photo) initCanvasZone();
+  if (ins.photo) $("#ins-photo-img").src = urlInsertion(ins.photo);
 
-  const sauverReglages = () => {
-    api(`/api/projets/${state.projet.id}/insertion/reglages`, {
-      method: "PUT",
-      body: JSON.stringify({
-        repere_desc: $("#ins-desc").value,
-        repere_distance_m: Number($("#ins-dist").value) || 2.5,
-        consignes: $("#ins-consignes").value,
-      }),
-    }).then((d) => { state.projet = d.projet; }).catch(() => {});
-  };
-  ["#ins-desc", "#ins-dist", "#ins-consignes"].forEach((sel) => {
-    let t; $(sel).addEventListener("input", () => { clearTimeout(t); t = setTimeout(sauverReglages, 800); });
+  // consignes (debounce)
+  let tc;
+  $("#ins-consignes").addEventListener("input", () => {
+    clearTimeout(tc);
+    tc = setTimeout(() => {
+      api(`/api/projets/${state.projet.id}/insertion/consignes`, {
+        method: "PUT", body: JSON.stringify({ consignes: $("#ins-consignes").value }),
+      }).then((d) => { state.projet = d.projet; }).catch(() => {});
+    }, 700);
   });
-  $("#ins-generer").addEventListener("click", () => lancerGeneration().catch(() => {}));
+
+  $("#ins-generer").addEventListener("click", () => genererPrompt().catch(() => {}));
+
+  // zone de dépôt
+  const drop = $("#ins-drop");
+  const imp = $("#ins-import");
+  drop.addEventListener("click", () => imp.click());
+  imp.addEventListener("change", () => { if (imp.files.length) importerImage(imp.files[0]).catch(() => {}); });
+  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.add("over");
+  }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.remove("over");
+  }));
+  drop.addEventListener("drop", (e) => {
+    const f = e.dataTransfer?.files?.[0];
+    if (f) importerImage(f).catch(() => {});
+  });
+
+  $("#ins-fiche").addEventListener("click", () => genererFiche().catch(() => {}));
+
+  // si un prompt a déjà été généré, on le réaffiche
+  if (ins.prompt) renderSortiePrompt(ins.prompt, s.mode_emploi);
   renderGalerie();
 }
 
@@ -824,100 +871,112 @@ async function uploaderPhotoSite(input) {
   renderEtapeInsertion($("#main"));
 }
 
-function initCanvasZone() {
-  const ins = state.projet.insertion || {};
-  const img = $("#ins-img");
-  const canvas = $("#ins-canvas");
-  img.onload = () => {
-    canvas.width = img.clientWidth;
-    canvas.height = img.clientHeight;
-    dessinerZone();
-  };
-  img.src = urlFichier(ins.photo);
-
-  const pos = (e) => {
-    const r = canvas.getBoundingClientRect();
-    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
-  };
-  canvas.addEventListener("mousedown", (e) => { insState.drawing = pos(e); });
-  canvas.addEventListener("mousemove", (e) => {
-    if (!insState.drawing) return;
-    const [x, y] = pos(e);
-    dessinerZone([insState.drawing[0], insState.drawing[1], x, y]);
-  });
-  const finir = (e) => {
-    if (!insState.drawing) return;
-    const [x, y] = pos(e);
-    const zone = [insState.drawing[0], insState.drawing[1], x, y].map((v) => Math.max(0, Math.min(1, v)));
-    insState.drawing = null;
-    state.projet.insertion.zone = zone;
-    dessinerZone(zone);
-    api(`/api/projets/${state.projet.id}/insertion/reglages`, {
-      method: "PUT", body: JSON.stringify({ zone }),
-    }).then((d) => { state.projet = d.projet; }).catch(() => {});
-  };
-  canvas.addEventListener("mouseup", finir);
-  canvas.addEventListener("mouseleave", finir);
-}
-
-function dessinerZone(zone) {
-  const canvas = $("#ins-canvas");
-  if (!canvas) return;
-  const z = zone || state.projet.insertion?.zone;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!z) return;
-  const x = Math.min(z[0], z[2]) * canvas.width, y = Math.min(z[1], z[3]) * canvas.height;
-  const w = Math.abs(z[2] - z[0]) * canvas.width, h = Math.abs(z[3] - z[1]) * canvas.height;
-  ctx.fillStyle = "rgba(229,57,53,0.28)";
-  ctx.strokeStyle = "rgba(229,57,53,0.95)";
-  ctx.lineWidth = 3;
-  ctx.fillRect(x, y, w, h);
-  ctx.strokeRect(x, y, w, h);
-}
-
-async function lancerGeneration() {
-  const ins = state.projet.insertion || {};
-  if (!ins.photo) { toast("Ajoutez d'abord une photo du site.", "err"); return; }
-  const prog = $("#ins-progress");
+async function genererPrompt(affinage = "") {
   const btn = $("#ins-generer");
-  btn.disabled = true;
-  const nb = Number($("#ins-nb").value);
-  prog.textContent = `Génération de ${nb} variante(s) en cours (10 à 30 s chacune)…`;
+  if (btn) btn.disabled = true;
   try {
-    const data = await api(`/api/projets/${state.projet.id}/insertion/generer`, {
-      method: "POST", body: JSON.stringify({ nb_variantes: nb }),
+    const data = await api(`/api/projets/${state.projet.id}/insertion/prompt`, {
+      method: "POST", body: JSON.stringify({ affinage }),
     });
     state.projet = data.projet;
-    prog.textContent = `${data.variantes.length} variante(s) générée(s).`;
-    toast("Insertion générée.", "ok");
-    renderGalerie();
-  } catch (e) {
-    prog.textContent = "";
-  } finally { btn.disabled = false; }
+    const copie = await copierPressePapier(data.prompt);
+    toast(copie ? "Prompt copié dans le presse-papier." : "Prompt généré (copie manuelle).", copie ? "ok" : "");
+    renderSortiePrompt(data.prompt, MODE_EMPLOI_INS, data.kit);
+  } catch { /* toast déjà affiché */ }
+  finally { if (btn) btn.disabled = false; }
+}
+
+const MODE_EMPLOI_INS = [
+  "Ouvre ChatGPT (un modèle avec génération d'image).",
+  "Colle le prompt (déjà copié).",
+  "Joins les images du kit ci-dessous.",
+  "Génère, affine si besoin, puis glisse l'image retenue dans la zone de dépôt.",
+];
+
+function renderSortiePrompt(prompt, modeEmploi, kit) {
+  const box = $("#ins-sortie");
+  if (!box) return;
+  const etapes = (modeEmploi || MODE_EMPLOI_INS).map((l, i) => `<li>${esc(l)}</li>`).join("");
+  box.innerHTML = `
+    <div class="chip ok" style="margin-bottom:10px">Prompt prêt · copié dans le presse-papier</div>
+    <details class="prompt-box"><summary>Voir / copier le prompt</summary>
+      <pre id="ins-prompt-txt">${esc(prompt)}</pre>
+      <button class="btn" id="ins-copier">Copier à nouveau</button>
+    </details>
+    <ol class="mode-emploi">${etapes}</ol>
+    <div class="kit-grid" id="ins-kit"></div>
+    <div class="field" style="margin-top:14px"><label>Affiner le prompt (corrections)</label>
+      <textarea class="input notice-ta" id="ins-affinage" rows="2"
+        placeholder="Ex. : allonge la rangée jusqu'au mât, assombris les modules">${esc(state.projet.insertion?.affinage || "")}</textarea>
+      <button class="btn navy" id="ins-affiner" style="margin-top:8px">Régénérer le prompt affiné</button></div>`;
+
+  $("#ins-copier").addEventListener("click", async () => {
+    const ok = await copierPressePapier($("#ins-prompt-txt").textContent);
+    toast(ok ? "Copié." : "Copie impossible.", ok ? "ok" : "err");
+  });
+  $("#ins-affiner").addEventListener("click", () => genererPrompt($("#ins-affinage").value).catch(() => {}));
+  renderKit(kit);
+}
+
+async function renderKit(kit) {
+  const box = $("#ins-kit");
+  if (!box) return;
+  // si le kit n'est pas fourni (réaffichage), on le recharge
+  if (!kit) {
+    try { kit = (await api(`/api/projets/${state.projet.id}/insertion/prompt`, {
+      method: "POST", body: JSON.stringify({ affinage: state.projet.insertion?.affinage || "" }),
+    })).kit; } catch { return; }
+  }
+  box.innerHTML = "";
+  for (const it of kit) {
+    const div = document.createElement("div");
+    div.className = "kit-item" + (it.disponible ? "" : " off");
+    const t = Date.now();
+    const src = it.disponible ? `/api/projets/${state.projet.id}/insertion/kit/${it.role}?t=${t}` : "";
+    div.innerHTML = `
+      ${it.disponible
+        ? `<a href="${src}" download="${esc(it.role)}.png" title="Télécharger"><img src="${src}" alt="${esc(it.titre)}" /></a>`
+        : `<div class="kit-manquant">manquant</div>`}
+      <div class="kit-lbl"><b>${esc(it.titre)}</b><small>${it.disponible ? esc(it.note) : (it.requis ? "à ajouter (obligatoire)" : "optionnel — " + esc(it.note))}</small></div>`;
+    box.appendChild(div);
+  }
+}
+
+async function importerImage(file) {
+  const fd = new FormData();
+  fd.append("fichier", file);
+  let resp;
+  try { resp = await fetch(`/api/projets/${state.projet.id}/insertion/import`, { method: "POST", body: fd }); }
+  catch { toast("Serveur injoignable.", "err"); return; }
+  if (!resp.ok) { toast((await resp.json()).detail || "Échec de l'import.", "err"); return; }
+  state.projet = (await resp.json()).projet;
+  toast("Image importée.", "ok");
+  renderGalerie();
+  const fiche = $("#ins-fiche");
+  if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
 }
 
 function renderGalerie() {
   const box = $("#ins-galerie");
   if (!box) return;
   const ins = state.projet.insertion || {};
-  const variantes = ins.variantes || [];
-  if (!variantes.length) {
-    box.innerHTML = `<p class="sub">Aucune variante pour l'instant.</p>`;
+  const images = ins.images || [];
+  if (!images.length) {
+    box.innerHTML = `<p class="sub">Aucune image importée pour l'instant.</p>`;
     return;
   }
   box.innerHTML = "";
-  for (const v of variantes) {
+  for (const v of images) {
     const retenue = ins.retenue === v.fichier;
     const div = document.createElement("div");
-    div.className = "card";
+    div.className = "card" + (retenue ? " retenue" : "");
     div.innerHTML = `
-      <img class="planche-img" src="${urlFichier(v.fichier)}" alt="Variante insertion IA" />
+      <img class="planche-img" src="${urlInsertion(v.fichier)}" alt="Insertion IA" />
       <div class="bd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="chip ${retenue ? "ok" : ""}" style="font-size:10px">${esc(v.etiquette || "visuel IA")}</span>
-        <span class="spacer" style="flex:1"></span>
-        <button class="btn" data-retoucher="${esc(v.fichier)}">Retoucher</button>
-        <a class="btn" href="${urlFichier(v.fichier)}" download target="_blank">Télécharger</a>
+        <span style="flex:1"></span>
+        <a class="btn" href="${urlInsertion(v.fichier)}" download target="_blank">Télécharger</a>
+        <button class="btn" data-suppr="${esc(v.fichier)}">Retirer</button>
         <button class="btn ${retenue ? "primary" : "navy"}" data-retenue="${esc(v.fichier)}">${retenue ? "Retenue ✓" : "Retenir"}</button>
       </div>`;
     box.appendChild(div);
@@ -927,21 +986,24 @@ function renderGalerie() {
       method: "PUT", body: JSON.stringify({ fichier: b.dataset.retenue }),
     });
     state.projet = d.projet; renderGalerie();
+    const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = false;
   }));
-  box.querySelectorAll("[data-retoucher]").forEach((b) => b.addEventListener("click", async () => {
-    const instruction = window.prompt("Modification à appliquer à cette variante :");
-    if (!instruction) return;
-    const prog = $("#ins-progress");
-    if (prog) prog.textContent = "Retouche en cours…";
-    try {
-      const d = await api(`/api/projets/${state.projet.id}/insertion/retoucher`, {
-        method: "POST", body: JSON.stringify({ fichier: b.dataset.retoucher, instruction }),
-      });
-      state.projet = d.projet;
-      if (prog) prog.textContent = "Retouche ajoutée.";
-      renderGalerie();
-    } catch { if (prog) prog.textContent = ""; }
+  box.querySelectorAll("[data-suppr]").forEach((b) => b.addEventListener("click", async () => {
+    const d = await api(`/api/projets/${state.projet.id}/insertion/image?fichier=${encodeURIComponent(b.dataset.suppr)}`,
+      { method: "DELETE" });
+    state.projet = d.projet; renderGalerie();
+    const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
   }));
+}
+
+async function genererFiche() {
+  const lien = $("#ins-fiche-lien");
+  if (lien) lien.textContent = "Génération de la fiche…";
+  try {
+    const data = await api(`/api/projets/${state.projet.id}/insertion/fiche`, { method: "POST" });
+    if (lien) lien.innerHTML = `Fiche prête : <a href="${esc(data.telechargement)}">${esc(data.fichier)}</a>`;
+    toast("Fiche d'emprise générée.", "ok");
+  } catch { if (lien) lien.textContent = ""; }
 }
 
 // ---------------- étape 6 : notice descriptive ----------------

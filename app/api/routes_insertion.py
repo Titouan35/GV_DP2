@@ -1,7 +1,11 @@
-"""Module Insertion IA : photo du site, zone, génération, retouche, galerie.
+"""Étape 5 — Insertion IA, générateur de prompt SANS API (PLAN §6 bis).
 
-Génération synchrone (10-30 s par image) : le front affiche un état
-d'attente. La clé API reste côté serveur (jamais transmise au navigateur).
+Endpoints : upload photo du site, sauvegarde des consignes, construction du
+prompt + kit d'images à joindre, service des images du kit (photo / plan de
+masse / coupe), ré-import de l'image générée dans ChatGPT (zone de dépôt),
+choix de l'image retenue, et export de la fiche de validation d'emprise.
+
+Aucun appel réseau, aucune clé : tout est local et déterministe.
 """
 from __future__ import annotations
 
@@ -12,25 +16,30 @@ from fastapi import APIRouter, Body, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import config, insertion_ia
-from ..insertion_ia import InsertionError
+from ..fiche_emprise import generer_fiche
 from .routes_projets import _charger, _sauver
 
 router = APIRouter(prefix="/api/projets", tags=["insertion"])
 
-EXTENSIONS = {".png", ".jpg", ".jpeg"}
+EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 TAILLE_MAX = 40 * 1024 * 1024
 
 
+# ------------------------------------------------------------------ statut
+
 @router.get("/{projet_id}/insertion/statut")
 def statut_projet(projet_id: str):
-    return insertion_ia.statut()
+    projet = _charger(projet_id)
+    return {**insertion_ia.apercu(), "etat": insertion_ia.etat(projet.model_dump())}
 
+
+# ------------------------------------------------------------------ photo du site
 
 @router.post("/{projet_id}/insertion/photo")
 async def uploader_photo(projet_id: str, fichier: UploadFile):
     ext = Path(fichier.filename or "").suffix.lower()
     if ext not in EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Photo au format PNG ou JPG attendue.")
+        raise HTTPException(status_code=400, detail="Photo au format PNG, JPG ou WEBP attendue.")
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX:
         raise HTTPException(status_code=400, detail="Photo trop volumineuse (40 Mo max).")
@@ -44,62 +53,85 @@ async def uploader_photo(projet_id: str, fichier: UploadFile):
     chemin.write_bytes(contenu)
 
     projet.insertion.photo = str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/")
-    projet.insertion.zone = None  # la zone se retrace sur la nouvelle photo
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet}
 
 
-@router.put("/{projet_id}/insertion/reglages")
-def enregistrer_reglages(projet_id: str, corps: dict = Body(...)):
-    """Zone tracée (0-1), repère d'échelle et consignes libres."""
+# ------------------------------------------------------------------ consignes
+
+@router.put("/{projet_id}/insertion/consignes")
+def enregistrer_consignes(projet_id: str, corps: dict = Body(...)):
     projet = _charger(projet_id)
-    ins = projet.insertion
-    if "zone" in corps:
-        zone = corps["zone"]
-        if zone is not None and (len(zone) != 4 or not all(0 <= float(v) <= 1 for v in zone)):
-            raise HTTPException(status_code=400, detail="Zone invalide (4 valeurs entre 0 et 1).")
-        ins.zone = [float(v) for v in zone] if zone else None
-    if "repere_distance_m" in corps:
-        ins.repere_distance_m = float(corps["repere_distance_m"])
-    if "repere_desc" in corps:
-        ins.repere_desc = str(corps["repere_desc"])[:200]
     if "consignes" in corps:
-        ins.consignes = str(corps["consignes"])[:2000]
+        projet.insertion.consignes = str(corps["consignes"])[:2000]
+    if "affinage" in corps:
+        projet.insertion.affinage = str(corps["affinage"])[:2000]
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet}
 
 
-@router.post("/{projet_id}/insertion/generer")
-def generer(projet_id: str, corps: dict = Body(default={})):
+# ------------------------------------------------------------------ prompt + kit
+
+@router.post("/{projet_id}/insertion/prompt")
+def generer_prompt(projet_id: str, corps: dict = Body(default={})):
+    """Construit le prompt (6 blocs) + le kit d'images. Persiste le prompt."""
     projet = _charger(projet_id)
-    nb = int(corps.get("nb_variantes", 2))
-    try:
-        variantes = insertion_ia.generer(projet.model_dump(), nb_variantes=nb)
-    except InsertionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    projet.insertion.variantes = variantes + projet.insertion.variantes
+    affinage = str(corps.get("affinage", "") or "")
+    if affinage:
+        projet.insertion.affinage = affinage[:2000]
+    data = projet.model_dump()
+    prompt = insertion_ia.construire_prompt(data, affinage=affinage)
+    projet.insertion.prompt = prompt
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet, "variantes": variantes}
+    return {"projet": projet, "prompt": prompt, "kit": insertion_ia.kit(data)}
 
 
-@router.post("/{projet_id}/insertion/retoucher")
-def retoucher(projet_id: str, corps: dict = Body(...)):
+@router.get("/{projet_id}/insertion/kit/{role}")
+def servir_kit(projet_id: str, role: str, t: int = 0):
+    """Sert une image du kit (photo / plan / coupe), générée à la demande."""
+    if role not in ("photo", "plan", "coupe"):
+        raise HTTPException(status_code=404, detail="Rôle de kit inconnu.")
+    projet = _charger(projet_id).model_dump()
+    chemin = insertion_ia.image_kit(projet, role)
+    if not chemin or not Path(chemin).exists():
+        raise HTTPException(status_code=404, detail="Image du kit indisponible (input manquant).")
+    return FileResponse(chemin)
+
+
+# ------------------------------------------------------------------ ré-import (drop zone)
+
+@router.post("/{projet_id}/insertion/import")
+async def importer_image(projet_id: str, fichier: UploadFile):
+    """Ré-importe l'image générée par ChatGPT (zone de dépôt)."""
+    ext = Path(fichier.filename or "").suffix.lower()
+    if ext not in EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Image PNG, JPG ou WEBP attendue.")
+    contenu = await fichier.read()
+    if len(contenu) > TAILLE_MAX:
+        raise HTTPException(status_code=400, detail="Image trop volumineuse (40 Mo max).")
+
     projet = _charger(projet_id)
-    fichier = corps.get("fichier")
-    instruction = (corps.get("instruction") or "").strip()
-    if not fichier or not instruction:
-        raise HTTPException(status_code=400, detail="Variante et instruction requises.")
-    try:
-        variante = insertion_ia.retoucher(projet.model_dump(), fichier, instruction)
-    except InsertionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    projet.insertion.variantes = [variante, *projet.insertion.variantes]
+    dossier = config.assets_dir(projet_id) / "insertion"
+    dossier.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+    nom = f"insertion_{stamp}{ext}"
+    (dossier / nom).write_bytes(contenu)
+    rel = str((dossier / nom).relative_to(config.PROJETS_DIR)).replace("\\", "/")
+
+    image = {
+        "fichier": rel,
+        "date": datetime.now().isoformat(timespec="seconds"),
+        "etiquette": "visuel IA — usage commercial",
+    }
+    projet.insertion.images = [image, *projet.insertion.images]
+    if not projet.insertion.retenue:
+        projet.insertion.retenue = rel
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet, "variante": variante}
+    return {"projet": projet, "image": image}
 
 
 @router.put("/{projet_id}/insertion/retenue")
@@ -111,11 +143,50 @@ def choisir_retenue(projet_id: str, corps: dict = Body(...)):
     return {"projet": projet}
 
 
+@router.delete("/{projet_id}/insertion/image")
+def retirer_image(projet_id: str, fichier: str):
+    projet = _charger(projet_id)
+    projet.insertion.images = [im for im in projet.insertion.images if im.get("fichier") != fichier]
+    if projet.insertion.retenue == fichier:
+        projet.insertion.retenue = (projet.insertion.images[0]["fichier"]
+                                    if projet.insertion.images else None)
+    cible = (config.PROJETS_DIR / fichier).resolve()
+    base = config.assets_dir(projet_id).resolve()
+    if base in cible.parents and cible.exists():
+        cible.unlink()
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
 @router.get("/{projet_id}/insertion/fichier")
 def servir_fichier(projet_id: str, chemin: str):
-    """Sert une photo/variante du projet (chemins confinés au projet)."""
+    """Sert une image importée (chemins confinés au dossier assets du projet)."""
     cible = (config.PROJETS_DIR / chemin).resolve()
     base = config.assets_dir(projet_id).resolve()
     if base not in cible.parents or not cible.exists():
         raise HTTPException(status_code=404, detail="Fichier introuvable.")
     return FileResponse(cible)
+
+
+# ------------------------------------------------------------------ fiche d'emprise
+
+@router.post("/{projet_id}/insertion/fiche")
+def exporter_fiche(projet_id: str):
+    projet = _charger(projet_id)
+    try:
+        chemin = generer_fiche(projet.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "fichier": chemin.name,
+        "telechargement": f"/api/projets/{projet_id}/insertion/fiche.pptx",
+    }
+
+
+@router.get("/{projet_id}/insertion/fiche.pptx")
+def telecharger_fiche(projet_id: str):
+    chemin = config.assets_dir(projet_id) / f"Fiche_emprise_{projet_id}.pptx"
+    if not chemin.exists():
+        raise HTTPException(status_code=404, detail="Fiche non générée.")
+    return FileResponse(chemin, filename=chemin.name)

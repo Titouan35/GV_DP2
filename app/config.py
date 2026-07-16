@@ -6,9 +6,55 @@ PROJETS/ est gitignoré (données client, jamais versionnées).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _env_candidates():
+    """Emplacements de .env testés dans l'ordre (Windows + Mac).
+
+    Florent range ses secrets dans le workspace CLAUDE (Innovation/CLAUDE/.env),
+    partagé par tous ses outils ; on accepte aussi un .env local au repo.
+    """
+    override = os.environ.get("GVDP_ENV_FILE")
+    if override:
+        yield Path(override)
+    yield REPO_ROOT / ".env"
+    # remonte jusqu'à trouver un dossier CLAUDE/.env (marche Win + Mac,
+    # la structure Innovation/CLAUDE étant identique sur les deux postes)
+    for ancetre in REPO_ROOT.parents:
+        yield ancetre / "CLAUDE" / ".env"
+
+
+def _charger_env() -> Path | None:
+    """Charge le premier .env trouvé dans os.environ (sans écraser l'existant)."""
+    for chemin in _env_candidates():
+        try:
+            if not chemin.is_file():
+                continue
+        except OSError:
+            continue
+        for ligne in chemin.read_text(encoding="utf-8").splitlines():
+            ligne = ligne.strip()
+            if not ligne or ligne.startswith("#"):
+                continue
+            if ligne.startswith("export "):
+                ligne = ligne[len("export "):]
+            if "=" not in ligne:
+                continue
+            cle, _, val = ligne.partition("=")
+            cle = cle.strip()
+            val = val.strip().strip('"').strip("'")
+            if cle and cle not in os.environ:  # l'env système garde la priorité
+                os.environ[cle] = val
+        return chemin
+    return None
+
+
+# Chargé une fois à l'import : les modules lisant os.environ voient les clés.
+ENV_FILE_CHARGE = _charger_env()
 
 PROJETS_DIR = REPO_ROOT / "PROJETS"          # 1 dossier JSON par projet
 
@@ -19,7 +65,12 @@ def assets_dir(projet_id: str):
     d.mkdir(parents=True, exist_ok=True)
     return d
 DP_DIR = REPO_ROOT.parent                     # Innovation/OUTILS/DP
-COUPES_DIR = DP_DIR / "COUPES"                # coupes types Solstyce START PLAINE
+# Coupes types Solstyce START PLAINE : dossier externe ../COUPES en dev local,
+# repli sur la copie embarquée dans le package (indispensable en conteneur, où
+# le dossier externe n'est pas copié dans l'image).
+_COUPES_EXTERNE = DP_DIR / "COUPES"
+_COUPES_BUNDLE = REPO_ROOT / "app" / "gabarits" / "coupes"
+COUPES_DIR = _COUPES_EXTERNE if _COUPES_EXTERNE.exists() else _COUPES_BUNDLE
 
 APP_NAME = "GV_DP"
 APP_TITLE = "Déclaration Préalable · Ombrières"

@@ -77,14 +77,18 @@ class Notice(BaseModel):
 
 
 class Insertion(BaseModel):
-    """Insertion IA (visuel commercial, jamais pièce DP6). Cf. PLAN §6 bis."""
+    """Insertion IA — visuel commercial, jamais pièce DP6 (cf. PLAN §6 bis).
+
+    Générateur de prompt SANS API (flux figé 16/07/2026) : l'outil assemble un
+    prompt ultra-détaillé + un kit d'images à joindre ; l'utilisateur génère
+    l'insertion dans son propre ChatGPT, puis ré-importe l'image retenue ici.
+    """
     photo: Optional[str] = None            # chemin relatif de la photo du site
-    zone: Optional[list[float]] = None     # [x0, y0, x1, y1] normalisés 0-1
-    repere_distance_m: float = 2.5         # distance connue au sol (défaut : place)
-    repere_desc: str = "la largeur d'une place de stationnement"
-    consignes: str = ""                    # texte libre de l'utilisateur
-    variantes: list[dict] = Field(default_factory=list)  # {fichier, prompt, date}
-    retenue: Optional[str] = None          # fichier de la variante retenue
+    consignes: str = ""                    # consignes libres pour le prompt
+    affinage: str = ""                     # dernières consignes de correction (affiner le prompt)
+    prompt: Optional[str] = None           # dernier prompt généré (traçabilité)
+    images: list[dict] = Field(default_factory=list)  # images ré-importées {fichier, date, etiquette}
+    retenue: Optional[str] = None          # image retenue (fiche d'emprise)
 
 
 class Projet(BaseModel):

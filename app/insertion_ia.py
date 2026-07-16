@@ -1,295 +1,297 @@
-"""Module Insertion IA (phase 5) : génération de visuels commerciaux.
+"""Module Insertion IA (phase 5) — générateur de prompt SANS API.
 
-Couche d'abstraction fournisseur (Gemini par défaut, Azure OpenAI en option).
-La clé API reste côté serveur (variable d'environnement), jamais dans le
-navigateur. Ces visuels sont réservés au commercial, étiquetés « visuel IA »,
-et ne sont jamais utilisés comme pièce DP6 (plan §6 bis).
+Flux figé le 2026-07-16 (PLAN_OUTIL_DP.md §6 bis) : l'outil n'appelle aucune
+API et ne fait sortir aucune donnée. Au clic « Générer le prompt », il produit
+deux choses :
 
-Fournisseur Gemini : API generateContent + responseModalities (voie stable).
-Modèle par défaut « nano banana » (gemini-2.5-flash-image), surchargeable par
-la variable GVDP_GEMINI_MODEL si Google renomme le modèle.
+1. Le **prompt** ultra-détaillé (6 blocs), assemblé de façon déterministe
+   depuis les inputs du projet, destiné à **ChatGPT (GPT image)**.
+2. Le **kit d'images à joindre** : (a) photo du site, (b) plan de masse (DP2,
+   upload BE), (c) coupe du type d'ombrière choisi (COUPES/ → PNG).
+
+L'utilisateur colle le prompt dans son ChatGPT, y joint les 3 images, génère
+l'insertion, puis ré-importe l'image retenue dans l'outil (zone de dépôt).
+
+Les visuels obtenus sont réservés au commercial, étiquetés « visuel IA », et
+ne servent JAMAIS de pièce DP6 (fournie par le BE).
 """
 from __future__ import annotations
 
-import base64
-import io
-import os
-from datetime import datetime
+from pathlib import Path
 
-import httpx
-from PIL import Image, ImageDraw
+import pypdfium2 as pdfium
 
 from . import config
-from .catalogue import parametres_effectifs
+from .catalogue import CATALOGUE, parametres_effectifs
 
-FOURNISSEURS = ("gemini", "azure-openai")
-GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
-GEMINI_MODELE_DEFAUT = "gemini-2.5-flash-image"
-COULEUR_ZONE = (229, 57, 53)  # rouge de la zone d'implantation
+# ------------------------------------------------------------------ descriptif
+
+MODE_EMPLOI = [
+    "Ouvre ChatGPT (un modèle avec génération d'image, « GPT image »).",
+    "Colle le prompt (déjà copié dans le presse-papier).",
+    "Joins les images du kit ci-contre (photo du site, plan de masse, coupe).",
+    "Génère, puis régénère/affine dans ChatGPT jusqu'au rendu voulu.",
+    "Glisse l'image retenue dans la zone de dépôt de l'outil.",
+]
+
+RAPPELS = [
+    "Visuel réservé au commercial, étiqueté « visuel IA » : jamais utilisé en pièce DP6.",
+    "Aucune API, aucune clé, aucun coût : la génération se fait dans TON ChatGPT.",
+    "Aucune donnée du site ne sort de l'outil (c'est toi qui portes le prompt).",
+    "Photo d'entrée nette, à hauteur d'œil, zone d'implantation dégagée = clé du réalisme.",
+]
 
 
-class InsertionError(Exception):
-    """Erreur du module Insertion IA (config, réseau, quota, sécurité)."""
-
-
-# ---------------------------------------------------------------- statut
-
-def _fournisseur() -> str:
-    return os.environ.get("GVDP_IMAGE_PROVIDER", "gemini").lower()
-
-
-def statut() -> dict:
-    """État de configuration du module (jamais la clé elle-même)."""
-    fournisseur = _fournisseur()
-    cles = {
-        "gemini": bool(os.environ.get("GEMINI_API_KEY")),
-        "azure-openai": bool(
-            os.environ.get("AZURE_OPENAI_API_KEY")
-            and os.environ.get("AZURE_OPENAI_ENDPOINT")
-        ),
-    }
+def apercu() -> dict:
+    """Descriptif générique du module (indépendant d'un projet)."""
     return {
-        "fournisseur": fournisseur,
-        "modele": os.environ.get("GVDP_GEMINI_MODEL", GEMINI_MODELE_DEFAUT),
-        "configure": cles.get(fournisseur, False),
-        "cles_detectees": cles,
-        "guide": [
-            "1. Ouvrir aistudio.google.com/apikey (compte Google) et cliquer « Create API key ».",
-            "2. Copier la clé (commence par AIza…).",
-            "3. Sur ce poste : définir la variable d'environnement GEMINI_API_KEY avec cette valeur.",
-            "4. Relancer GV_DP : l'étape Insertion IA s'active automatiquement.",
-        ],
-        "rappels": [
-            "Visuels réservés au commercial, étiquetés « visuel IA » ; jamais en pièce DP6.",
-            "Free tier gratuit dans les quotas Google ; ~0,05 à 0,15 € par image ensuite.",
-            "Les photos transitent chez Google (peu sensible pour un parking).",
-        ],
+        "mode": "generateur_prompt",
+        "api": False,
+        "cible": "ChatGPT (GPT image)",
+        "mode_emploi": MODE_EMPLOI,
+        "rappels": RAPPELS,
     }
 
 
-# ---------------------------------------------------------------- prompt
+# ------------------------------------------------------------------ prompt
 
-def _prompt_systeme(projet: dict, avec_zone: bool, avec_plan: bool,
-                    avec_coupe: bool) -> str:
-    ins = projet.get("insertion") or {}
+def _fmt(v, suffixe="", defaut="—"):
+    """Formatte un nombre à la française (virgule décimale), sinon tel quel."""
+    if v is None:
+        return defaut
+    if isinstance(v, (int, float)):
+        return f"{v:g}".replace(".", ",") + suffixe
+    return f"{v}{suffixe}"
+
+
+def construire_prompt(projet: dict, affinage: str = "") -> str:
+    """Assemble le prompt ultra-détaillé (6 blocs) depuis les inputs du projet.
+
+    Déterministe : mêmes inputs → même prompt. Rédigé en français, adressé à
+    ChatGPT en éditeur photo. Tolère les champs manquants (valeurs génériques).
+    """
     omb = projet.get("ombriere") or {}
-    p = parametres_effectifs(omb) if (omb.get("famille") or omb.get("puissance_kwc")) else None
+    ins = projet.get("insertion") or {}
+    a_type = bool(omb.get("famille") or omb.get("puissance_kwc"))
+    p = parametres_effectifs(omb) if a_type else None
 
-    lignes = [
-        "Tu es un outil de photomontage photoréaliste. À partir de la PHOTO du site "
-        "fournie, insère une ombrière photovoltaïque de parking de façon crédible, "
-        "en conservant intégralement le décor, la perspective, la lumière et le grain "
-        "de la photo d'origine.",
+    plan_dispo = _document_image(projet, "dp2") is not None
+    coupe_dispo = _coupe_source(projet) is not None
+
+    # -- bloc 1 : rôle & tâche
+    b1 = (
+        "RÔLE — Tu es un éditeur photo expert en photomontage architectural. "
+        "À partir de la PHOTO du site que je te fournis, insère une ombrière "
+        "photovoltaïque de parking de façon photoréaliste et crédible, sans rien "
+        "modifier d'autre dans la scène (bâtiments, véhicules, sol, ciel, "
+        "marquages, végétation)."
+    )
+
+    # -- bloc 2 : la scène
+    b2_lignes = [
+        "LA SCÈNE — La photo montre l'aire de stationnement à équiper. Conserve à "
+        "l'identique les mâts d'éclairage, arbres, bordures, marquages au sol et "
+        "véhicules déjà présents.",
     ]
-    if avec_zone:
-        lignes.append(
-            "La PREMIÈRE image montre un rectangle rouge semi-transparent : implante "
-            "l'ombrière EXACTEMENT dans cette zone rouge, puis efface totalement le "
-            "tracé rouge du rendu final."
-        )
-    if avec_plan:
-        lignes.append(
-            "Une image de PLAN DE MASSE indique l'implantation souhaitée (orientation "
-            "des rangées) : respecte-la."
-        )
-    if avec_coupe:
-        lignes.append(
-            "Une image de COUPE technique montre la structure exacte à reproduire "
-            "(silhouette, proportions, inclinaison)."
-        )
-    if p:
-        lignes.append(
-            f"Caractéristiques de l'ombrière : type {p['famille']}, "
-            f"{p['longueur_m']:g} m de long sur {p['profondeur_m']:g} m, "
-            f"hauteur hors tout {p['h_haut_m']:.2f} m, pente {p['pente_deg']:g}°, "
-            f"structure en acier galvanisé gris clair avec fines bandes bleues sur les "
-            f"poteaux, couverture de modules photovoltaïques full black (noirs mats, "
-            f"non réfléchissants)."
+    if plan_dispo:
+        b2_lignes.append(
+            "Un PLAN DE MASSE est joint : il porte l'implantation réelle et "
+            "l'orientation des rangées d'ombrières — respecte-les précisément "
+            "(position, sens, nombre de rangées)."
         )
     else:
-        lignes.append(
-            "Ombrière de parking classique : poteaux acier galvanisé gris clair, "
-            "modules photovoltaïques full black."
+        b2_lignes.append(
+            "Aucun plan de masse joint : implante l'ombrière sur la zone de parking "
+            "la plus dégagée et la plus cohérente de la photo."
+        )
+    b2 = " ".join(b2_lignes)
+
+    # -- bloc 3 : l'objet, spécifié précisément
+    if p:
+        double = p.get("double")
+        forme = "double pente (structure en T, poteau central)" if double else \
+            f"monopente (poteau côté {p.get('poteau', 'haut')})"
+        b3 = (
+            "L'OBJET — Ombrière de parking type « {fam} », {forme}. "
+            "Dimensions : {L} de long sur {prof} de profondeur couverte, {trav} travées "
+            "à {entr} d'entraxe, pente {pente}. Hauteur hors-tout ≈ {hh} au point haut, "
+            "≈ {hb} au point bas. Structure en acier galvanisé gris clair avec fines "
+            "bandes bleues sur les poteaux ; poteaux caisson, arbalétrier effilé et "
+            "bracon. Couverture de modules photovoltaïques full black (noirs mats, non "
+            "réfléchissants), sous-face claire. {coupe}"
+        ).format(
+            fam=p.get("famille", "ombrière PV"),
+            forme=forme,
+            L=_fmt(p.get("longueur_m"), " m"),
+            prof=_fmt(p.get("profondeur_m"), " m"),
+            trav=_fmt(p.get("nb_travees")),
+            entr=_fmt(p.get("entraxe_m"), " m"),
+            pente=_fmt(p.get("pente_deg"), "°"),
+            hh=_fmt(p.get("h_haut_m"), " m"),
+            hb=_fmt(p.get("h_bas_m"), " m"),
+            coupe=("Reporte-toi à la COUPE technique jointe pour le profil et les "
+                   "proportions exactes." if coupe_dispo else ""),
+        ).strip()
+    else:
+        b3 = (
+            "L'OBJET — Ombrière de parking classique : poteaux en acier galvanisé "
+            "gris clair, structure fine, modules photovoltaïques full black (noirs "
+            "mats). Renseigne le type d'ombrière à l'étape 3 pour un profil précis."
         )
 
-    dist = ins.get("repere_distance_m") or 2.5
-    desc = ins.get("repere_desc") or "la largeur d'une place de stationnement"
-    lignes.append(
-        f"Repère d'échelle : {desc} vaut {dist:g} m ; dimensionne l'ombrière en "
-        f"cohérence avec ce repère visible sur la photo."
+    # -- bloc 4 : échelle
+    nb_places = omb.get("nb_places")
+    b4_lignes = []
+    if nb_places:
+        b4_lignes.append(
+            f"ÉCHELLE — L'ombrière couvre environ {nb_places:g} places de "
+            "stationnement (une place = 2,50 m de large)."
+        )
+    else:
+        b4_lignes.append(
+            "ÉCHELLE — Une place de stationnement = 2,50 m de large : sers-t'en "
+            "comme repère pour dimensionner l'ombrière."
+        )
+    if p:
+        b4_lignes.append(
+            f"La garde au sol sous la panne basse est d'environ {_fmt(p.get('h_bas_m'), ' m')} "
+            "(passage véhicule dessous). Dimensionne l'ombrière en cohérence avec ces repères."
+        )
+    b4 = " ".join(b4_lignes)
+
+    # -- bloc 5 : lumière & intégration
+    b5 = (
+        "LUMIÈRE & INTÉGRATION — Reproduis des ombres portées cohérentes en "
+        "direction et longueur avec celles des mâts, arbres et véhicules déjà "
+        "visibles. Conserve le grain, la netteté, l'exposition et la balance des "
+        "couleurs de la photo source : le montage doit sembler pris au même instant."
     )
-    lignes.append(
-        "Cohérence lumineuse : les ombres portées de l'ombrière doivent avoir la même "
-        "direction et la même longueur que celles des objets déjà présents (mâts, "
-        "arbres, voitures). Harmonise le grain et la netteté avec la photo source."
+
+    # -- bloc 6 : consignes libres + contraintes négatives
+    libres = (ins.get("consignes") or "").strip()
+    corrections = (affinage or ins.get("affinage") or "").strip()
+    b6_lignes = ["CONSIGNES & INTERDITS —"]
+    if libres:
+        b6_lignes.append(f"Consignes : {libres}.")
+    if corrections:
+        b6_lignes.append(f"Corrections à appliquer : {corrections}.")
+    b6_lignes.append(
+        "Ne déplace pas les véhicules, ne modifie pas les bâtiments, n'invente pas "
+        "d'arrière-plan. Pas de watermark, pas de texte, pas de logo ajouté. "
+        "Rends uniquement l'image finale, photoréaliste."
     )
-    consignes = (ins.get("consignes") or "").strip()
-    if consignes:
-        lignes.append(f"Consignes complémentaires de l'utilisateur : {consignes}")
-    lignes.append("Rends uniquement l'image finale, photoréaliste, sans texte ajouté.")
-    return "\n".join(lignes)
+    b6 = " ".join(b6_lignes)
+
+    return "\n\n".join([b1, b2, b3, b4, b5, b6])
 
 
-# ---------------------------------------------------------------- images
+# ------------------------------------------------------------------ kit d'images
 
-def _photo_annotee(chemin_photo, zone) -> bytes:
-    """Photo du site avec la zone d'implantation en rouge semi-transparent."""
-    img = Image.open(chemin_photo).convert("RGB")
-    if zone and len(zone) == 4:
-        calque = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        dr = ImageDraw.Draw(calque)
-        w, h = img.size
-        x0, y0, x1, y1 = zone
-        box = [min(x0, x1) * w, min(y0, y1) * h, max(x0, x1) * w, max(y0, y1) * h]
-        dr.rectangle(box, fill=COULEUR_ZONE + (70,), outline=COULEUR_ZONE + (255,), width=6)
-        img = Image.alpha_composite(img.convert("RGBA"), calque).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=92)
-    return buf.getvalue()
+def _document_image(projet: dict, code: str) -> Path | None:
+    """Chemin du document uploadé `code` s'il existe (image ou PDF)."""
+    doc = (projet.get("documents") or {}).get(code)
+    if not doc or not doc.get("fichier"):
+        return None
+    chemin = config.PROJETS_DIR / doc["fichier"]
+    return chemin if chemin.exists() else None
 
 
-def _part_image(donnees: bytes, mime: str = "image/jpeg") -> dict:
-    return {"inline_data": {"mime_type": mime, "data": base64.b64encode(donnees).decode()}}
+def _coupe_source(projet: dict) -> Path | None:
+    """Chemin du PDF de coupe type (catalogue) pour la famille choisie."""
+    famille = (projet.get("ombriere") or {}).get("famille")
+    entree = CATALOGUE.get(famille)
+    if not entree:
+        return None
+    chemin = config.COUPES_DIR / entree["coupe_pdf"]
+    return chemin if chemin.exists() else None
 
 
-def _extraire_image(reponse: dict) -> bytes:
-    """Récupère la première image d'une réponse generateContent."""
-    for cand in reponse.get("candidates", []):
-        for part in (cand.get("content") or {}).get("parts", []):
-            inline = part.get("inlineData") or part.get("inline_data")
-            if inline and inline.get("data"):
-                return base64.b64decode(inline["data"])
-    # pas d'image : souvent un blocage sécurité, on remonte le texte explicatif
-    for cand in reponse.get("candidates", []):
-        for part in (cand.get("content") or {}).get("parts", []):
-            if part.get("text"):
-                raise InsertionError(f"Aucune image renvoyée : {part['text'][:200]}")
-    raise InsertionError("Aucune image renvoyée par le modèle (réponse vide).")
-
-
-def _appel_gemini(parts: list[dict]) -> bytes:
-    cle = os.environ.get("GEMINI_API_KEY")
-    if not cle:
-        raise InsertionError("Clé GEMINI_API_KEY absente : suivez le guide de l'étape 5.")
-    modele = os.environ.get("GVDP_GEMINI_MODEL", GEMINI_MODELE_DEFAUT)
-    url = f"{GEMINI_BASE}/models/{modele}:generateContent"
-    corps = {
-        "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
-    }
+def _pdf_premiere_page_png(chemin_pdf: Path, sortie: Path, dpi: int = 200) -> Path:
+    """Rend la 1re page d'un PDF en PNG (cache) pour l'inclure au kit."""
+    doc = pdfium.PdfDocument(str(chemin_pdf))
     try:
-        with httpx.Client(timeout=120.0) as client:
-            resp = client.post(url, headers={"x-goog-api-key": cle}, json=corps)
-    except httpx.HTTPError as exc:
-        raise InsertionError(f"Appel Gemini impossible ({exc.__class__.__name__}).") from exc
-    if resp.status_code == 429:
-        raise InsertionError("Quota Gemini atteint : réessayez dans quelques instants.")
-    if resp.status_code == 404:
-        raise InsertionError(
-            f"Modèle « {modele} » introuvable : définissez GVDP_GEMINI_MODEL "
-            f"(ex. gemini-3.1-flash-image)."
-        )
-    if resp.status_code != 200:
-        detail = resp.text[:200]
-        raise InsertionError(f"Gemini a répondu HTTP {resp.status_code} : {detail}")
-    return _extraire_image(resp.json())
+        image = doc[0].render(scale=dpi / 72).to_pil()
+        sortie.parent.mkdir(parents=True, exist_ok=True)
+        image.save(sortie)
+    finally:
+        doc.close()
+    return sortie
 
 
-# ---------------------------------------------------------------- génération
+def image_kit(projet: dict, role: str) -> Path | None:
+    """Résout le fichier image d'un rôle du kit (photo / plan / coupe).
 
-def _dossier_insertion(projet_id: str):
-    d = config.assets_dir(projet_id) / "insertion"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    Les PDF (plan de masse, coupe) sont convertis en PNG et mis en cache dans
+    le dossier assets du projet. Renvoie None si l'input n'est pas disponible.
+    """
+    projet_id = projet.get("id")
+    assets = config.assets_dir(projet_id)
 
+    if role == "photo":
+        photo = (projet.get("insertion") or {}).get("photo")
+        if not photo:
+            return None
+        chemin = config.PROJETS_DIR / photo
+        return chemin if chemin.exists() else None
 
-def _references(projet: dict) -> tuple[list[dict], dict]:
-    """Construit les parts image (photo annotée + plan + coupe) et les flags."""
-    ins = projet.get("insertion") or {}
-    if not ins.get("photo"):
-        raise InsertionError("Ajoutez d'abord une photo du site (étape 5).")
-    chemin_photo = config.PROJETS_DIR / ins["photo"]
-    if not chemin_photo.exists():
-        raise InsertionError("Photo du site introuvable sur le disque.")
+    if role == "plan":
+        source = _document_image(projet, "dp2")
+        if not source:
+            return None
+        if source.suffix.lower() == ".pdf":
+            return _pdf_premiere_page_png(source, assets / "kit_plan_masse.png")
+        return source
 
-    flags = {"zone": bool(ins.get("zone")), "plan": False, "coupe": False}
-    parts_images = [_part_image(_photo_annotee(chemin_photo, ins.get("zone")))]
+    if role == "coupe":
+        source = _coupe_source(projet)
+        if not source:
+            return None
+        return _pdf_premiere_page_png(source, assets / "kit_coupe.png")
 
-    # plan de masse (upload BE) en référence d'implantation
-    plan = (projet.get("documents") or {}).get("dp2")
-    if plan:
-        chemin_plan = config.PROJETS_DIR / plan["fichier"]
-        if chemin_plan.exists() and chemin_plan.suffix.lower() in (".png", ".jpg", ".jpeg"):
-            parts_images.append(_part_image(chemin_plan.read_bytes(),
-                                            "image/png" if chemin_plan.suffix.lower() == ".png" else "image/jpeg"))
-            flags["plan"] = True
-
-    # coupe DP3 générée (structure exacte du type choisi)
-    coupe = config.assets_dir(projet["id"]) / "dp3_coupe.png"
-    if coupe.exists():
-        parts_images.append(_part_image(coupe.read_bytes(), "image/png"))
-        flags["coupe"] = True
-    return parts_images, flags
+    return None
 
 
-def _rel(chemin) -> str:
-    return str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/")
+def kit(projet: dict) -> list[dict]:
+    """Liste des 3 images à joindre, avec leur disponibilité et un libellé."""
+    projet_id = projet.get("id")
+    base = f"/api/projets/{projet_id}/insertion/kit"
+    items = [
+        {
+            "role": "photo",
+            "titre": "Photo du site",
+            "note": "la scène à équiper (upload ci-dessus)",
+            "requis": True,
+        },
+        {
+            "role": "plan",
+            "titre": "Plan de masse",
+            "note": "implantation et orientation des rangées (DP2, étape 4)",
+            "requis": False,
+        },
+        {
+            "role": "coupe",
+            "titre": "Coupe du type d'ombrière",
+            "note": "profil exact de la structure (étape 3)",
+            "requis": False,
+        },
+    ]
+    for it in items:
+        dispo = image_kit(projet, it["role"]) is not None
+        it["disponible"] = dispo
+        it["url"] = f"{base}/{it['role']}?t=0" if dispo else None
+    return items
 
 
-def generer(projet: dict, nb_variantes: int = 2, horodatage: str | None = None) -> list[dict]:
-    """Génère nb_variantes insertions. Renvoie la liste des variantes créées."""
-    if _fournisseur() != "gemini":
-        raise InsertionError("Seul le fournisseur Gemini est branché pour l'instant.")
-    if not statut()["configure"]:
-        raise InsertionError("Module non configuré : clé GEMINI_API_KEY absente.")
+# ------------------------------------------------------------------ état projet
 
-    parts_images, flags = _references(projet)
-    prompt = _prompt_systeme(projet, flags["zone"], flags["plan"], flags["coupe"])
-    parts = [{"text": prompt}, *parts_images]
-
-    dossier = _dossier_insertion(projet["id"])
-    stamp = horodatage or datetime.now().strftime("%Y%m%d-%H%M%S")
-    variantes = []
-    erreurs = []
-    for i in range(max(1, min(nb_variantes, 3))):
-        try:
-            image = _appel_gemini(parts)
-        except InsertionError as exc:
-            erreurs.append(str(exc))
-            continue
-        nom = f"insertion_{stamp}_{i + 1}.png"
-        (dossier / nom).write_bytes(image)
-        variantes.append({
-            "fichier": _rel(dossier / nom),
-            "prompt": prompt,
-            "date": datetime.now().isoformat(timespec="seconds"),
-            "etiquette": "visuel IA — usage commercial",
-        })
-    if not variantes:
-        raise InsertionError(erreurs[0] if erreurs else "Aucune variante générée.")
-    return variantes
-
-
-def retoucher(projet: dict, fichier_variante: str, instruction: str,
-              horodatage: str | None = None) -> dict:
-    """Retouche une variante existante selon une instruction en langage naturel."""
-    if not statut()["configure"]:
-        raise InsertionError("Module non configuré : clé GEMINI_API_KEY absente.")
-    chemin = config.PROJETS_DIR / fichier_variante
-    if not chemin.exists():
-        raise InsertionError("Variante introuvable.")
-    prompt = (
-        "Modifie l'image fournie selon cette instruction, en conservant le reste "
-        f"inchangé et le réalisme : {instruction.strip()}. Rends uniquement l'image."
-    )
-    image = _appel_gemini([{"text": prompt}, _part_image(chemin.read_bytes(), "image/png")])
-    dossier = _dossier_insertion(projet["id"])
-    stamp = horodatage or datetime.now().strftime("%Y%m%d-%H%M%S")
-    nom = f"retouche_{stamp}.png"
-    (dossier / nom).write_bytes(image)
+def etat(projet: dict) -> dict:
+    """Prêt-à-générer d'un projet : photo, plan, coupe, type d'ombrière."""
+    omb = projet.get("ombriere") or {}
+    photo = bool((projet.get("insertion") or {}).get("photo"))
     return {
-        "fichier": _rel(dossier / nom),
-        "prompt": prompt,
-        "date": datetime.now().isoformat(timespec="seconds"),
-        "etiquette": "visuel IA — usage commercial",
+        "photo": photo,
+        "plan_de_masse": _document_image(projet, "dp2") is not None,
+        "coupe": _coupe_source(projet) is not None,
+        "type_ombriere": bool(omb.get("famille")),
+        "prete": photo,  # la photo suffit à générer un prompt exploitable
     }

@@ -274,6 +274,46 @@ body {
 .gallery { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 14px; }
 .notice-ta { height: auto; min-height: 96px; padding: 10px 13px; resize: vertical; line-height: 1.5; font-size: 13.5px; }
 .upload-slot { margin-bottom: 10px; }
+.link { color: var(--gv-violet); font-size: 12px; font-weight: 500; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+
+/* ---------- étape 5 : insertion IA (générateur de prompt) ---------- */
+.dropzone {
+  border: 2px dashed var(--gv-grey); border-radius: var(--r-lg); padding: 26px;
+  text-align: center; color: var(--muted); cursor: pointer; background: var(--bg);
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover { border-color: var(--gv-violet); }
+.dropzone.over { border-color: var(--gv-green); background: var(--gv-green-l); }
+.dropzone b { display: block; color: var(--gv-navy); font-size: 14px; margin-bottom: 3px; }
+.dropzone span { font-size: 12px; }
+
+.prompt-box { margin: 6px 0 12px; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.prompt-box summary { padding: 9px 13px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--gv-navy); background: var(--bg); }
+.prompt-box pre {
+  margin: 0; padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
+  font-family: "Consolas", "SF Mono", monospace; font-size: 11.5px; line-height: 1.55;
+  color: var(--ink); max-height: 260px; overflow: auto; background: var(--card);
+}
+.prompt-box .btn { margin: 0 14px 12px; }
+
+.mode-emploi { margin: 8px 0 14px; padding-left: 20px; color: var(--ink); font-size: 12.5px; }
+.mode-emploi li { margin-bottom: 4px; }
+
+.kit-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 8px; }
+.kit-item { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--card); }
+.kit-item.off { opacity: 0.85; }
+.kit-item img { display: block; width: 100%; height: 96px; object-fit: cover; background: var(--bg); }
+.kit-item .kit-manquant {
+  height: 96px; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); color: var(--faint); font-size: 12px; font-style: italic;
+  border-bottom: 1px dashed var(--gv-grey);
+}
+.kit-lbl { padding: 7px 9px; }
+.kit-lbl b { display: block; font-size: 12px; color: var(--gv-navy); font-weight: 600; }
+.kit-lbl small { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+
+.card.retenue { border-color: var(--gv-green); box-shadow: 0 0 0 2px var(--gv-green-l); }
 
 @media (max-width: 1100px) {
   .rightpanel { display: none; }

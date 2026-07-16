@@ -41,6 +41,8 @@ def sante():
         "version": config.VERSION,
         "projets_dir": str(config.PROJETS_DIR),
         "coupes_dir_existe": config.COUPES_DIR.exists(),
+        "env_charge": str(config.ENV_FILE_CHARGE) if config.ENV_FILE_CHARGE else None,
+        "insertion": "generateur_prompt (sans API)",
     }
 
 

@@ -104,4 +104,5 @@ def telecharger_dossier_pdf(projet_id: str):
 
 @router.get("/insertion/statut")
 def statut_insertion():
-    return insertion_ia.statut()
+    """Descriptif générique du module Insertion IA (sans projet)."""
+    return insertion_ia.apercu()

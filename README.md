@@ -2,10 +2,10 @@
 
 Outil interne Greenvolt Next France pour le bureau d'études : on saisit les
 informations d'un projet d'ombrière photovoltaïque de parking, l'outil génère
-le dossier de Déclaration Préalable prêt à déposer (Cerfa 13404, pièces DP1 à
+le dossier de Déclaration Préalable prêt à déposer (Cerfa 16702*03, pièces DP1 à
 DP11, notice, assemblage PPTX/PDF à la charte GV).
 
-Plan directeur : [`../PLAN_OUTIL_DP.md`](../PLAN_OUTIL_DP.md) (référence, mis à jour le 2026-07-13).
+Plan directeur : [`../PLAN_OUTIL_DP.md`](../PLAN_OUTIL_DP.md) (référence, mis à jour le 2026-07-16).
 
 ## Lancement
 
@@ -42,28 +42,28 @@ tests/             # pytest ; tests réseau marqués `live`, exclus par défaut
 - [x] Phase 2 — Modèle ombrière paramétrique (DP3/DP4 vectorielles, catalogue START PLAINE)
 - [x] Phase 3 — Planches cartographiques DP1 à l'échelle (WMS GetMap, Lambert-93)
 - [x] Phase 4 — Notice DP11 + Cerfa 16702 pré-rempli
-- [x] Phase 5 — Module Insertion IA (Gemini branché ; clé API à définir, voir ci-dessous)
+- [x] Phase 5 — Module Insertion IA : **générateur de prompt sans API** (cible ChatGPT)
 - [x] Phase 6 — Assemblage PPTX + export PDF (PowerPoint)
-- [ ] Phase 7 — Test utilisateur BE + déploiement Azure
+- [x] Phase 7 — Conteneurisation Azure (Dockerfile + doc) ; reste test utilisateur BE
 
-## Insertion IA (étape 5) : créer la clé Gemini
+## Insertion IA (étape 5) : générateur de prompt, sans clé
 
-Le module de génération de visuels commerciaux utilise **Gemini** (Google).
-Tant que la clé n'est pas définie, l'étape 5 affiche le guide et reste inactive.
+Le module ne fait **aucun appel API** et n'a **aucune clé** (flux figé le 16/07/2026,
+plan §6 bis). Au clic « Générer le prompt » il produit deux choses :
 
-1. Ouvrir **https://aistudio.google.com/apikey** (compte Google), cliquer « Create API key », copier la clé (`AIza…`).
-2. Définir la variable d'environnement sur ce poste, puis relancer GV_DP :
+1. Le **prompt** ultra-détaillé (6 blocs), copié dans le presse-papier ;
+2. Le **kit d'images à joindre** : photo du site, plan de masse (DP2), coupe du type
+   d'ombrière (convertie en PNG depuis `../COUPES/`).
 
-   ```powershell
-   setx GEMINI_API_KEY "AIza…votre_clé…"
-   ```
+L'utilisateur colle le prompt dans **son propre ChatGPT** (modèle avec génération
+d'image), y joint les 3 images du kit, génère l'insertion, puis **glisse l'image
+retenue** dans la zone de dépôt de l'outil. Un clic génère la **fiche de validation
+d'emprise** (PPTX). Aucune donnée du site ne sort de l'outil.
 
-   Ouvrir un **nouveau** terminal (ou relancer `Lancer GV_DP.bat`) pour que la variable soit prise en compte.
-3. Options : `GVDP_GEMINI_MODEL` pour changer de modèle (défaut `gemini-2.5-flash-image`,
-   ex. `gemini-3.1-flash-image`), `GVDP_IMAGE_PROVIDER=azure-openai` pour un autre fournisseur.
+Les visuels obtenus sont étiquetés « visuel IA — usage commercial » et ne servent
+**jamais** de pièce DP6 officielle (fournie par le BE, uploadée à l'étape 4).
 
-La clé reste **côté serveur** (jamais envoyée au navigateur). Les visuels générés sont
-étiquetés « visuel IA » et ne servent jamais de pièce DP6 officielle.
+> L'ancienne approche par API Gemini (13/07) est archivée dans `app/_archive/`.
 
 ## Tests
 
