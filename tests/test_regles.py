@@ -32,7 +32,9 @@ def test_regime_sans_puissance():
 def test_completude_projet_vide():
     projet = Projet(nom="Test")
     c = completude(projet)
-    assert c["total"] == len(PIECES_DP) == 12
+    # DP4 retirée du dossier le 17/07/2026 : 11 pièces attendues
+    assert c["total"] == len(PIECES_DP) == 11
+    assert all(p["code"] != "dp4" for p in c["pieces"])
     assert c["pretes"] == 0
     statuts = {p["code"]: p["statut"] for p in c["pieces"]}
     assert statuts["dp1_situation"] == "a_completer"

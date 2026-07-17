@@ -14,9 +14,9 @@ const state = {
 
 const STEPS = [
   { n: 1, titre: "Localisation", sous: "Projet, adresse, parcelles" },
-  { n: 2, titre: "Pièces du BE", sous: "Masse, coupe, façades, DP6" },
+  { n: 2, titre: "Pièces du BE", sous: "Masse, coupe, DP6" },
   { n: 3, titre: "Caractéristiques", sous: "Ombrière, coupe" },
-  { n: 4, titre: "Insertion IA", sous: "Visuel commercial" },
+  { n: 4, titre: "Insertion IA", sous: "Visuels du projet" },
   { n: 5, titre: "Notice + Cerfa", sous: "Notice, maître d'ouvrage" },
   { n: 6, titre: "Aperçu & export", sous: "PPTX, PDF, Cerfa" },
 ];
@@ -125,9 +125,8 @@ function renderChrome() {
   const p = state.projet;
   $("#proj-badge").hidden = !p;
   if (p) $("#proj-nom").textContent = p.nom;
-  $("#btn-save").disabled = !p;
-  $("#btn-generer").disabled = !p;
-  $("#btn-generer").title = p ? "Aller à l'étape Aperçu & export" : "Créez d'abord un projet";
+  // accueil : sidebar et panneau complétude masqués (CSS .accueil)
+  document.body.classList.toggle("accueil", state.etape === 0);
 
   // stepper
   const nav = $("#stepper");
@@ -189,7 +188,6 @@ function render() {
   renderChrome();
   const main = $("#main");
   if (state.etape === 0) return renderAccueil(main);
-  if (state.etape === "fiche") return renderFicheProjet(main);
   if (state.etape === 1) return renderEtapeLocalisation(main);
   if (state.etape === 2) return renderEtapePieces(main);
   if (state.etape === 3) return renderEtapeCaracteristiques(main);
@@ -203,7 +201,6 @@ async function renderAccueil(main) {
   main.innerHTML = `
     <div class="crumb">GV_DP</div>
     <h1>Projets</h1>
-    <p class="sub">Ouvrez un dossier en cours ou créez un nouveau projet d'ombrière.</p>
     <div class="home-list">
       <div class="card" style="margin-bottom:18px">
         <div class="bd">
@@ -230,12 +227,28 @@ async function renderAccueil(main) {
     }
     box.innerHTML = "";
     for (const pr of data.projets) {
-      const btn = document.createElement("button");
-      btn.className = "home-item";
-      btn.innerHTML = `<span class="t">${esc(pr.nom)}<small>${esc(pr.commune || "localisation à saisir")} · modifié ${esc((pr.date_modification || "").slice(0, 10))}</small></span>
-        <span class="badge">${esc(pr.regime || "DP")}</span>`;
-      btn.addEventListener("click", () => ouvrirProjet(pr.id));
-      box.appendChild(btn);
+      const c = pr.completude || { pretes: 0, total: 1 };
+      const pct = Math.round((c.pretes / c.total) * 100);
+      const div = document.createElement("div");
+      div.className = "home-item";
+      div.innerHTML = `
+        <span class="t">${esc(pr.nom)}<small>modifié ${esc((pr.date_modification || "").slice(0, 10) || "—")}</small></span>
+        <span class="home-comp">
+          <span class="home-bar"><i style="width:${pct}%"></i></span>
+          <small>${c.pretes}/${c.total} pièces</small>
+        </span>
+        <button class="iconbtn home-del" title="Supprimer le projet" aria-label="Supprimer le projet">✕</button>`;
+      div.addEventListener("click", (e) => {
+        if (e.target.closest(".home-del")) return;
+        ouvrirProjet(pr.id);
+      });
+      div.querySelector(".home-del").addEventListener("click", async () => {
+        if (!window.confirm(`Supprimer définitivement « ${pr.nom} » ?`)) return;
+        await api(`/api/projets/${pr.id}`, { method: "DELETE" });
+        toast("Projet supprimé.", "ok");
+        renderAccueil(main);
+      });
+      box.appendChild(div);
     }
   } catch { /* toast déjà affiché */ }
 }
@@ -254,68 +267,8 @@ async function ouvrirProjet(id) {
   state.projet = data.projet;
   state.evaluation = data.evaluation;
   state.suggestions = [];
-  state.etape = "fiche";
+  state.etape = 1;
   render();
-}
-
-// ---------------- fiche projet (avant d'entrer dans le dossier) ----------------
-function renderFicheProjet(main) {
-  const p = state.projet;
-  const ev = state.evaluation;
-  const c = ev?.completude;
-  const pct = c ? Math.round((c.pretes / c.total) * 100) : 0;
-  const loc = p.localisation || {};
-  main.innerHTML = `
-    <div class="crumb"><span class="link" id="fp-retour">← Projets</span></div>
-    <div class="fiche-tete">
-      <div>
-        <h1 style="margin-bottom:2px">${esc(p.nom)}</h1>
-        <p class="sub" style="margin:0">${esc(loc.adresse || "Localisation à saisir")}
-          ${loc.code_insee ? " · INSEE " + esc(loc.code_insee) : ""} · ${esc(ev?.regime?.regime || "DP")} ${esc(ev?.regime?.cerfa || "")}</p>
-      </div>
-      <div class="fiche-actions">
-        <button class="btn" id="fp-renommer">Renommer</button>
-        <button class="btn" id="fp-suppr">Supprimer</button>
-        <button class="btn primary" id="fp-ouvrir">Ouvrir le dossier</button>
-      </div>
-    </div>
-
-    <div class="grid" style="grid-template-columns:260px minmax(0,1fr);margin-top:20px">
-      <div class="card"><div class="bd" style="text-align:center">
-        <div class="ring" style="--p:${pct};margin:6px auto 10px"><span>${pct}%</span></div>
-        <b style="color:var(--gv-navy)">${c ? c.pretes : 0}/${c ? c.total : 0} pièces prêtes</b>
-        <div class="sub" style="margin-top:2px">Avancement du dossier</div>
-      </div></div>
-      <div class="card"><div class="bd">
-        <div class="ti-title" style="margin-bottom:8px">Aller à une étape</div>
-        <div class="fiche-etapes" id="fp-etapes"></div>
-      </div></div>
-    </div>`;
-
-  $("#fp-retour").addEventListener("click", () => { state.etape = 0; render(); });
-  $("#fp-ouvrir").addEventListener("click", () => allerEtape(1));
-  $("#fp-renommer").addEventListener("click", async () => {
-    const nom = window.prompt("Nouveau nom du projet :", p.nom);
-    if (!nom || !nom.trim()) return;
-    state.projet.nom = nom.trim();
-    await sauvegarder(false);
-    renderFicheProjet($("#main"));
-  });
-  $("#fp-suppr").addEventListener("click", async () => {
-    if (!window.confirm(`Supprimer définitivement le projet « ${p.nom} » ?`)) return;
-    await api(`/api/projets/${p.id}`, { method: "DELETE" });
-    toast("Projet supprimé.", "ok");
-    state.projet = null; state.etape = 0; render();
-  });
-  const box = $("#fp-etapes");
-  for (const s of STEPS) {
-    const b = document.createElement("button");
-    b.className = "fiche-etape" + (etapeFaite(s.n) ? " done" : "");
-    b.innerHTML = `<span class="dot">${etapeFaite(s.n) ? "✓" : s.n}</span>
-      <span>${esc(s.titre)}<small>${esc(s.sous)}</small></span>`;
-    b.addEventListener("click", () => allerEtape(s.n));
-    box.appendChild(b);
-  }
 }
 
 // ---------------- étape 1 : projet ----------------
@@ -357,7 +310,6 @@ function renderEtapeLocalisation(main) {
   main.innerHTML = `
     <div class="crumb">Étape 1 / 6</div>
     <h1>Projet & localisation</h1>
-    <p class="sub">Nom du dossier, adresse (ou coordonnées GPS), et parcelles concernées.</p>
 
     <div class="field">
       <label for="proj-nom-champ">Nom du projet</label>
@@ -377,13 +329,11 @@ function renderEtapeLocalisation(main) {
 
     <div class="grid grid-map">
       <div class="card">
-        <div class="hd"><span class="ti-title">Repérage</span>
-          <span style="font-size:11px;color:var(--muted)">Glissez le repère pour l'ajuster · cliquez une parcelle pour l'ajouter</span></div>
+        <div class="hd"><span class="ti-title">Repérage</span></div>
         <div id="map"></div>
       </div>
       <div class="card">
         <div class="hd"><span class="ti-title">Parcelles concernées</span></div>
-        <div class="note" id="note-parcelles">Cliquez une parcelle sur la carte pour l'ajouter (infos pré-remplies), ou saisissez-la ci-dessous.</div>
         <table class="ptable">
           <thead><tr><th>Section</th><th>N°</th><th style="text-align:right">Surface</th><th></th></tr></thead>
           <tbody id="ptable-body"></tbody>
@@ -752,10 +702,13 @@ function selectCoupe() {
 }
 
 function renderEtapeCaracteristiques(main) {
+  const lecture = state.projet.meta?.plan_lecture;
+  const proposes = state.projet.meta?.plan_champs_proposes || [];
   main.innerHTML = `
     <div class="crumb">Étape 3 / 6</div>
     <h1>Caractéristiques de l'ombrière</h1>
-    <p class="sub">La coupe choisie (Mono Bas / Mono Haut / Double) alimente la coupe DP3, les façades DP4 et le module Insertion IA.</p>
+    ${lecture ? `<div class="note plan-note">Lu sur le plan de masse${lecture.reference_plan ? ` (${esc(lecture.reference_plan)})` : ""} :
+      ${esc(resumeLecturePlan(lecture))} <span class="link" id="btn-plan-appliquer">Tout appliquer</span></div>` : ""}
     <div class="formgrid">
       ${selectCoupe()}
       ${champ("Puissance (kWc)", "ombriere.puissance_kwc", { type: "number", step: "1" })}
@@ -771,30 +724,65 @@ function renderEtapeCaracteristiques(main) {
       ${champ("Dimensions module (mm)", "ombriere.module_dimensions", { placeholder: "Ex. : 1762 x 1134" })}
       ${champ("Nombre de places couvertes", "ombriere.nb_places", { type: "number", step: "1" })}
     </div>
-    <p class="sub" style="margin-top:6px">La puissance pilote le régime : ≥ 3 000 kWc bascule le dossier en permis de construire.
-      Astuce : mesurez Longueur / Largeur / Orientation sur le plan de masse à l'étape Pièces du BE.</p>
 
     <div class="actionsrow">
-      <button class="btn" id="btn-apercus">Mettre à jour les aperçus DP3 / DP4</button>
+      <button class="btn" id="btn-apercus">Mettre à jour l'aperçu DP3</button>
       <button class="btn navy" id="btn-suivant">Continuer vers l'insertion IA</button>
     </div>
     <div class="grid" style="margin-top:18px" id="apercus" hidden>
       <div class="card"><div class="hd"><span class="ti-title">Aperçu DP3 · Coupe</span></div>
         <img id="img-dp3" class="planche-img" alt="Coupe DP3" /></div>
-      <div class="card"><div class="hd"><span class="ti-title">Aperçu DP4 · Façades / toiture</span></div>
-        <img id="img-dp4" class="planche-img" alt="Façades DP4" /></div>
     </div>`;
   brancherChamps(main);
+  marquerChampsProposes(main, proposes);
+  $("#btn-plan-appliquer")?.addEventListener("click", () => appliquerLecturePlan(lecture));
   const chargerApercus = async () => {
     if (!state.projet.ombriere?.famille) { toast("Choisissez d'abord une coupe.", "err"); return; }
     await sauvegarder();
     $("#apercus").hidden = false;
-    const t = Date.now();
-    $("#img-dp3").src = `/api/projets/${state.projet.id}/planches/dp3_coupe.png?regen=1&t=${t}`;
-    $("#img-dp4").src = `/api/projets/${state.projet.id}/planches/dp4_facades.png?regen=1&t=${t}`;
+    $("#img-dp3").src = `/api/projets/${state.projet.id}/planches/dp3_coupe.png?regen=1&t=${Date.now()}`;
   };
   $("#btn-apercus").addEventListener("click", () => chargerApercus().catch(() => {}));
   $("#btn-suivant").addEventListener("click", async () => { await sauvegarder(); allerEtape(4); });
+}
+
+// résumé lisible de la lecture du plan (bannière étape 3)
+function resumeLecturePlan(lecture) {
+  const bits = [];
+  if (lecture.puissance_kwc) bits.push(`${lecture.puissance_kwc} kWc`);
+  if (lecture.module_puissance_wc) bits.push(`modules ${lecture.module_puissance_wc} Wc`);
+  if (lecture.module_dimensions) bits.push(lecture.module_dimensions);
+  if (lecture.pente_deg) bits.push(`pente ${lecture.pente_deg}°`);
+  if (lecture.garde_au_sol_m) bits.push(`+${lecture.garde_au_sol_m} m`);
+  if (lecture.hauteur_hors_tout_m) bits.push(`+${lecture.hauteur_hors_tout_m} m`);
+  if (lecture.echelle_plan) bits.push(`échelle ${lecture.echelle_plan}`);
+  return bits.join(" · ") || "aucun champ reconnu";
+}
+
+// surligne les champs pré-remplis depuis le plan (jusqu'à modification)
+function marquerChampsProposes(main, proposes) {
+  for (const champ of proposes) {
+    const el = main.querySelector(`[data-bind="ombriere.${champ}"]`);
+    if (!el) continue;
+    el.classList.add("propose");
+    el.addEventListener("input", () => el.classList.remove("propose"), { once: true });
+  }
+}
+
+// bouton « Tout appliquer » : reporte toutes les valeurs lues (écrase la saisie)
+function appliquerLecturePlan(lecture) {
+  if (!lecture) return;
+  const CHAMPS = ["puissance_kwc", "module_puissance_wc", "module_dimensions",
+                  "pente_deg", "garde_au_sol_m", "hauteur_hors_tout_m"];
+  let n = 0;
+  for (const champ of CHAMPS) {
+    if (lecture[champ] == null) continue;
+    state.projet.ombriere[champ] = lecture[champ];
+    const el = document.querySelector(`[data-bind="ombriere.${champ}"]`);
+    if (el) { el.value = lecture[champ]; el.classList.add("propose"); }
+    n++;
+  }
+  if (n) { sauvegarderBientot(); toast(`${n} champs appliqués depuis le plan.`, "ok"); }
 }
 
 // ---- outil de mesure sur le plan de masse (calibrage + tracé) ----
@@ -821,15 +809,11 @@ function renderMesure() {
   mesure.pxPerM = state.projet.ombriere?.echelle_plan_px_par_m || null;
   body.innerHTML = `
     <div class="mesure-tools">
-      <button class="btn" data-mode="cal">1 · Calibrer l'échelle</button>
-      <button class="btn" data-mode="len">2 · Tracer la longueur</button>
-      <button class="btn" data-mode="wid">3 · Tracer la largeur</button>
-      <span class="spacer" style="flex:1"></span>
-      <button class="btn primary" id="mesure-appliquer">Appliquer aux champs</button>
+      <button class="btn" data-mode="cal">Calibrer l'échelle</button>
     </div>
     <div class="mesure-status" id="mesure-status"></div>
     <div class="mesure-canvas-wrap"><canvas id="mesure-canvas"></canvas></div>
-    <p class="sub" style="margin:8px 0 0">Molette = zoom · glisser = déplacer. Calibre l'échelle (2 points d'une distance connue, une place = 2,50 m…), puis trace la longueur puis la largeur de l'ombrière.</p>`;
+    <p class="sub" style="margin:8px 0 0">Molette = zoom · glisser = déplacer · 2 points d'une distance connue (une place = 2,50 m).</p>`;
 
   const canvas = $("#mesure-canvas");
   const img = new Image();
@@ -880,7 +864,6 @@ function renderMesure() {
     if (mesure.zoom === 1) { mesure.pan.x = 0; mesure.pan.y = 0; }
     dessinerMesure();
   }, { passive: false });
-  $("#mesure-appliquer").addEventListener("click", appliquerMesure);
 }
 
 async function uploaderPlanMesure(file) {
@@ -908,29 +891,17 @@ function naturel(e) {
 function distN(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
 
 function clicMesure(e) {
-  if (!mesure.mode) { toast("Choisis d'abord un outil (calibrer / longueur / largeur).", ""); return; }
+  if (!mesure.mode) { toast("Clique d'abord « Calibrer l'échelle ».", ""); return; }
   mesure.pts.push(naturel(e));
   if (mesure.pts.length === 2) {
     const [a, b] = mesure.pts;
-    if (mesure.mode === "cal") {
-      const rep = window.prompt("Distance réelle entre les 2 points, en mètres :", "2.5");
-      const m = parseFloat((rep || "").replace(",", "."));
-      if (m > 0) {
-        mesure.pxPerM = distN(a, b) / m;
-        state.projet.ombriere.echelle_plan_px_par_m = mesure.pxPerM;
-        mesure.seg.cal = [a, b];
-        sauvegarderBientot();
-      }
-    } else if (mesure.mode === "len") {
-      if (!mesure.pxPerM) { toast("Calibre d'abord l'échelle.", "err"); mesure.pts = []; return; }
-      mesure.seg.len = [a, b];
-      mesure.L = distN(a, b) / mesure.pxPerM;
-      const dx = b.x - a.x, dy = b.y - a.y;
-      mesure.orient = (Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360;
-    } else if (mesure.mode === "wid") {
-      if (!mesure.pxPerM) { toast("Calibre d'abord l'échelle.", "err"); mesure.pts = []; return; }
-      mesure.seg.wid = [a, b];
-      mesure.l = distN(a, b) / mesure.pxPerM;
+    const rep = window.prompt("Distance réelle entre les 2 points, en mètres :", "2.5");
+    const m = parseFloat((rep || "").replace(",", "."));
+    if (m > 0) {
+      mesure.pxPerM = distN(a, b) / m;
+      state.projet.ombriere.echelle_plan_px_par_m = mesure.pxPerM;
+      mesure.seg.cal = [a, b];
+      sauvegarderBientot();
     }
     mesure.pts = [];
     dessinerMesure(); majStatutMesure();
@@ -955,8 +926,6 @@ function dessinerMesure() {
     for (const p of pts) { ctx.beginPath(); ctx.arc(sx(p), sy(p), 5, 0, 7); ctx.fill(); }
   };
   seg(mesure.seg.cal, "#E53935");
-  seg(mesure.seg.len, "#05DB79");
-  seg(mesure.seg.wid, "#776DF8");
   if (mesure.pts.length === 1) {
     const p = mesure.pts[0];
     ctx.fillStyle = "#002455";
@@ -969,36 +938,17 @@ function majStatutMesure() {
   if (!el) return;
   const bits = [];
   bits.push(mesure.pxPerM ? `Échelle : <b>${mesure.pxPerM.toFixed(1)} px/m</b>` : `<span class="warn-txt">Échelle non calibrée</span>`);
-  if (mesure.L) bits.push(`Longueur : <b>${mesure.L.toFixed(1)} m</b>`);
-  if (mesure.l) bits.push(`Largeur : <b>${mesure.l.toFixed(1)} m</b>`);
-  if (mesure.orient != null) bits.push(`Orientation : <b>${Math.round(mesure.orient)}°</b>`);
-  const modeTxt = { cal: "cliquez 2 points d'une distance connue", len: "cliquez le long de la longueur", wid: "cliquez en travers de la largeur" }[mesure.mode];
-  el.innerHTML = bits.join(" &nbsp;·&nbsp; ") + (modeTxt ? ` <span class="hint">— ${modeTxt}</span>` : "");
-}
-
-function appliquerMesure() {
-  const o = state.projet.ombriere;
-  let n = 0;
-  const setChamp = (bind, val) => {
-    const el = document.querySelector(`[data-bind="${bind}"]`);
-    if (el) { el.value = val; }
-  };
-  if (mesure.L) { o.longueur_m = Math.round(mesure.L * 10) / 10; setChamp("ombriere.longueur_m", o.longueur_m); n++; }
-  if (mesure.l) { o.largeur_m = Math.round(mesure.l * 10) / 10; setChamp("ombriere.largeur_m", o.largeur_m); n++; }
-  if (mesure.orient != null) { o.orientation = Math.round(mesure.orient); setChamp("ombriere.orientation", o.orientation); n++; }
-  if (!n) { toast("Trace d'abord la longueur / largeur.", "err"); return; }
-  sauvegarderBientot();
-  toast("Dimensions reportées (modifiables).", "ok");
+  if (mesure.mode === "cal") bits.push(`<span class="hint">cliquez 2 points d'une distance connue</span>`);
+  el.innerHTML = bits.join(" &nbsp;·&nbsp; ");
 }
 
 // ---------------- étape 3 : pièces du BE (uploads, glisser-déposer) ----------------
 const PIECES_UPLOAD = [
-  { code: "dp2", titre: "DP2 · Plan de masse", note: "site-spécifique, fourni par le BE" },
+  { code: "dp2", titre: "DP2 · Plan de masse", note: "" },
   { code: "dp3", titre: "DP3 · Coupe (repli BE)", note: "facultatif : remplace la coupe paramétrique" },
-  { code: "dp4", titre: "DP4 · Façades (repli BE)", note: "facultatif : remplace les façades paramétriques" },
-  { code: "dp6", titre: "DP6 · Photomontage d'insertion", note: "pièce officielle, jamais générée par IA" },
-  { code: "dp7", titre: "DP7 · Photo environnement proche", note: "photo datée et repérée" },
-  { code: "dp8", titre: "DP8 · Photo paysage lointain", note: "photo datée et repérée" },
+  { code: "dp6", titre: "DP6 · Photomontage d'insertion", note: "" },
+  { code: "dp7", titre: "DP7 · Photo environnement proche", note: "" },
+  { code: "dp8", titre: "DP8 · Photo paysage lointain", note: "" },
 ];
 
 async function uploaderPieceBE(code, file) {
@@ -1010,7 +960,11 @@ async function uploaderPieceBE(code, file) {
   if (!resp.ok) { toast((await resp.json()).detail || "Échec de l'envoi.", "err"); return; }
   const data = await resp.json();
   state.projet = data.projet; state.evaluation = data.evaluation;
-  toast("Pièce enregistrée.", "ok");
+  if (data.plan_champs_proposes?.length) {
+    toast(`Plan lu : ${data.plan_champs_proposes.length} champs pré-remplis à l'étape 3.`, "ok");
+  } else {
+    toast("Pièce enregistrée.", "ok");
+  }
   render();
 }
 
@@ -1018,16 +972,14 @@ function renderEtapePieces(main) {
   main.innerHTML = `
     <div class="crumb">Étape 2 / 6</div>
     <h1>Pièces du bureau d'études</h1>
-    <p class="sub">Glissez-déposez chaque pièce (PDF, PNG ou JPG, 40 Mo max). Un fichier par pièce ; le dernier envoi remplace le précédent.</p>
     <div class="home-list" id="slots"></div>
 
     <details class="foldable" id="fold-mesure" style="margin-top:18px">
-      <summary>Mesurer Longueur / Largeur / Orientation sur le plan de masse <span class="hint">(optionnel, à l'échelle)</span></summary>
+      <summary>Calibrer l'échelle sur le plan de masse</summary>
       <div class="bd" id="mesure-body"></div>
     </details>
 
     <h2 style="font-size:17px;color:var(--gv-navy);margin:24px 0 4px">Photos du site (pour l'insertion)</h2>
-    <p class="sub" style="margin:0 0 10px">Plusieurs photos possibles. Elles serviront de base à l'insertion IA (étape 4). Repère d'échelle facultatif pour aider l'IA à dimensionner.</p>
     <div id="pieces-photos" class="sub" style="margin-bottom:10px"></div>
     <div class="scale-row" style="margin-bottom:6px">
       <label class="btn navy" style="cursor:pointer">+ ajouter des photos
@@ -1067,7 +1019,7 @@ function renderEtapePieces(main) {
       <div class="bd" style="display:flex;align-items:center;gap:14px">
         <span class="st ${doc ? "prete" : "en_attente"}" style="width:10px;height:10px;border-radius:50%;flex:none;background:${doc ? "var(--gv-green)" : "var(--gv-grey)"}"></span>
         <span style="flex:1"><b style="color:var(--gv-navy)">${esc(piece.titre)}</b>
-          <small style="display:block;color:var(--muted)">${doc ? esc(doc.nom_fichier) + " · " + esc((doc.date || "").slice(0, 10)) : esc(piece.note) + " — glisser un fichier ici"}</small></span>
+          <small style="display:block;color:var(--muted)">${doc ? esc(doc.nom_fichier) + " · " + esc((doc.date || "").slice(0, 10)) : esc(piece.note || "glisser un fichier ici")}</small></span>
         ${doc ? `<a class="btn" href="/api/projets/${state.projet.id}/documents/${piece.code}" target="_blank">Voir</a>
                  <button class="btn" data-del="${piece.code}">Retirer</button>` : ""}
         <label class="btn navy" style="cursor:pointer">${doc ? "Remplacer" : "Téléverser"}
@@ -1096,27 +1048,15 @@ function renderEtapePieces(main) {
   });
 }
 
-// ---------------- étape 5 : insertion IA (générateur de prompt, sans API) ----------------
+// ---------------- étape 4 : insertion IA (génération Gemini) ----------------
 function urlInsertion(chemin) {
   return `/api/projets/${state.projet.id}/insertion/fichier?chemin=${encodeURIComponent(chemin)}&t=${Date.now()}`;
 }
 
-async function copierPressePapier(txt) {
-  try {
-    await navigator.clipboard.writeText(txt);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = txt;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try { ok = document.execCommand("copy"); } catch { ok = false; }
-    ta.remove();
-    return ok;
-  }
+// agrandissement plein écran d'une image (clic pour fermer)
+function ouvrirLightbox(src) {
+  $("#lightbox-img").src = src;
+  $("#lightbox").hidden = false;
 }
 
 function resumeOmbriere() {
@@ -1133,8 +1073,6 @@ async function renderEtapeInsertion(main) {
   main.innerHTML = `
     <div class="crumb">Étape 4 / 6</div>
     <h1>Insertion IA</h1>
-    <p class="sub">Génère un visuel d'insertion photoréaliste (Gemini) depuis une photo du site, le plan de masse et la coupe.
-      Visuel « visuel IA » réservé au commercial, jamais utilisé en pièce DP6.</p>
     <div id="ia-statut" class="placeholder">Chargement…</div>`;
   let s;
   try { s = await api(`/api/projets/${state.projet.id}/insertion/statut`); }
@@ -1147,8 +1085,14 @@ async function renderEtapeInsertion(main) {
   renderInsertionAtelier(s);
 }
 
+function texteDepense(imagesProjet, imagesGlobal, cout) {
+  const eur = (n) => (n * (cout || 0)).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
+  return `${imagesProjet} image${imagesProjet > 1 ? "s" : ""} (projet, ≈ ${eur(imagesProjet)}) · ${imagesGlobal} au total (≈ ${eur(imagesGlobal)})`;
+}
+
 function renderInsertionAtelier(s) {
   const ins = state.projet.insertion || {};
+  state.coutImage = s.cout_image_eur || 0;
   const main = $("#main");
   main.querySelector("#ia-statut").outerHTML = `
     <div class="grid">
@@ -1163,13 +1107,14 @@ function renderInsertionAtelier(s) {
               placeholder="Ex. : 3 rangées depuis la façade, garder le mât d'éclairage, pas de bleu au sol">${esc(ins.consignes || "")}</textarea></div>
           <div class="note" style="margin-top:4px">Ombrière : <b>${esc(resumeOmbriere())}</b></div>
           <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:14px">Générer l'insertion</button>
-          <div class="hint" style="margin-top:6px;text-align:center">Gemini ${esc(s.api_modele)} · photo + plan de masse + coupe · ≈ 0,04 €/image</div>
           <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
+          <div class="hint" id="ins-depense" style="margin-top:2px;text-align:center">${esc(texteDepense(s.images_projet || 0, s.images_global || 0, s.cout_image_eur))}</div>
         </div>
       </div>
 
       <div class="card">
-        <div class="hd"><span class="ti-title">2 · Insertions générées</span></div>
+        <div class="hd"><span class="ti-title">2 · Insertions générées</span>
+          <span class="hint">cochées = incluses au dossier DP</span></div>
         <div class="bd">
           <div class="gallery" id="ins-galerie"></div>
           <div class="actionsrow" style="margin-top:12px">
@@ -1272,192 +1217,16 @@ async function genererInsertionAPI() {
       method: "POST", body: JSON.stringify({}),
     });
     state.projet = data.projet;
-    if (prog) prog.textContent = "Image générée — regarde la galerie ci-dessous.";
+    if (prog) prog.textContent = "Image générée — regarde la galerie ci-contre.";
+    const dep = $("#ins-depense");
+    if (dep && data.images_projet != null) {
+      dep.textContent = texteDepense(data.images_projet, data.images_global || 0, state.coutImage || 0);
+    }
     toast("Insertion générée.", "ok");
     renderGalerie();
     const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
   } catch { if (prog) prog.textContent = ""; }
   finally { if (btn) btn.disabled = false; }
-}
-
-// réutiliser une photo déjà importée dans les Pièces BE (DP7/DP8/DP6)
-async function chargerPhotosDispo() {
-  const box = $("#ins-photo-choices");
-  if (!box) return;
-  let data;
-  try { data = await api(`/api/projets/${state.projet.id}/insertion/photos-disponibles`); }
-  catch { return; }
-  if (!data.photos.length) { box.innerHTML = ""; return; }
-  box.innerHTML = `<div class="hint" style="margin-bottom:6px">Ou réutilise une photo déjà importée dans les Pièces BE :</div>
-    <div class="photo-choices">${data.photos.map((p) => `
-      <button class="photo-choice" data-code="${esc(p.code)}" title="${esc(p.libelle)}">
-        <img src="${esc(p.url)}?t=${Date.now()}" alt="${esc(p.libelle)}" />
-        <span>${esc(p.libelle)}</span>
-      </button>`).join("")}</div>`;
-  box.querySelectorAll(".photo-choice").forEach((b) => b.addEventListener("click", async () => {
-    try {
-      const d = await api(`/api/projets/${state.projet.id}/insertion/photo-piece`, {
-        method: "PUT", body: JSON.stringify({ code: b.dataset.code }),
-      });
-      state.projet = d.projet;
-      toast("Photo reprise depuis les pièces BE.", "ok");
-      renderEtapeInsertion($("#main"));
-    } catch { /* toast déjà affiché */ }
-  }));
-}
-
-// repère d'échelle sur la photo d'insertion (2 points, aide visuelle)
-const insScale = { img: null, pts: [], mode: false };
-
-function initPhotoScale(ins) {
-  const canvas = $("#ins-photo-canvas");
-  if (!canvas) return;
-  const img = new Image();
-  img.onload = () => {
-    const maxW = 520;
-    const s = Math.min(1, maxW / img.naturalWidth);
-    canvas.width = Math.round(img.naturalWidth * s);
-    canvas.height = Math.round(img.naturalHeight * s);
-    insScale.img = img; insScale.pts = [];
-    dessinerPhotoScale();
-  };
-  img.src = urlInsertion(ins.photo);
-  $("#ins-scale-btn")?.addEventListener("click", () => {
-    insScale.mode = true; insScale.pts = []; dessinerPhotoScale();
-    toast("Clique 2 points sur la photo (ex. les deux bords d'une place).", "");
-  });
-  canvas.addEventListener("click", (e) => {
-    if (!insScale.mode) return;
-    const r = canvas.getBoundingClientRect();
-    insScale.pts.push({ x: (e.clientX - r.left) * (canvas.width / r.width),
-                        y: (e.clientY - r.top) * (canvas.height / r.height) });
-    if (insScale.pts.length >= 2) {
-      insScale.mode = false; insScale.pts = insScale.pts.slice(0, 2);
-      toast("Points placés — saisis la distance réelle et ce qu'ils relient.", "ok");
-      $("#ins-scale-dist")?.focus();
-    }
-    dessinerPhotoScale();
-  });
-}
-
-function dessinerPhotoScale() {
-  const canvas = $("#ins-photo-canvas");
-  if (!canvas || !insScale.img) return;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(insScale.img, 0, 0, canvas.width, canvas.height);
-  if (insScale.pts.length === 2) {
-    ctx.strokeStyle = "#E53935"; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(insScale.pts[0].x, insScale.pts[0].y);
-    ctx.lineTo(insScale.pts[1].x, insScale.pts[1].y); ctx.stroke();
-  }
-  ctx.fillStyle = "#E53935";
-  for (const p of insScale.pts) { ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 7); ctx.fill(); }
-}
-
-async function uploaderPhotoSite(input) {
-  if (!input.files.length) return;
-  const fd = new FormData();
-  fd.append("fichier", input.files[0]);
-  let resp;
-  try { resp = await fetch(`/api/projets/${state.projet.id}/insertion/photo`, { method: "POST", body: fd }); }
-  catch { toast("Serveur injoignable.", "err"); return; }
-  if (!resp.ok) { toast((await resp.json()).detail || "Échec.", "err"); return; }
-  state.projet = (await resp.json()).projet;
-  toast("Photo enregistrée.", "ok");
-  renderEtapeInsertion($("#main"));
-}
-
-async function genererPrompt(affinage = "") {
-  const btn = $("#ins-generer");
-  if (btn) btn.disabled = true;
-  try {
-    const data = await api(`/api/projets/${state.projet.id}/insertion/prompt`, {
-      method: "POST", body: JSON.stringify({ affinage }),
-    });
-    state.projet = data.projet;
-    const copie = await copierPressePapier(data.prompt);
-    toast(copie ? "Prompt copié dans le presse-papier." : "Prompt généré (copie manuelle).", copie ? "ok" : "");
-    renderSortiePrompt(data.prompt, MODE_EMPLOI_INS, data.kit);
-  } catch { /* toast déjà affiché */ }
-  finally { if (btn) btn.disabled = false; }
-}
-
-const MODE_EMPLOI_INS = [
-  "Ouvre ChatGPT (un modèle avec génération d'image).",
-  "Colle le prompt (déjà copié).",
-  "Joins les images du kit ci-dessous.",
-  "Génère, affine si besoin, puis glisse l'image retenue dans la zone de dépôt.",
-];
-
-function renderSortiePrompt(prompt, modeEmploi, kit) {
-  const box = $("#ins-sortie");
-  if (!box) return;
-  const etapes = (modeEmploi || MODE_EMPLOI_INS).map((l, i) => `<li>${esc(l)}</li>`).join("");
-  box.innerHTML = `
-    <div class="chip ok" style="margin-bottom:10px">Prompt prêt · copié dans le presse-papier</div>
-    <details class="prompt-box"><summary>Voir / copier le prompt</summary>
-      <pre id="ins-prompt-txt">${esc(prompt)}</pre>
-      <button class="btn" id="ins-copier">Copier à nouveau</button>
-    </details>
-    <ol class="mode-emploi">${etapes}</ol>
-    <div class="kit-head">
-      <span>Images à joindre dans ChatGPT</span>
-      <button class="btn navy" id="ins-kit-zip">Télécharger le kit (ZIP)</button>
-    </div>
-    <p class="sub" style="margin:0 0 8px">Le presse-papier ne transporte pas les pièces jointes : télécharge le kit puis glisse ces 3 images dans ChatGPT.</p>
-    <div class="kit-grid" id="ins-kit"></div>
-    <div class="field" style="margin-top:14px"><label>Affiner le prompt (corrections)</label>
-      <textarea class="input notice-ta" id="ins-affinage" rows="2"
-        placeholder="Ex. : allonge la rangée jusqu'au mât, assombris les modules">${esc(state.projet.insertion?.affinage || "")}</textarea>
-      <button class="btn navy" id="ins-affiner" style="margin-top:8px">Régénérer le prompt affiné</button></div>`;
-
-  $("#ins-copier").addEventListener("click", async () => {
-    const ok = await copierPressePapier($("#ins-prompt-txt").textContent);
-    toast(ok ? "Copié." : "Copie impossible.", ok ? "ok" : "err");
-  });
-  $("#ins-kit-zip").addEventListener("click", () =>
-    telechargerFichier(`/api/projets/${state.projet.id}/insertion/kit.zip`, "kit_insertion.zip"));
-  $("#ins-affiner").addEventListener("click", () => genererPrompt($("#ins-affinage").value).catch(() => {}));
-  renderKit(kit);
-}
-
-async function renderKit(kit) {
-  const box = $("#ins-kit");
-  if (!box) return;
-  // si le kit n'est pas fourni (réaffichage), on le recharge
-  if (!kit) {
-    try { kit = (await api(`/api/projets/${state.projet.id}/insertion/prompt`, {
-      method: "POST", body: JSON.stringify({ affinage: state.projet.insertion?.affinage || "" }),
-    })).kit; } catch { return; }
-  }
-  box.innerHTML = "";
-  for (const it of kit) {
-    const div = document.createElement("div");
-    div.className = "kit-item" + (it.disponible ? "" : " off");
-    const t = Date.now();
-    const src = it.disponible ? `/api/projets/${state.projet.id}/insertion/kit/${it.role}?t=${t}` : "";
-    div.innerHTML = `
-      ${it.disponible
-        ? `<a href="${src}" download="${esc(it.role)}.png" title="Télécharger"><img src="${src}" alt="${esc(it.titre)}" /></a>`
-        : `<div class="kit-manquant">manquant</div>`}
-      <div class="kit-lbl"><b>${esc(it.titre)}</b><small>${it.disponible ? esc(it.note) : (it.requis ? "à ajouter (obligatoire)" : "optionnel — " + esc(it.note))}</small></div>`;
-    box.appendChild(div);
-  }
-}
-
-async function importerImage(file) {
-  const fd = new FormData();
-  fd.append("fichier", file);
-  let resp;
-  try { resp = await fetch(`/api/projets/${state.projet.id}/insertion/import`, { method: "POST", body: fd }); }
-  catch { toast("Serveur injoignable.", "err"); return; }
-  if (!resp.ok) { toast((await resp.json()).detail || "Échec de l'import.", "err"); return; }
-  state.projet = (await resp.json()).projet;
-  toast("Image importée.", "ok");
-  renderGalerie();
-  const fiche = $("#ins-fiche");
-  if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
 }
 
 function renderGalerie() {
@@ -1466,25 +1235,36 @@ function renderGalerie() {
   const ins = state.projet.insertion || {};
   const images = ins.images || [];
   if (!images.length) {
-    box.innerHTML = `<p class="sub">Aucune image importée pour l'instant.</p>`;
+    box.innerHTML = `<p class="sub">Aucune insertion pour l'instant.</p>`;
     return;
   }
   box.innerHTML = "";
+  const dansDossier = new Set(ins.dans_dossier || []);
   for (const v of images) {
     const retenue = ins.retenue === v.fichier;
+    const incluse = dansDossier.has(v.fichier);
     const div = document.createElement("div");
     div.className = "card" + (retenue ? " retenue" : "");
     div.innerHTML = `
-      <img class="planche-img" src="${urlInsertion(v.fichier)}" alt="Insertion IA" />
+      <img class="planche-img zoomable" src="${urlInsertion(v.fichier)}" alt="Insertion IA" title="Cliquer pour agrandir" />
       <div class="bd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <span class="chip ${retenue ? "ok" : ""}" style="font-size:10px">${esc(v.etiquette || "visuel IA")}</span>
+        <label class="chip ${incluse ? "ok" : ""}" style="cursor:pointer" title="Inclure cette insertion au dossier DP exporté">
+          <input type="checkbox" data-dossier="${esc(v.fichier)}" ${incluse ? "checked" : ""} style="margin-right:5px" />Dossier DP
+        </label>
         <span style="flex:1"></span>
-        <a class="btn" href="${urlInsertion(v.fichier)}" download target="_blank">Télécharger</a>
+        <a class="btn" href="/api/projets/${state.projet.id}/insertion/image.jpg?chemin=${encodeURIComponent(v.fichier)}" download>JPEG</a>
         <button class="btn" data-suppr="${esc(v.fichier)}">Retirer</button>
-        <button class="btn ${retenue ? "primary" : "navy"}" data-retenue="${esc(v.fichier)}">${retenue ? "Retenue ✓" : "Retenir"}</button>
+        <button class="btn ${retenue ? "primary" : "navy"}" data-retenue="${esc(v.fichier)}" title="Image de la fiche de validation d'emprise">${retenue ? "Retenue ✓" : "Retenir"}</button>
       </div>`;
+    div.querySelector(".zoomable").addEventListener("click", () => ouvrirLightbox(urlInsertion(v.fichier)));
     box.appendChild(div);
   }
+  box.querySelectorAll("[data-dossier]").forEach((chk) => chk.addEventListener("change", async () => {
+    const d = await api(`/api/projets/${state.projet.id}/insertion/dossier`, {
+      method: "PUT", body: JSON.stringify({ fichier: chk.dataset.dossier, inclure: chk.checked }),
+    });
+    state.projet = d.projet; renderGalerie();
+  }));
   box.querySelectorAll("[data-retenue]").forEach((b) => b.addEventListener("click", async () => {
     const d = await api(`/api/projets/${state.projet.id}/insertion/retenue`, {
       method: "PUT", body: JSON.stringify({ fichier: b.dataset.retenue }),
@@ -1545,8 +1325,6 @@ function renderEtapeNotice(main) {
   main.innerHTML = `
     <div class="crumb">Étape 5 / 6</div>
     <h1>Notice + Cerfa</h1>
-    <p class="sub">Notice type pré-remplie depuis la saisie et les données officielles (PLU, Géorisques).
-      Les <mark class="v">informations du projet</mark> sont surlignées ; relisez, ajustez, puis validez.</p>
     <div class="actionsrow" style="margin:0 0 16px">
       <button class="btn navy" id="btn-gen-notice">Générer / remplir la notice</button>
       <button class="btn" id="btn-regen-notice" title="Écrase les 7 sections avec la notice type remplie">Tout regénérer</button>
@@ -1557,8 +1335,7 @@ function renderEtapeNotice(main) {
     </div>
     <div class="home-list" id="notice-sections"></div>
 
-    <h2 style="font-size:17px;color:var(--gv-navy);margin:26px 0 4px">Informations pour le Cerfa</h2>
-    <p class="sub" style="margin:0 0 12px">Le déclarant (maître d'ouvrage) et son contact, nécessaires au pré-remplissage du Cerfa. Le reste (adresse, parcelles, puissance) est repris des étapes précédentes.</p>
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:26px 0 12px">Informations pour le Cerfa</h2>
     <div class="formgrid" style="max-width:820px">
       ${champ("Type de maître d'ouvrage", "mo.type", { select: ["Société", "Collectivité", "Particulier"] })}
       ${champ("Raison sociale / nom", "mo.raison_sociale")}
@@ -1641,14 +1418,12 @@ const PLANCHES_APERCU = [
   ["dp1_cadastral", "DP1 · Cadastre"],
   ["dp1_aerien", "DP1 · Vue aérienne"],
   ["dp3_coupe", "DP3 · Coupe"],
-  ["dp4_facades", "DP4 · Façades"],
 ];
 
 function renderEtapeExport(main) {
   main.innerHTML = `
     <div class="crumb">Étape 6 / 6</div>
     <h1>Aperçu & export</h1>
-    <p class="sub">Vérifiez les planches, pré-remplissez le Cerfa (le maître d'ouvrage se saisit à l'étape Notice + Cerfa) puis assemblez le dossier (export PDF pour le dépôt).</p>
 
     <div class="actionsrow" style="margin:14px 0 8px">
       <button class="btn" id="btn-cerfa">Pré-remplir le Cerfa 16702</button>
@@ -1712,8 +1487,8 @@ function telechargerFichier(url, nom) {
 }
 
 // ---------------- init ----------------
-$("#btn-save").addEventListener("click", () => sauvegarder(false).catch(() => {}));
 $("#btn-accueil").addEventListener("click", () => { state.etape = 0; render(); });
-$("#btn-generer").addEventListener("click", () => allerEtape(6));
+$("#lightbox").addEventListener("click", () => { $("#lightbox").hidden = true; });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").hidden = true; });
 
 render();

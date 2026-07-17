@@ -6,22 +6,22 @@
 <title>GV_DP · Déclaration Préalable — Ombrières</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2305DB79' d='M13 2 4 14h6l-1 8 9-12h-6z'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
-<link rel="stylesheet" href="/static/css/app.css?v=6" />
+<link rel="stylesheet" href="/static/css/app.css?v=7" />
 </head>
 <body>
 <div class="app">
 
   <header class="topbar">
     <div class="logo" title="Greenvolt Next">
-      <img src="/static/img/greenvolt_logo.png?v=6" alt="Greenvolt Next" />
+      <img src="/static/img/greenvolt_logo.png?v=7" alt="Greenvolt Next" />
     </div>
     <div class="vdiv"></div>
     <div class="toolname">Déclaration préalable<small>Ombrières photovoltaïques de parking</small></div>
     <div class="spacer"></div>
     <div class="proj" id="proj-badge" hidden><span id="proj-nom"></span></div>
-    <button class="btn" id="btn-accueil" title="Retour à la liste des projets">Projets</button>
-    <button class="btn" id="btn-save" disabled>Enregistrer</button>
-    <button class="btn primary" id="btn-generer" disabled>Générer le dossier</button>
+    <button class="btn home-btn" id="btn-accueil" title="Retour aux projets" aria-label="Retour aux projets">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
+    </button>
   </header>
 
   <div class="body">
@@ -50,8 +50,9 @@
 </div>
 
 <div id="toasts"></div>
+<div id="lightbox" hidden><img id="lightbox-img" alt="Agrandissement" /></div>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
-<script src="/static/js/app.js?v=6"></script>
+<script src="/static/js/app.js?v=7"></script>
 </body>
 </html>

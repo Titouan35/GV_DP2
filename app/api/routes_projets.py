@@ -54,8 +54,10 @@ def lister_projets():
     for f in sorted(config.PROJETS_DIR.glob("*.json")):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
+            projet = Projet.model_validate(data)
         except (ValueError, OSError):
             continue
+        c = regles.completude(projet)
         projets.append(
             {
                 "id": data.get("id"),
@@ -64,6 +66,7 @@ def lister_projets():
                 "regime": data.get("regime"),
                 "commune": (data.get("localisation") or {}).get("commune"),
                 "date_modification": data.get("date_modification"),
+                "completude": {"pretes": c["pretes"], "total": c["total"]},
             }
         )
     projets.sort(key=lambda p: p.get("date_modification") or "", reverse=True)

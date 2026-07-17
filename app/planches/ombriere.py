@@ -1,10 +1,10 @@
-"""DP3 (coupe) et DP4 (façades / toiture) — rendu vectoriel propre.
+"""DP3 (coupe) — rendu vectoriel propre.
 
 Redessin fidèle aux coupes commerciales Solstyce START PLAINE (dossier
 ../COUPES) : mât caisson à bandes bleues de signalisation, arbalétrier(s)
 effilé(s), bracon(s) diagonal(aux), pannes, modules full black en couverture,
-massif béton texturé sous le sol, cotes et échelle graphique. Un seul modèle
-paramétrique (catalogue + saisie) alimente DP3 et DP4.
+massif béton texturé sous le sol, cotes et échelle graphique. Le modèle
+paramétrique (catalogue + saisie) alimente DP3.
 """
 from __future__ import annotations
 
@@ -210,100 +210,4 @@ def dessiner_coupe(projet: dict) -> Image.Image:
     m_par_px = 1 / k
     planche.echelle_graphique(m_par_px)
     planche.source("Coupe paramétrique GV_DP (catalogue Solstyce START PLAINE)")
-    return planche.finaliser(cadre=False)
-
-
-def dessiner_facades(projet: dict) -> Image.Image:
-    """DP4 : élévation longitudinale + plan de toiture, cotés."""
-    p = parametres_effectifs(projet.get("ombriere") or {})
-    longueur, prof = p["longueur_m"], p["profondeur_m"]
-    entraxe, nb_trav = p["entraxe_m"], p["nb_travees"]
-    h_bas, h_haut = p["h_bas_m"], p["h_haut_m"]
-
-    planche = Planche("DP4 · Plan des façades et toitures", projet)
-    x0, y0, x1, y1 = planche.content_box
-    dr = planche.draw
-    dr.text((x0 + 14, y0 + 8), "DP4 · Façades et plan de toiture",
-            font=police(30, True), fill=NAVY)
-
-    milieu = y0 + 70
-    h_zone = (y1 - milieu - 70) // 2
-    box_elev = (x0, milieu, x1, milieu + h_zone)
-    box_toit = (x0, milieu + h_zone + 70, x1, y1)
-
-    # ---- élévation longitudinale ----
-    monde_w = longueur + 3.0
-    monde_h = h_haut + 1.2
-    k, ox, oy = _monde_vers_px(box_elev, monde_w, monde_h)
-    sol_y = round(oy + monde_h * k)
-
-    def Xe(xm): return round(ox + (1.5 + xm) * k)
-    def Ye(hm): return round(sol_y - hm * k)
-
-    dr.text((Xe(longueur / 2), box_elev[1] - 2),
-            "Élévation longitudinale (vue de la façade)", font=police(24, True),
-            fill=MUTED, anchor="ma")
-    dr.line([(x0 + 8, sol_y), (x1 - 8, sol_y)], fill=ENCRE, width=4)
-    for i in range(x0 + 20, x1 - 20, 30):
-        dr.line([(i, sol_y), (i - 12, sol_y + 12)], fill=GRIS, width=2)
-
-    # bandeau de toiture (modules) vu de profil, légèrement incliné
-    dr.polygon([(Xe(0), Ye(h_haut)), (Xe(longueur), Ye(h_bas)),
-                (Xe(longueur), Ye(h_bas - EP_PANNEAU * 1.6)),
-                (Xe(0), Ye(h_haut - EP_PANNEAU * 1.6))], fill=PANNEAU)
-    dr.line([(Xe(0), Ye(h_haut)), (Xe(longueur), Ye(h_bas))],
-            fill=(70, 120, 160), width=2)
-    # arbalétrier apparent sous les modules
-    dr.line([(Xe(0), Ye(h_haut - EP_PANNEAU * 1.6)), (Xe(longueur), Ye(h_bas - EP_PANNEAU * 1.6))],
-            fill=ACIER_SOMBRE, width=max(4, int(0.25 * k)))
-    # poteaux + bandes bleues
-    for i in range(nb_trav + 1):
-        xm = min(i * entraxe, longueur)
-        hp = h_haut + (h_bas - h_haut) * (xm / longueur if longueur else 0)
-        xpi = Xe(xm)
-        dg = LARG_MAT / 2 * k
-        dr.rectangle([xpi - dg, Ye(hp - 0.35), xpi + dg, sol_y], fill=ACIER, outline=ENCRE, width=2)
-        for b in range(1, 4):
-            yb = sol_y - (hp - 0.35) * k * (0.12 + 0.14 * b)
-            dr.rectangle([xpi - dg + 3, yb - 5, xpi + dg - 3, yb + 5], fill=BLEU_BANDE)
-        dr.rectangle([xpi - dg - 5, sol_y - 6, xpi + dg + 5, sol_y + 3], fill=ACIER_SOMBRE)
-
-    cote_verticale(dr, Xe(0) - int(0.9 * k), sol_y, Ye(h_haut),
-                   f"{h_haut:.2f} m".replace(".", ","), cote_a_gauche=True)
-    cote_horizontale(dr, Xe(0), Xe(longueur), sol_y + int(0.55 * k),
-                     f"{longueur:g} m  ·  {nb_trav} travées de {entraxe:g} m")
-
-    # ---- plan de toiture ----
-    monde_w2 = longueur + 3.0
-    monde_h2 = prof + 2.2
-    k2, ox2, oy2 = _monde_vers_px(box_toit, monde_w2, monde_h2)
-
-    def Xt(xm): return round(ox2 + (1.5 + xm) * k2)
-    def Yt(ym): return round(oy2 + (1.1 + ym) * k2)
-
-    dr.text((Xt(longueur / 2), box_toit[1] - 2), "Plan de toiture",
-            font=police(24, True), fill=MUTED, anchor="ma")
-    dr.rectangle([Xt(0), Yt(0), Xt(longueur), Yt(prof)], fill=PANNEAU, outline=ENCRE, width=3)
-    xm = 1.134
-    while xm < longueur:  # calepinage modules
-        dr.line([(Xt(xm), Yt(0)), (Xt(xm), Yt(prof))], fill=(58, 64, 74), width=1)
-        xm += 1.134
-    ym = 1.0
-    while ym < prof:
-        dr.line([(Xt(0), Yt(ym)), (Xt(longueur), Yt(ym))], fill=(58, 64, 74), width=1)
-        ym += 1.0
-    # flèche de pente
-    sens = 1 if p["poteau"] == "bas" else -1
-    yA, yB = (Yt(prof * 0.72), Yt(prof * 0.28)) if sens < 0 else (Yt(prof * 0.28), Yt(prof * 0.72))
-    xc = Xt(longueur / 2)
-    dr.line([(xc, yA), (xc, yB)], fill=BLANC, width=5)
-    dr.polygon([(xc, yB), (xc - 13, yB + (22 if yB > yA else -22)),
-                (xc + 13, yB + (22 if yB > yA else -22))], fill=BLANC)
-    dr.text((xc + 22, (yA + yB) // 2), f"pente {p['pente_deg']:g}°",
-            font=police(24, True), fill=BLANC, anchor="lm")
-    cote_horizontale(dr, Xt(0), Xt(longueur), Yt(prof) + int(0.45 * k2), f"{longueur:g} m")
-    cote_verticale(dr, Xt(0) - int(0.7 * k2), Yt(0), Yt(prof), f"{prof:g} m")
-
-    planche.echelle_graphique(1 / k2, y=box_toit[3] - 12)
-    planche.source("Façades et toiture paramétriques GV_DP")
     return planche.finaliser(cadre=False)

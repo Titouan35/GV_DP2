@@ -10,12 +10,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, UploadFile
 
-from .. import config, regles
+from .. import config, lecture_plan, regles
 from .routes_projets import _charger, _sauver
 
 router = APIRouter(prefix="/api/projets", tags=["documents"])
 
-CODES_UPLOAD = {"dp2", "dp3", "dp4", "dp6", "dp7", "dp8", "photo_site"}
+CODES_UPLOAD = {"dp2", "dp3", "dp6", "dp7", "dp8", "photo_site"}
 EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
 TAILLE_MAX = 40 * 1024 * 1024  # 40 Mo
 
@@ -50,9 +50,18 @@ async def uploader(projet_id: str, code: str, fichier: UploadFile):
         "date": datetime.now().isoformat(timespec="seconds"),
         "taille": len(contenu),
     }
+
+    # plan de masse : lecture du cartouche -> pré-remplissage des champs vides
+    champs_proposes: list[str] = []
+    if code == "dp2":
+        lecture = lecture_plan.lire_plan_masse(chemin)
+        if lecture:
+            champs_proposes = lecture_plan.appliquer_lecture(projet, lecture)
+
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet, "evaluation": regles.evaluer(projet)}
+    return {"projet": projet, "evaluation": regles.evaluer(projet),
+            "plan_champs_proposes": champs_proposes}
 
 
 @router.delete("/{projet_id}/documents/{code}")

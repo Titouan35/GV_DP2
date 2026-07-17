@@ -1,9 +1,9 @@
-"""Catalogue paramétrique + génération offline des dessins DP3/DP4."""
+"""Catalogue paramétrique + génération offline de la coupe DP3."""
 import pytest
 
 from app.catalogue import CATALOGUE, parametres_effectifs
 from app.planches import base
-from app.planches.ombriere import dessiner_coupe, dessiner_facades
+from app.planches.ombriere import dessiner_coupe
 
 
 def test_catalogue_trois_familles():
@@ -39,6 +39,21 @@ def test_hauteur_hors_tout_saisie_gagne():
     assert p["h_haut_m"] == 4.2
 
 
+def test_deux_hauteurs_priment_pente_recalculee():
+    """Hauteurs bas + haut saisies : elles font foi, la pente est déduite."""
+    p = parametres_effectifs({
+        "famille": "START PLAINE Bas",
+        "largeur_m": 7.5,            # profondeur couverte
+        "pente_deg": 5.0,            # incohérente : ignorée
+        "garde_au_sol_m": 2.5,
+        "hauteur_hors_tout_m": 3.5,
+    })
+    assert p["h_bas_m"] == 2.5
+    assert p["h_haut_m"] == 3.5
+    # atan(1,0 / 7,5) ≈ 7,6°
+    assert p["pente_deg"] == pytest.approx(7.6, abs=0.1)
+
+
 PROJET_MIN = {
     "nom": "Test",
     "localisation": {"commune": "Soufflenheim", "code_insee": "67472"},
@@ -46,11 +61,10 @@ PROJET_MIN = {
 
 
 @pytest.mark.parametrize("famille", list(CATALOGUE))
-def test_coupe_et_facades_se_dessinent(famille):
+def test_coupe_se_dessine(famille):
     projet = {**PROJET_MIN, "ombriere": {"famille": famille, "nb_travees": 4, "entraxe_m": 5.0}}
-    for fn in (dessiner_coupe, dessiner_facades):
-        img = fn(projet)
-        assert img.size == (base.PLATE_W, base.PLATE_H)
+    img = dessiner_coupe(projet)
+    assert img.size == (base.PLATE_W, base.PLATE_H)
 
 
 def test_echelle_nominale_format():

@@ -65,8 +65,9 @@ def parametres_effectifs(ombriere: dict) -> dict:
     """Fusionne le type du catalogue et les paramètres saisis par l'utilisateur.
 
     Les valeurs saisies (largeur, pente, hauteurs...) priment sur les valeurs
-    par défaut du catalogue. La hauteur du point haut est recalculée depuis la
-    pente si l'utilisateur fournit hauteur point bas + profondeur.
+    par défaut du catalogue. Quand les DEUX hauteurs sont saisies, elles font
+    foi et la pente est recalculée depuis le profil (hauteurs > pente) ; sinon
+    la hauteur manquante est dérivée de la pente.
     """
     famille = ombriere.get("famille")
     base = dict(CATALOGUE.get(famille, CATALOGUE["START PLAINE Bas"]))
@@ -75,8 +76,16 @@ def parametres_effectifs(ombriere: dict) -> dict:
     profondeur = ombriere.get("largeur_m") or base["profondeur_m"]
     pente = ombriere.get("pente_deg") or base["pente_deg"]
     h_bas = ombriere.get("garde_au_sol_m") or base["h_bas_m"]
-    denivele = profondeur * math.tan(math.radians(pente))
-    h_haut = ombriere.get("hauteur_hors_tout_m") or round(h_bas + denivele, 2)
+    h_haut_saisie = ombriere.get("hauteur_hors_tout_m")
+    if h_haut_saisie and ombriere.get("garde_au_sol_m"):
+        # les deux hauteurs priment : pente déduite du profil réel
+        # (pente continue sur toute la profondeur, y compris en Double : T)
+        h_haut = h_haut_saisie
+        if profondeur > 0 and h_haut > h_bas:
+            pente = round(math.degrees(math.atan((h_haut - h_bas) / profondeur)), 1)
+    else:
+        denivele = profondeur * math.tan(math.radians(pente))
+        h_haut = h_haut_saisie or round(h_bas + denivele, 2)
 
     entraxe = ombriere.get("entraxe_m") or 5.0
     nb_travees = int(ombriere.get("nb_travees") or 4)

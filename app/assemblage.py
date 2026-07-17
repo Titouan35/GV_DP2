@@ -149,10 +149,9 @@ def _pastille(slide, x, y, texte, bg, fg, w=None, h=26):
     _pastille_texte(forme, texte, 13, fg)
 
 
-def _entete(slide, titre, meta=""):
-    _texte(slide, 48, 44, 860, 46, titre, px=34, gras=True)
-    if meta:
-        _texte(slide, 660, 52, 572, 22, meta, px=13, couleur=MUTED, droite=True)
+def _entete(slide, titre):
+    """Titre de planche. Pas de mention en haut à droite (décision 17/07/2026)."""
+    _texte(slide, 48, 44, 1136, 46, titre, px=34, gras=True)
 
 
 def _cartouche(slide, projet, badge_txt, badge_bg=VERT, badge_fg=NAVY):
@@ -320,15 +319,18 @@ def _slide_garde(prs, assets, projet, evaluation):
     return slide
 
 
-def _slide_piece_image(prs, projet, assets, titre, meta, badge, image=None,
-                       placeholder=("Pièce en attente", "À fournir par le bureau d'études (étape 2).", "")):
+def _slide_piece_image(prs, projet, assets, titre, badge, image=None,
+                       placeholder=("Pièce en attente", "À fournir par le bureau d'études (étape 2).", ""),
+                       pastille=None):
     slide = _slide(prs)
-    _entete(slide, titre, meta)
+    _entete(slide, titre)
     if image:
         _zone_cadre(slide)
         _image_zone(slide, _optimiser(image, assets))
     else:
         _placeholder_zone(slide, placeholder[0], placeholder[1], note=placeholder[2])
+    if pastille:
+        _pastille(slide, ZONE[0] + 14, ZONE[1] + 14, pastille, VIOLET, BLANC)
     _cartouche(slide, projet, badge)
     return slide
 
@@ -337,7 +339,7 @@ def _slide_dp1_fusion(prs, projet, assets, generees):
     """DP1 : plan de situation + plan cadastral, moitié / moitié."""
     a, b = generees.get("dp1_situation"), generees.get("dp1_cadastral")
     slide = _slide(prs)
-    _entete(slide, "Plan de situation et cadastral", "Fond IGN · échelles graphiques sur planches")
+    _entete(slide, "Plan de situation et cadastral")
     demi = (ZONE[2] - 24) / 2
     zones = [(ZONE[0], ZONE[1] + 26, demi, ZONE[3] - 26),
              (ZONE[0] + demi + 24, ZONE[1] + 26, demi, ZONE[3] - 26)]
@@ -369,7 +371,7 @@ def _slide_notice(prs, projet, assets):
 
     sections = (projet.get("notice") or {}).get("sections") or {}
     slide = _slide(prs)
-    _entete(slide, "Notice descriptive", "Pièce DP11")
+    _entete(slide, "Notice descriptive")
     if not any((sections.get(c) or "").strip() for c in TITRES):
         _placeholder_zone(slide, "Notice à générer",
                           "Générez et relisez la notice à l'étape 5 de l'outil avant l'export.")
@@ -410,10 +412,25 @@ def _slide_notice(prs, projet, assets):
     return slide
 
 
+def _insertions_selectionnees(projet: dict) -> list[Path]:
+    """Chemins des insertions IA cochées « inclure au dossier » (existants)."""
+    ins = projet.get("insertion") or {}
+    chemins = []
+    for rel in ins.get("dans_dossier") or []:
+        chemin = config.PROJETS_DIR / rel
+        if chemin.exists():
+            chemins.append(chemin)
+    return chemins
+
+
 def _slide_dp6(prs, projet, assets):
-    """Insertion paysagère : avant (photo du site) / après (photomontage BE)."""
+    """Insertion paysagère avant / après.
+
+    L'état projeté est le photomontage DP6 du BE s'il est fourni (il prime) ;
+    sinon la première insertion IA sélectionnée, étiquetée visuel d'illustration.
+    """
     slide = _slide(prs)
-    _entete(slide, "Insertion paysagère", "Photomontage avant / après")
+    _entete(slide, "Insertion paysagère")
     demi = (ZONE[2] - 24) / 2
     z_avant = (ZONE[0], ZONE[1], demi, ZONE[3])
     z_apres = (ZONE[0] + demi + 24, ZONE[1], demi, ZONE[3])
@@ -429,16 +446,20 @@ def _slide_dp6(prs, projet, assets):
                           "Photo du parking actuel (étape Insertion ou pièce DP7).", z_avant)
     _pastille(slide, z_avant[0] + 14, z_avant[1] + 14, "Avant", NAVY, BLANC)
 
-    # après : photomontage DP6 fourni par le BE
+    # après : DP6 du BE prioritaire, sinon première insertion IA sélectionnée
     pages = _pages_document(projet, "dp6", assets)
-    if pages:
+    ia = _insertions_selectionnees(projet)
+    apres_ia = not pages and ia
+    if pages or apres_ia:
         _rect(slide, *z_apres, fill=BLANC, ligne=GRIS_LIGNE, epaisseur=1)
-        _image_zone(slide, _optimiser(pages[0], assets), z_apres)
+        _image_zone(slide, _optimiser(pages[0] if pages else ia[0], assets), z_apres)
     else:
         _placeholder_zone(slide, "État projeté",
                           "Photomontage d'insertion fourni par le bureau d'études (pièce DP6, étape 2).",
                           z_apres)
     _pastille(slide, z_apres[0] + 14, z_apres[1] + 14, "Après", VERT, NAVY)
+    if apres_ia:
+        _pastille(slide, z_apres[0] + 96, z_apres[1] + 14, "Visuel d'illustration (IA)", VIOLET, BLANC)
     _cartouche(slide, projet, "DP6")
     return slide
 
@@ -446,7 +467,7 @@ def _slide_dp6(prs, projet, assets):
 def _slide_photos(prs, projet, assets):
     """DP7 (proche) + DP8 (lointain) côte à côte, numérotées."""
     slide = _slide(prs)
-    _entete(slide, "Photographies du terrain", "DP7 proche · DP8 lointain")
+    _entete(slide, "Photographies du terrain")
     demi = (ZONE[2] - 24) / 2
     zones = [(ZONE[0], ZONE[1], demi, ZONE[3]),
              (ZONE[0] + demi + 24, ZONE[1], demi, ZONE[3])]
@@ -479,7 +500,7 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     # 1. (re)générer les pièces automatiques
     generees: dict[str, Path] = {}
     for code, generateur in GENERATEURS.items():
-        if code in ("dp3_coupe", "dp4_facades") and not (projet.get("ombriere") or {}).get("famille"):
+        if code == "dp3_coupe" and not (projet.get("ombriere") or {}).get("famille"):
             continue
         try:
             image = generateur(projet)
@@ -498,7 +519,7 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     _slide_garde(prs, assets, projet, evaluation)
     _slide_dp1_fusion(prs, projet, assets, generees)
     _slide_piece_image(
-        prs, projet, assets, "Vue aérienne", "Orthophotographie IGN", "DP1",
+        prs, projet, assets, "Vue aérienne", "DP1",
         image=generees.get("dp1_aerien"),
         placeholder=("Vue aérienne indisponible",
                      "Complétez la localisation (étape 1) puis régénérez.", ""))
@@ -506,40 +527,43 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     # DP2 plan de masse (upload BE, PDF multi-pages possible)
     pages = _pages_document(projet, "dp2", assets)
     if pages:
-        for i, page in enumerate(pages):
-            meta = "Implantation et cotations" + (f" · page {i + 1}/{len(pages)}" if len(pages) > 1 else "")
-            _slide_piece_image(prs, projet, assets, "Plan de masse", meta, "DP2", image=page)
+        for page in pages:
+            _slide_piece_image(prs, projet, assets, "Plan de masse", "DP2", image=page)
     else:
         _slide_piece_image(
-            prs, projet, assets, "Plan de masse", "Échelle indicative", "DP2",
+            prs, projet, assets, "Plan de masse", "DP2",
             placeholder=("Plan de masse fourni par le bureau d'études",
                          "Emplacement réservé à l'import du plan (étape 2). Y figurent "
                          "l'implantation de l'ombrière, les places de stationnement, les "
                          "accès et le raccordement aux réseaux.", "Pièce DP2"))
 
-    # DP3 coupe / DP4 façades : upload BE prioritaire, sinon paramétrique
-    for code, code_gen, titre, meta in [
-        ("dp3", "dp3_coupe", "Coupe du terrain et de la construction", "Profil en travers"),
-        ("dp4", "dp4_facades", "Plan des façades et toitures", "Élévations"),
-    ]:
-        pages = _pages_document(projet, code, assets)
-        if pages:
-            for i, page in enumerate(pages):
-                m = meta + " · pièce BE" + (f" · page {i + 1}/{len(pages)}" if len(pages) > 1 else "")
-                _slide_piece_image(prs, projet, assets, titre, m, code.upper(), image=page)
-        elif code_gen in generees:
-            _slide_piece_image(prs, projet, assets, titre,
-                               meta + " · modèle paramétrique GV_DP", code.upper(),
-                               image=generees[code_gen])
-        else:
-            _slide_piece_image(
-                prs, projet, assets, titre, meta, code.upper(),
-                placeholder=(f"{titre} à produire",
-                             "Choisissez une coupe à l'étape 3 (génération automatique) "
-                             "ou importez la pièce du BE à l'étape 2.", ""))
+    # DP3 coupe : upload BE prioritaire, sinon paramétrique
+    titre_dp3 = "Coupe du terrain et de la construction"
+    pages = _pages_document(projet, "dp3", assets)
+    if pages:
+        for page in pages:
+            _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=page)
+    elif "dp3_coupe" in generees:
+        _slide_piece_image(prs, projet, assets, titre_dp3, "DP3",
+                           image=generees["dp3_coupe"])
+    else:
+        _slide_piece_image(
+            prs, projet, assets, titre_dp3, "DP3",
+            placeholder=(f"{titre_dp3} à produire",
+                         "Choisissez une coupe à l'étape 3 (génération automatique) "
+                         "ou importez la pièce du BE à l'étape 2.", ""))
 
     _slide_notice(prs, projet, assets)
     _slide_dp6(prs, projet, assets)
+
+    # insertions IA sélectionnées : planches « visuel d'illustration »
+    # (la 1re n'a sa propre planche que si un DP6 BE occupe déjà l'avant/après)
+    ia = _insertions_selectionnees(projet)
+    dp6_be = bool(_pages_document(projet, "dp6", assets))
+    for chemin in (ia if dp6_be else ia[1:]):
+        _slide_piece_image(prs, projet, assets, "Insertion paysagère", "Insertion",
+                           image=chemin, pastille="Visuel d'illustration (IA)")
+
     _slide_photos(prs, projet, assets)
     # Cerfa et checklist retirés du PPTX (Florent) : le Cerfa pré-rempli reste
     # un PDF joint au dépôt, la checklist reste dans l'outil (panneau complétude).

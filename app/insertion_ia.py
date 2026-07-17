@@ -1,23 +1,19 @@
-"""Module Insertion IA (phase 5) — générateur de prompt SANS API.
+"""Module Insertion IA (phase 5) — génération directe via l'API Gemini.
 
-Flux figé le 2026-07-16 (PLAN_OUTIL_DP.md §6 bis) : l'outil n'appelle aucune
-API et ne fait sortir aucune donnée. Au clic « Générer le prompt », il produit
-deux choses :
+Flux 17/07/2026 : au clic « Générer l'insertion », l'outil assemble un prompt
+ultra-détaillé (6 blocs, déterministe) + les images d'entrée (photo du site,
+plan de masse DP2, coupe du type d'ombrière) et appelle Gemini image
+(« Nano Banana »). L'image revient directement dans la galerie.
 
-1. Le **prompt** ultra-détaillé (6 blocs), assemblé de façon déterministe
-   depuis les inputs du projet, destiné à **ChatGPT (GPT image)**.
-2. Le **kit d'images à joindre** : (a) photo du site, (b) plan de masse (DP2,
-   upload BE), (c) coupe du type d'ombrière choisi (COUPES/ → PNG).
-
-L'utilisateur colle le prompt dans son ChatGPT, y joint les 3 images, génère
-l'insertion, puis ré-importe l'image retenue dans l'outil (zone de dépôt).
-
-Les visuels obtenus sont réservés au commercial, étiquetés « visuel IA », et
-ne servent JAMAIS de pièce DP6 (fournie par le BE).
+Les insertions sélectionnées entrent au dossier DP en planches « visuel
+d'illustration » ; la pièce DP6 officielle du BE garde la priorité.
+L'API Gemini n'exposant aucun solde de crédits, l'outil tient un compteur
+de dépense local (nb d'images x coût unitaire).
 """
 from __future__ import annotations
 
 import base64
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -28,36 +24,17 @@ import pypdfium2 as pdfium
 from . import config
 from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
 
-# --- mode API direct (optionnel) : Gemini image « Nano Banana » ---
-# Activé automatiquement quand GEMINI_API_KEY est présente (.env CLAUDE ou env
-# système). Le générateur de prompt reste disponible en secours (sans clé).
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 GEMINI_MODELE_DEFAUT = "gemini-3.1-flash-lite-image"  # Nano Banana 2 Lite
+COUT_IMAGE_EUR_DEFAUT = 0.04
 
 
 class InsertionError(Exception):
     """Erreur du mode API (clé, réseau, quota/facturation, sécurité)."""
 
-# ------------------------------------------------------------------ descriptif
-
-MODE_EMPLOI = [
-    "Ouvre ChatGPT (un modèle avec génération d'image, « GPT image »).",
-    "Colle le prompt (déjà copié dans le presse-papier).",
-    "Joins les images du kit ci-contre (photo du site, plan de masse, coupe).",
-    "Génère, puis régénère/affine dans ChatGPT jusqu'au rendu voulu.",
-    "Glisse l'image retenue dans la zone de dépôt de l'outil.",
-]
-
-RAPPELS = [
-    "Visuel réservé au commercial, étiqueté « visuel IA » : jamais utilisé en pièce DP6.",
-    "Aucune API, aucune clé, aucun coût : la génération se fait dans TON ChatGPT.",
-    "Aucune donnée du site ne sort de l'outil (c'est toi qui portes le prompt).",
-    "Photo d'entrée nette, à hauteur d'œil, zone d'implantation dégagée = clé du réalisme.",
-]
-
 
 def api_configuree() -> bool:
-    """Vrai si une clé Gemini est présente (le mode API direct s'active)."""
+    """Vrai si une clé Gemini est présente."""
     return bool(os.environ.get("GEMINI_API_KEY"))
 
 
@@ -65,16 +42,40 @@ def _modele() -> str:
     return os.environ.get("GVDP_GEMINI_MODEL", GEMINI_MODELE_DEFAUT)
 
 
+def cout_image_eur() -> float:
+    try:
+        return float(os.environ.get("GVDP_COUT_IMAGE_EUR", COUT_IMAGE_EUR_DEFAUT))
+    except ValueError:
+        return COUT_IMAGE_EUR_DEFAUT
+
+
+# --- compteur de dépense global (tous projets), fichier local gitignoré ---
+
+def _compteur_chemin() -> Path:
+    return config.PROJETS_DIR / "_compteur_ia.json"
+
+
+def compteur_global() -> int:
+    try:
+        return int(json.loads(_compteur_chemin().read_text(encoding="utf-8"))["images"])
+    except (OSError, ValueError, KeyError):
+        return 0
+
+
+def incrementer_compteur_global() -> int:
+    n = compteur_global() + 1
+    config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
+    _compteur_chemin().write_text(json.dumps({"images": n}), encoding="utf-8")
+    return n
+
+
 def apercu() -> dict:
     """Descriptif générique du module (indépendant d'un projet)."""
     return {
-        "mode": "generateur_prompt",
-        "api": False,
-        "cible": "ChatGPT (GPT image)",
-        "mode_emploi": MODE_EMPLOI,
-        "rappels": RAPPELS,
         "api_configuree": api_configuree(),
         "api_modele": _modele(),
+        "cout_image_eur": cout_image_eur(),
+        "images_global": compteur_global(),
     }
 
 
@@ -89,13 +90,11 @@ def _fmt(v, suffixe="", defaut="—"):
     return f"{v}{suffixe}"
 
 
-def construire_prompt(projet: dict, affinage: str = "", api: bool = False) -> str:
+def construire_prompt(projet: dict, affinage: str = "") -> str:
     """Assemble le prompt ultra-détaillé (6 blocs) depuis les inputs du projet.
 
     Déterministe : mêmes inputs → même prompt. Rédigé en français, adressé à
-    un éditeur photo (ChatGPT ou Gemini). Tolère les champs manquants.
-    En mode API (Gemini), ajoute la consigne d'inspiration par recherche
-    d'images réelles (grounding Google Search).
+    l'éditeur photo Gemini. Tolère les champs manquants.
     """
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
@@ -128,7 +127,10 @@ def construire_prompt(projet: dict, affinage: str = "", api: bool = False) -> st
             "parking. Commence par repérer sur la photo les mêmes éléments que sur le plan "
             "(façade du magasin, entrée, îlots, bordures, mâts) pour caler l'implantation, "
             "puis pose les ombrières aux mêmes emplacements. Ne couvre QUE les rangées "
-            "indiquées au plan, ni plus, ni moins, et respecte le sens de la pente."
+            "indiquées au plan, ni plus, ni moins. Le plan porte une FLÈCHE indiquant le "
+            "sens de la pente de l'ombrière : oriente le versant exactement dans ce sens. "
+            "Les POTEAUX sont repérés sur le plan : place les poteaux de la structure à "
+            "ces emplacements précis."
         )
     else:
         b2_lignes.append(
@@ -211,15 +213,12 @@ def construire_prompt(projet: dict, affinage: str = "", api: bool = False) -> st
         "LUMIÈRE & INTÉGRATION — Reproduis des ombres portées cohérentes en "
         "direction et longueur avec celles des mâts, arbres et véhicules déjà "
         "visibles. Conserve le grain, la netteté, l'exposition et la balance des "
-        "couleurs de la photo source : le montage doit sembler pris au même instant."
+        "couleurs de la photo source : le montage doit sembler pris au même instant. "
+        "Pour le réalisme de la structure et des matériaux, inspire-toi de "
+        "photos réelles d'ombrières photovoltaïques de parkings de supermarchés "
+        "français (recherche d'images : « ombrière photovoltaïque parking "
+        "supermarché France »)."
     )
-    if api:
-        b5 += (
-            " Pour le réalisme de la structure et des matériaux, inspire-toi de "
-            "photos réelles d'ombrières photovoltaïques de parkings de supermarchés "
-            "français (recherche d'images : « ombrière photovoltaïque parking "
-            "supermarché France »)."
-        )
 
     # -- bloc 6 : consignes libres + contraintes négatives
     libres = (ins.get("consignes") or "").strip()
@@ -308,37 +307,6 @@ def image_kit(projet: dict, role: str) -> Path | None:
     return None
 
 
-def kit(projet: dict) -> list[dict]:
-    """Liste des 3 images à joindre, avec leur disponibilité et un libellé."""
-    projet_id = projet.get("id")
-    base = f"/api/projets/{projet_id}/insertion/kit"
-    items = [
-        {
-            "role": "photo",
-            "titre": "Photo du site",
-            "note": "la scène à équiper (upload ci-dessus)",
-            "requis": True,
-        },
-        {
-            "role": "plan",
-            "titre": "Plan de masse",
-            "note": "implantation et orientation des rangées (DP2, étape 4)",
-            "requis": False,
-        },
-        {
-            "role": "coupe",
-            "titre": "Coupe du type d'ombrière",
-            "note": "profil exact de la structure (étape 3)",
-            "requis": False,
-        },
-    ]
-    for it in items:
-        dispo = image_kit(projet, it["role"]) is not None
-        it["disponible"] = dispo
-        it["url"] = f"{base}/{it['role']}?t=0" if dispo else None
-    return items
-
-
 # ------------------------------------------------------------------ état projet
 
 def etat(projet: dict) -> dict:
@@ -424,7 +392,7 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
     if not photo:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
 
-    prompt = construire_prompt(projet, affinage=affinage, api=True)
+    prompt = construire_prompt(projet, affinage=affinage)
     parts: list[dict] = [{"text": prompt}, _part_image(photo)]
     for role in ("plan", "coupe"):
         chemin = image_kit(projet, role)
@@ -440,7 +408,7 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
     return {
         "fichier": rel,
         "date": datetime.now().isoformat(timespec="seconds"),
-        "etiquette": "visuel IA — usage commercial",
+        "etiquette": "visuel IA",
         "modele": _modele(),
         "prompt": prompt,
     }

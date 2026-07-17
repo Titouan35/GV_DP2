@@ -258,25 +258,35 @@ body {
 .home-item:hover { border-color: var(--gv-green); }
 .home-item .t { font-weight: 600; color: var(--gv-navy); }
 .home-item .t small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); }
-.home-item .badge {
-  margin-left: auto; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 3px 8px;
-  background: var(--gv-violet-l); color: var(--gv-violet);
+.home-item .t { flex: 1; min-width: 0; }
+.home-item .home-comp { display: flex; align-items: center; gap: 10px; flex: none; }
+.home-item .home-comp small { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.home-bar {
+  width: 110px; height: 7px; border-radius: 4px; background: var(--bg);
+  border: 1px solid var(--line); overflow: hidden; display: inline-block;
 }
-/* fiche projet */
-.fiche-tete { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
-.fiche-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.fiche-etapes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.fiche-etape {
-  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line);
-  border-radius: var(--r); background: var(--card); cursor: pointer; text-align: left; font-family: inherit;
+.home-bar i { display: block; height: 100%; background: var(--gv-green); border-radius: 4px; }
+.home-del { flex: none; }
+
+/* accueil : sidebar et panneau complétude masqués */
+body.accueil .side, body.accueil .rightpanel { display: none; }
+
+/* topbar : bouton maison */
+.home-btn { display: inline-flex; align-items: center; justify-content: center; padding: 8px 12px; }
+
+/* étape 3 : champs pré-remplis depuis le plan de masse */
+.input.propose { background: var(--gv-green-l); border-color: var(--gv-green); }
+.plan-note { margin-bottom: 14px; }
+.plan-note .link { margin-left: 8px; }
+
+/* lightbox (agrandissement des insertions) */
+#lightbox {
+  position: fixed; inset: 0; z-index: 300; background: rgba(0, 20, 45, 0.82);
+  display: flex; align-items: center; justify-content: center; cursor: zoom-out;
 }
-.fiche-etape:hover { border-color: var(--gv-green); }
-.fiche-etape .dot {
-  width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 600; flex: none; border: 1px solid var(--line); color: var(--muted); background: var(--card);
-}
-.fiche-etape.done .dot { background: var(--gv-green); border-color: var(--gv-green); color: var(--gv-navy); }
-.fiche-etape span { font-size: 13px; font-weight: 500; color: var(--ink); }
+#lightbox[hidden] { display: none; }
+#lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; box-shadow: 0 12px 60px rgba(0, 0, 0, 0.5); }
+.planche-img.zoomable { cursor: zoom-in; }
 .fiche-etape small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
 
 .placeholder {
@@ -323,33 +333,6 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 .dropzone.over { border-color: var(--gv-green); background: var(--gv-green-l); }
 .dropzone b { display: block; color: var(--gv-navy); font-size: 14px; margin-bottom: 3px; }
 .dropzone span { font-size: 12px; }
-
-.prompt-box { margin: 6px 0 12px; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-.prompt-box summary { padding: 9px 13px; cursor: pointer; font-size: 12.5px; font-weight: 500; color: var(--gv-navy); background: var(--bg); }
-.prompt-box pre {
-  margin: 0; padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
-  font-family: "Consolas", "SF Mono", monospace; font-size: 11.5px; line-height: 1.55;
-  color: var(--ink); max-height: 260px; overflow: auto; background: var(--card);
-}
-.prompt-box .btn { margin: 0 14px 12px; }
-
-.mode-emploi { margin: 8px 0 14px; padding-left: 20px; color: var(--ink); font-size: 12.5px; }
-.mode-emploi li { margin-bottom: 4px; }
-
-.kit-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0 4px; }
-.kit-head span { font-size: 12.5px; font-weight: 600; color: var(--gv-navy); }
-.kit-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 8px; }
-.kit-item { border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--card); }
-.kit-item.off { opacity: 0.85; }
-.kit-item img { display: block; width: 100%; height: 96px; object-fit: cover; background: var(--bg); }
-.kit-item .kit-manquant {
-  height: 96px; display: flex; align-items: center; justify-content: center;
-  background: var(--bg); color: var(--faint); font-size: 12px; font-style: italic;
-  border-bottom: 1px dashed var(--gv-grey);
-}
-.kit-lbl { padding: 7px 9px; }
-.kit-lbl b { display: block; font-size: 12px; color: var(--gv-navy); font-weight: 600; }
-.kit-lbl small { display: block; font-size: 10.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
 
 .card.retenue { border-color: var(--gv-green); box-shadow: 0 0 0 2px var(--gv-green-l); }
 

@@ -1,11 +1,8 @@
-"""Étape 5 — Insertion IA, générateur de prompt SANS API (PLAN §6 bis).
+"""Étape 4 — Insertion IA : génération directe via l'API Gemini.
 
-Endpoints : upload photo du site, sauvegarde des consignes, construction du
-prompt + kit d'images à joindre, service des images du kit (photo / plan de
-masse / coupe), ré-import de l'image générée dans ChatGPT (zone de dépôt),
-choix de l'image retenue, et export de la fiche de validation d'emprise.
-
-Aucun appel réseau, aucune clé : tout est local et déterministe.
+Endpoints : upload/choix des photos du site, consignes, génération d'une
+insertion, sélection des images incluses au dossier DP, téléchargement JPEG,
+compteur de dépense local, et fiche de validation d'emprise (PPTX).
 """
 from __future__ import annotations
 
@@ -32,7 +29,11 @@ TAILLE_MAX = 40 * 1024 * 1024
 @router.get("/{projet_id}/insertion/statut")
 def statut_projet(projet_id: str):
     projet = _charger(projet_id)
-    return {**insertion_ia.apercu(), "etat": insertion_ia.etat(projet.model_dump())}
+    return {
+        **insertion_ia.apercu(),
+        "etat": insertion_ia.etat(projet.model_dump()),
+        "images_projet": projet.insertion.nb_images_generees,
+    }
 
 
 # ------------------------------------------------------------------ photo du site
@@ -151,7 +152,7 @@ def enregistrer_consignes(projet_id: str, corps: dict = Body(...)):
     return {"projet": projet}
 
 
-# ------------------------------------------------------------------ génération API (Gemini)
+# ------------------------------------------------------------------ génération (Gemini)
 
 @router.post("/{projet_id}/insertion/generer")
 def generer_insertion(projet_id: str, corps: dict = Body(default={})):
@@ -168,98 +169,51 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
     if not projet.insertion.retenue:
         projet.insertion.retenue = image["fichier"]
     projet.insertion.prompt = image.get("prompt")
+    projet.insertion.nb_images_generees += 1
+    images_global = insertion_ia.incrementer_compteur_global()
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet, "image": image}
+    return {"projet": projet, "image": image,
+            "images_projet": projet.insertion.nb_images_generees,
+            "images_global": images_global}
 
 
-# ------------------------------------------------------------------ prompt + kit
+# ------------------------------------------------------------------ sélection & exports
 
-@router.post("/{projet_id}/insertion/prompt")
-def generer_prompt(projet_id: str, corps: dict = Body(default={})):
-    """Construit le prompt (6 blocs) + le kit d'images. Persiste le prompt."""
+@router.put("/{projet_id}/insertion/dossier")
+def inclure_au_dossier(projet_id: str, corps: dict = Body(...)):
+    """Inclut / retire une insertion du dossier DP exporté."""
     projet = _charger(projet_id)
-    affinage = str(corps.get("affinage", "") or "")
-    if affinage:
-        projet.insertion.affinage = affinage[:2000]
-    data = projet.model_dump()
-    prompt = insertion_ia.construire_prompt(data, affinage=affinage)
-    projet.insertion.prompt = prompt
+    fichier = corps.get("fichier")
+    if fichier not in [im.get("fichier") for im in projet.insertion.images]:
+        raise HTTPException(status_code=400, detail="Image inconnue.")
+    selection = [f for f in projet.insertion.dans_dossier if f != fichier]
+    if corps.get("inclure"):
+        selection.append(fichier)
+    projet.insertion.dans_dossier = selection
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet, "prompt": prompt, "kit": insertion_ia.kit(data)}
+    return {"projet": projet}
 
 
-@router.get("/{projet_id}/insertion/kit/{role}")
-def servir_kit(projet_id: str, role: str, t: int = 0):
-    """Sert une image du kit (photo / plan / coupe), générée à la demande."""
-    if role not in ("photo", "plan", "coupe"):
-        raise HTTPException(status_code=404, detail="Rôle de kit inconnu.")
-    projet = _charger(projet_id).model_dump()
-    chemin = insertion_ia.image_kit(projet, role)
-    if not chemin or not Path(chemin).exists():
-        raise HTTPException(status_code=404, detail="Image du kit indisponible (input manquant).")
-    return FileResponse(chemin)
-
-
-@router.get("/{projet_id}/insertion/kit.zip")
-def telecharger_kit(projet_id: str):
-    """Télécharge d'un coup les images disponibles du kit (à joindre dans ChatGPT)."""
-    import io
-    import zipfile
-
+@router.get("/{projet_id}/insertion/image.jpg")
+def telecharger_jpeg(projet_id: str, chemin: str):
+    """Sert une insertion convertie en JPEG (usage hors outil)."""
     from fastapi.responses import Response
+    import io
 
-    projet = _charger(projet_id).model_dump()
-    noms = {"photo": "1_photo_site", "plan": "2_plan_de_masse", "coupe": "3_coupe"}
+    from PIL import Image
+
+    cible = (config.PROJETS_DIR / chemin).resolve()
+    base = config.assets_dir(projet_id).resolve()
+    if base not in cible.parents or not cible.exists():
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
     buf = io.BytesIO()
-    n = 0
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for role, base in noms.items():
-            chemin = insertion_ia.image_kit(projet, role)
-            if chemin and Path(chemin).exists():
-                z.write(chemin, f"{base}{Path(chemin).suffix}")
-                n += 1
-    if not n:
-        raise HTTPException(status_code=400, detail="Aucune image de kit disponible (ajoutez au moins la photo du site).")
-    return Response(
-        buf.getvalue(),
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="kit_insertion_{projet_id}.zip"'},
-    )
-
-
-# ------------------------------------------------------------------ ré-import (drop zone)
-
-@router.post("/{projet_id}/insertion/import")
-async def importer_image(projet_id: str, fichier: UploadFile):
-    """Ré-importe l'image générée par ChatGPT (zone de dépôt)."""
-    ext = Path(fichier.filename or "").suffix.lower()
-    if ext not in EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Image PNG, JPG ou WEBP attendue.")
-    contenu = await fichier.read()
-    if len(contenu) > TAILLE_MAX:
-        raise HTTPException(status_code=400, detail="Image trop volumineuse (40 Mo max).")
-
-    projet = _charger(projet_id)
-    dossier = config.assets_dir(projet_id) / "insertion"
-    dossier.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
-    nom = f"insertion_{stamp}{ext}"
-    (dossier / nom).write_bytes(contenu)
-    rel = str((dossier / nom).relative_to(config.PROJETS_DIR)).replace("\\", "/")
-
-    image = {
-        "fichier": rel,
-        "date": datetime.now().isoformat(timespec="seconds"),
-        "etiquette": "visuel IA — usage commercial",
-    }
-    projet.insertion.images = [image, *projet.insertion.images]
-    if not projet.insertion.retenue:
-        projet.insertion.retenue = rel
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
-    return {"projet": projet, "image": image}
+    with Image.open(cible) as im:
+        im.convert("RGB").save(buf, "JPEG", quality=92)
+    nom = Path(chemin).stem + ".jpg"
+    return Response(buf.getvalue(), media_type="image/jpeg",
+                    headers={"Content-Disposition": f'attachment; filename="{nom}"'})
 
 
 @router.put("/{projet_id}/insertion/retenue")
@@ -275,6 +229,7 @@ def choisir_retenue(projet_id: str, corps: dict = Body(...)):
 def retirer_image(projet_id: str, fichier: str):
     projet = _charger(projet_id)
     projet.insertion.images = [im for im in projet.insertion.images if im.get("fichier") != fichier]
+    projet.insertion.dans_dossier = [f for f in projet.insertion.dans_dossier if f != fichier]
     if projet.insertion.retenue == fichier:
         projet.insertion.retenue = (projet.insertion.images[0]["fichier"]
                                     if projet.insertion.images else None)

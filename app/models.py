@@ -83,21 +83,23 @@ class Notice(BaseModel):
 
 
 class Insertion(BaseModel):
-    """Insertion IA — visuel commercial, jamais pièce DP6 (cf. PLAN §6 bis).
+    """Insertion IA — génération directe via l'API Gemini (flux 17/07/2026).
 
-    Générateur de prompt SANS API (flux figé 16/07/2026) : l'outil assemble un
-    prompt ultra-détaillé + un kit d'images à joindre ; l'utilisateur génère
-    l'insertion dans son propre ChatGPT, puis ré-importe l'image retenue ici.
+    Les insertions sélectionnées (`dans_dossier`) entrent au dossier DP en
+    planches « visuel d'illustration » ; le photomontage DP6 du BE, s'il est
+    fourni, garde la priorité sur la planche avant/après.
     """
     photo: Optional[str] = None            # photo du site active (base de génération)
     photos: list[str] = Field(default_factory=list)  # photos du site déposées (multi)
     consignes: str = ""                    # consignes libres pour le prompt
-    affinage: str = ""                     # dernières consignes de correction (affiner le prompt)
+    affinage: str = ""                     # dernières corrections demandées
     echelle_desc: str = ""                 # ce que représente le repère d'échelle (ex. « largeur d'une place »)
     echelle_distance_m: Optional[float] = None  # distance réelle du repère (m), reportée au prompt
-    prompt: Optional[str] = None           # dernier prompt généré (traçabilité)
-    images: list[dict] = Field(default_factory=list)  # images ré-importées {fichier, date, etiquette}
+    prompt: Optional[str] = None           # dernier prompt envoyé (traçabilité)
+    images: list[dict] = Field(default_factory=list)  # images générées {fichier, date, etiquette, modele}
     retenue: Optional[str] = None          # image retenue (fiche d'emprise)
+    dans_dossier: list[str] = Field(default_factory=list)  # images incluses au dossier DP
+    nb_images_generees: int = 0            # compteur de dépense locale (projet)
 
 
 class Projet(BaseModel):

@@ -22,7 +22,6 @@ PIECES_DP = [
     {"code": "dp1_aerien", "titre": "DP1 · Vue aérienne", "mode": "auto"},
     {"code": "dp2", "titre": "DP2 · Plan de masse", "mode": "mixte"},
     {"code": "dp3", "titre": "DP3 · Plan en coupe", "mode": "mixte"},
-    {"code": "dp4", "titre": "DP4 · Façades et toitures", "mode": "mixte"},
     {"code": "dp6", "titre": "DP6 · Insertion paysagère", "mode": "be"},
     {"code": "dp7", "titre": "DP7 · Photo environnement proche", "mode": "be"},
     {"code": "dp8", "titre": "DP8 · Photo paysage lointain", "mode": "be"},
@@ -87,7 +86,7 @@ def _statut_piece(piece: dict, projet: Projet) -> dict:
         return {**piece, "statut": statut, "detail": detail}
 
     if mode == "mixte":
-        if code in ("dp3", "dp4") and projet.ombriere.famille:
+        if code == "dp3" and projet.ombriere.famille:
             return {**piece, "statut": "prete", "detail": "générée (paramétrique)"}
         return {**piece, "statut": "en_attente", "detail": "tracé/upload BE attendu"}
 

@@ -1,8 +1,9 @@
-"""Module Insertion IA (générateur de prompt SANS API) — tests offline.
+"""Module Insertion IA (génération Gemini) — tests offline.
 
-Flux figé 16/07/2026 : plus d'appel Gemini. On teste l'assemblage déterministe
-du prompt, la disponibilité du kit d'images, la conversion coupe PDF → PNG et
-la génération de la fiche de validation d'emprise.
+Flux 17/07/2026 : génération directe via l'API. On teste l'assemblage
+déterministe du prompt (dont flèche de pente + poteaux du plan de masse),
+la résolution des images d'entrée, le compteur de dépense local et la
+fiche de validation d'emprise. Aucun appel réseau.
 """
 import pytest
 from PIL import Image
@@ -10,12 +11,12 @@ from PIL import Image
 from app import config, fiche_emprise, insertion_ia
 
 
-def test_apercu_sans_api():
+def test_apercu_expose_cout_et_modele():
     a = insertion_ia.apercu()
-    assert a["mode"] == "generateur_prompt"
-    assert a["api"] is False
-    assert "ChatGPT" in a["cible"]
-    assert a["mode_emploi"] and a["rappels"]
+    assert "api_configuree" in a
+    assert a["api_modele"]
+    assert a["cout_image_eur"] > 0
+    assert a["images_global"] >= 0
 
 
 def test_prompt_reprend_type_consignes_affinage():
@@ -37,19 +38,22 @@ def test_prompt_reprend_type_consignes_affinage():
     assert "watermark" in prompt           # contraintes négatives
 
 
+def test_prompt_plan_mentionne_fleche_et_poteaux(tmp_path, monkeypatch):
+    """Avec un DP2, le prompt impose la flèche de pente et les repères poteaux."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    uploads = tmp_path / "p.assets" / "uploads"
+    uploads.mkdir(parents=True)
+    Image.new("RGB", (80, 60), (250, 250, 250)).save(uploads / "dp2.png")
+    projet = {"id": "p", "ombriere": {"famille": "START PLAINE Bas"},
+              "documents": {"dp2": {"fichier": "p.assets/uploads/dp2.png"}}}
+    prompt = insertion_ia.construire_prompt(projet)
+    assert "FLÈCHE" in prompt and "sens de la pente" in prompt
+    assert "POTEAUX" in prompt
+
+
 def test_prompt_projet_vide_ne_plante_pas():
     prompt = insertion_ia.construire_prompt({})
     assert "RÔLE" in prompt and "ombrière" in prompt.lower()
-
-
-def test_kit_disponibilite(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
-    projet = {"id": "proj-x", "ombriere": {"famille": "START PLAINE Double"},
-              "documents": {}, "insertion": {}}
-    kit = {it["role"]: it for it in insertion_ia.kit(projet)}
-    assert kit["photo"]["disponible"] is False        # pas de photo
-    assert kit["plan"]["disponible"] is False          # pas de DP2
-    assert kit["coupe"]["disponible"] is True          # coupe du catalogue existe
 
 
 def test_image_kit_coupe_convertit_pdf_en_png(tmp_path, monkeypatch):
@@ -68,6 +72,14 @@ def test_etat_reflete_inputs(tmp_path, monkeypatch):
     assert e["photo"] is False
     assert e["coupe"] is True
     assert e["prete"] is False
+
+
+def test_compteur_global_incremente(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    assert insertion_ia.compteur_global() == 0
+    assert insertion_ia.incrementer_compteur_global() == 1
+    assert insertion_ia.incrementer_compteur_global() == 2
+    assert insertion_ia.compteur_global() == 2
 
 
 def test_fiche_sans_image_retenue_leve(tmp_path, monkeypatch):
