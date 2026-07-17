@@ -56,17 +56,17 @@ def _rendre(chemin_pdf: Path) -> tuple[Image.Image, str]:
     return image, texte
 
 
-def _m_par_px(texte: str) -> float | None:
-    """1 px rendu -> mètres réels, via l'échelle du cartouche (ex. 1/200)."""
+def _echelle_et_m_par_px(texte: str) -> tuple[str | None, float | None]:
+    """Échelle du cartouche (« 1/200 ») et mètres réels par pixel rendu."""
     lecture = analyser_texte(texte)
     echelle = lecture.get("echelle_plan")  # "1/200"
     if not echelle:
-        return None
+        return None, None
     try:
         denominateur = float(echelle.split("/")[1])
     except (IndexError, ValueError):
-        return None
-    return (25.4 / DPI) * denominateur / 1000.0
+        return echelle, None
+    return echelle, (25.4 / DPI) * denominateur / 1000.0
 
 
 # ------------------------------------------------------------------ masques
@@ -206,7 +206,7 @@ def analyser_plan(chemin_pdf: Path) -> dict | None:
     except Exception:
         return None
     arr = np.asarray(image)
-    m_px = _m_par_px(texte)
+    echelle, m_px = _echelle_et_m_par_px(texte)
     aire_min_px = (SURFACE_MIN_M2 / (m_px * m_px)) if m_px \
         else (arr.shape[0] * arr.shape[1] * FRACTION_MIN)
 
@@ -243,6 +243,7 @@ def analyser_plan(chemin_pdf: Path) -> dict | None:
     return {
         "rangees": rangees,
         "m_par_px": m_px,
+        "echelle_plan": echelle,
         "pente_haut_px": haut[0] if haut else None,
         "pente_bas_px": bas[0] if bas else None,
         "taille_px": (arr.shape[1], arr.shape[0]),

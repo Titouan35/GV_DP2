@@ -75,6 +75,27 @@ def test_preserver_scene_restaure_hors_zone(tmp_path):
     assert abs(coin.mean()) < 2
 
 
+def test_decadrer_retire_l_habillage_type_plan(tmp_path):
+    """Photo montée servie dans un gabarit A3 (cadre blanc + cartouche) : on
+    recadre sur la photo ; une image déjà plein cadre repart intacte."""
+    rng = np.random.default_rng(3)
+    orig = Image.fromarray(rng.integers(60, 170, (300, 400, 3), dtype=np.uint8))
+    chemin = tmp_path / "orig.png"
+    orig.save(chemin)
+
+    # gabarit 842x595 : photo 4:3 en haut, cartouche texte en bas, cadre blanc
+    gabarit = np.full((595, 842, 3), 255, dtype=np.uint8)
+    gabarit[20:440, 41:601] = rng.integers(60, 170, (420, 560, 3), dtype=np.uint8)
+    for y in range(470, 580, 14):  # lignes fines du cartouche
+        gabarit[y:y + 2, 60:800] = 40
+    sortie = insertion_ia.decadrer(chemin, _png(Image.fromarray(gabarit)))
+    res = Image.open(io.BytesIO(sortie))
+    assert (res.width, res.height) == (560, 420)   # recadré sur la photo
+
+    plein_cadre = _png(Image.fromarray(rng.integers(60, 170, (300, 400, 3), dtype=np.uint8)))
+    assert insertion_ia.decadrer(chemin, plein_cadre) == plein_cadre
+
+
 def test_preserver_scene_cadrage_different(tmp_path):
     """Ratio d'image différent : on rend l'image générée sans y toucher."""
     orig = Image.new("RGB", (400, 300), (100, 100, 100))
@@ -116,25 +137,19 @@ def test_photo_guidee_dessine_les_traces(tmp_path, monkeypatch):
     assert "1 emprise" in insertion_ia.resume_guides(guides)
 
 
-def test_prompt_guides_prioritaires(tmp_path, monkeypatch):
+def test_prompt_guides_confirment_le_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet = _projet_avec_guides(tmp_path)
     guides = insertion_ia.guides_actifs(projet)
     prompt = insertion_ia.construire_prompt(
-        projet, guides=guides, implantation_resume="1 rangée",
-        pieces_jointes=["photo", "guides", "schema"])
-    assert "TRACÉS SUR PHOTO FONT FOI" in prompt
-    assert "polygones VERTS" in prompt
+        projet, guides=guides,
+        plan_infos={"echelle": "1/200", "dims_m": [(17.9, 5.4)]},
+        idx={"photo": 1, "plan": 2, "guides": 3, "coupe": 4})
+    assert "polygones verts tracés sur l'image 3" in prompt
+    assert "épouser exactement" in prompt
     assert "2,5 m" in prompt and "largeur d'une place" in prompt
-    assert "ne reproduis NI les traits" in prompt
-    # l'implantation du plan passe en info texte quand les guides existent
-    assert "Pour information, le plan de masse officiel" in prompt
-    assert "SCHÉMA D'IMPLANTATION JOINT FAIT FOI" not in prompt
-    # avec des emprises tracées, elles seules bornent l'étendue
-    assert "celle des emprises vertes tracées" in prompt
-    assert "fléché sur le schéma" not in prompt  # le schéma n'est pas joint
-    # le format de sortie interdit bandeaux et légendes (contamination schéma)
-    assert "AUCUN bandeau" in prompt and "MÊME cadrage" in prompt
+    assert "Ne reproduis pas ces tracés" in prompt
+    assert "LE PLAN DE MASSE (image 2)" in prompt  # légende du plan conservée
 
 
 def test_guides_absents(tmp_path, monkeypatch):

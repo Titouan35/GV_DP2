@@ -24,7 +24,7 @@ import pypdfium2 as pdfium
 from PIL import Image
 
 from . import config
-from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
+from .catalogue import CATALOGUE, parametres_effectifs
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 GEMINI_MODELE_DEFAUT = "gemini-3-pro-image"  # Nano Banana Pro (placement + rendu)
@@ -92,219 +92,146 @@ def _fmt(v, suffixe="", defaut="—"):
     return f"{v}{suffixe}"
 
 
-def construire_prompt(projet: dict, affinage: str = "",
-                      implantation_resume: str | None = None,
-                      pieces_jointes: list[str] | None = None,
-                      guides: dict | None = None) -> str:
-    """Assemble le prompt ultra-détaillé (6 blocs) depuis les inputs du projet.
+DESCRIPTIONS_COUPE = {
+    "START PLAINE Bas": "monopente, poteau unique côté haut du versant",
+    "START PLAINE Haut": "monopente, poteau unique côté bas du versant",
+    "START PLAINE Double": "poteau central unique, toiture en T à pente continue",
+}
 
-    Déterministe : mêmes inputs → même prompt. Rédigé en français, adressé à
-    l'éditeur photo Gemini. Tolère les champs manquants.
-    `implantation_resume` : résumé du schéma d'implantation extrait du plan.
-    `guides` : guides tracés sur la photo (guides_actifs) — contrainte n°1.
-    `pieces_jointes` : rôles des images jointes, dans l'ordre d'envoi.
+
+def construire_prompt(projet: dict, affinage: str = "",
+                      plan_infos: dict | None = None,
+                      guides: dict | None = None,
+                      idx: dict | None = None,
+                      coupe_be: bool = False) -> str:
+    """Prompt Gemini co-écrit avec Florent le 17/07/2026 (v3).
+
+    Court et déclaratif : une donnée = une source. Le plan de masse est JOINT
+    BRUT et le prompt explique ses conventions de dessin (zone bleue, traits
+    rouges, carrés gris, HAUT/BAS DE RAMPANT) ; le fond orthophoto sert de
+    pont entre la vue aérienne et la photo au sol.
+
+    `plan_infos` : {"echelle": "1/200"|None, "dims_m": [(L, l), ...]}.
+    `guides` : guides_actifs(projet). `idx` : {role: numéro d'image jointe}.
+    `coupe_be` : la coupe jointe est la DP3 du bureau d'études (elle prime :
+    on ne décrit pas le profil catalogue).
     """
+    idx = idx or {}
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
     a_type = bool(omb.get("famille") or omb.get("puissance_kwc"))
     p = parametres_effectifs(omb) if a_type else None
 
-    plan_dispo = _document_image(projet, "dp2") is not None
-    coupe_dispo = _coupe_source(projet) is not None
-
-    # -- bloc 1 : rôle & tâche
-    b1 = (
-        "RÔLE — Tu es un éditeur photo expert en photomontage architectural. "
-        "À partir de la PHOTO du site que je te fournis, insère une ombrière "
-        "photovoltaïque de parking de façon photoréaliste et crédible, sans rien "
-        "modifier d'autre dans la scène (bâtiments, véhicules, sol, ciel, "
-        "marquages, végétation)."
-    )
-
-    # -- bloc 2 : la scène et l'implantation
-    b2_lignes = [
-        "LA SCÈNE — La photo montre l'aire de stationnement à équiper. Conserve à "
-        "l'identique les mâts d'éclairage, arbres, bordures, marquages au sol et "
-        "véhicules déjà présents.",
+    blocs = [
+        "Modifie la photo (image 1) : ajoute une ombrière photovoltaïque de "
+        "parking, photoréaliste, comme si elle était déjà construite."
     ]
-    if guides:
-        consignes_guides = []
+
+    # -- le plan de masse et sa légende
+    if "plan" in idx:
+        echelle = ""
+        if plan_infos and plan_infos.get("echelle"):
+            echelle = f", à l'échelle {plan_infos['echelle']}"
+        dims = ""
+        if plan_infos and plan_infos.get("dims_m"):
+            n = len(plan_infos["dims_m"])
+            liste = " ; ".join(
+                f"{L:g} m x {l:g} m".replace(".", ",") for L, l in plan_infos["dims_m"])
+            dims = f" — {n} rangée{'s' if n > 1 else ''} de {liste}"
+        entraxe = ""
+        if omb.get("entraxe_m"):
+            entraxe = f", espacées de {omb['entraxe_m']:g} m".replace(".", ",")
+        blocs.append(
+            f"LE PLAN DE MASSE (image {idx['plan']}) — comment le lire. C'est le "
+            "plan officiel du projet, dessiné sur une photo aérienne du site, vue "
+            f"de dessus{echelle}. La zone bleue quadrillée est le calepinage des "
+            f"panneaux : c'est l'emprise exacte de l'ombrière à construire{dims}. "
+            "Les traits rouges qui traversent la zone bleue sont les entraxes : "
+            f"chaque trait rouge correspond à une file de poteaux{entraxe}. Les "
+            "carrés gris dans la zone bleue sont les fondations des poteaux. Les "
+            "étiquettes « HAUT DE RAMPANT » et « BAS DE RAMPANT » désignent les "
+            "deux bords du versant : la toiture descend du bord HAUT vers le bord "
+            "BAS. Tout le reste du plan (traits de raccordement colorés, "
+            "cartouche, textes) est administratif : ignore-le."
+        )
+
+    # -- placement
+    if "plan" in idx:
+        placement = [
+            "PLACEMENT. Repère sur la photo aérienne du plan les bâtiments, les "
+            "rangées de stationnement et les marquages qui entourent la zone "
+            "bleue. Retrouve ces mêmes repères dans la photo au sol (image 1) et "
+            "pose l'ombrière exactement à cet emplacement, avec la même "
+            "orientation que sur le plan."
+        ]
+    else:
+        placement = [
+            "PLACEMENT. Implante l'ombrière sur la zone de stationnement la plus "
+            "cohérente de la photo."
+        ]
+    if guides and "guides" in idx:
+        consignes = []
         if guides["emprises"]:
-            n = len(guides["emprises"])
-            consignes_guides.append(
-                "les polygones VERTS délimitent l'emprise au sol EXACTE de "
-                f"{'chacune des ' + str(n) + ' rangées' if n > 1 else 'la rangée'} "
-                "d'ombrière : construis l'ombrière pour que sa projection au sol "
-                "épouse précisément chaque polygone vert (poteaux à l'intérieur, "
-                "rien qui déborde)"
+            consignes.append(
+                f"Les polygones verts tracés sur l'image {idx['guides']} "
+                "confirment cet emplacement directement dans la photo : l'emprise "
+                "au sol de l'ombrière doit les épouser exactement."
             )
         if guides["calibrage"]:
             cal = guides["calibrage"]
-            lib = f", {cal['libelle']}" if cal.get("libelle") else ""
-            consignes_guides.append(
-                "le segment JAUNE est un repère d'échelle : il mesure "
-                f"{cal['distance_m']:g} m dans la réalité{lib} ; sers-t'en pour "
-                "dimensionner l'ombrière".replace(".", ",")
-            )
-        b2_lignes.append(
-            "PRIORITÉ ABSOLUE, LES TRACÉS SUR PHOTO FONT FOI : la deuxième image "
-            "est la MÊME photo annotée de guides ; " + " ; ".join(consignes_guides) +
-            ". Ces tracés sont des GUIDES DE TRAVAIL : ne reproduis NI les traits "
-            "verts, NI le segment jaune, NI les numéros dans l'image finale."
-        )
-    if implantation_resume and guides:
-        b2_lignes.append(
-            f"Pour information, le plan de masse officiel indique : {implantation_resume}. "
-            "Respecte ces proportions et ce sens de pente pour tout ce que les "
-            "tracés verts ne montrent pas."
-        )
-    elif implantation_resume:
-        b2_lignes.append(
-            "IMPÉRATIF, LE SCHÉMA D'IMPLANTATION JOINT FAIT FOI : il est extrait du "
-            "plan de masse officiel (vue de dessus). Les zones BLEUES sont l'emprise "
-            f"exacte des rangées de panneaux ({implantation_resume}), les traits ROUGES "
-            "la trame des poteaux, la grande flèche le sens de DESCENTE de la pente. "
-            "Repère sur la photo les rangées de stationnement correspondantes et pose "
-            "l'ombrière exactement là : même nombre de rangées, mêmes proportions, même "
-            "orientation relative, versant descendant dans le sens de la flèche. "
-            "Ne couvre RIEN d'autre que ces emprises, ni plus, ni moins."
-        )
-    elif plan_dispo:
-        b2_lignes.append(
-            "IMPÉRATIF, LE PLAN DE MASSE JOINT FAIT FOI : reproduis EXACTEMENT le nombre "
-            "de rangées d'ombrières, leur position et leur orientation telles qu'elles "
-            "figurent sur le plan, par rapport au bâtiment, à l'entrée et aux limites du "
-            "parking. Ne couvre QUE les rangées indiquées au plan, ni plus, ni moins, et "
-            "respecte le sens de la pente indiqué."
-        )
-    else:
-        b2_lignes.append(
-            "Aucun plan de masse joint : implante l'ombrière sur la zone de parking "
-            "la plus dégagée et la plus cohérente de la photo."
-        )
-    b2 = " ".join(b2_lignes)
-
-    # -- bloc 3 : l'objet, spécifié précisément (le linéaire vient du schéma)
-    if p:
-        double = p.get("double")
-        forme = "double pente (structure en T, poteau central)" if double else \
-            f"monopente (poteau côté {p.get('poteau', 'haut')})"
-        modules = ("Couverture de modules photovoltaïques full black (noirs, finition "
-                   "MATE, aucun reflet), sous-face claire.")
-        if omb.get("module_puissance_wc") or omb.get("module_dimensions"):
-            det = ", ".join(filter(None, [
-                f"{omb['module_puissance_wc']:g} Wc" if omb.get("module_puissance_wc") else None,
-                omb.get("module_dimensions"),
-            ]))
-            modules = ("Couverture de modules photovoltaïques full black (noirs, finition "
-                       f"MATE, aucun reflet) de {det}, sous-face claire.")
-        implantation_source = ("les emprises vertes tracées sur la photo" if guides
-                               else "le schéma d'implantation")
-        b3 = (
-            "L'OBJET — Ombrière de parking type « {fam} », {forme}. "
-            "Profil : {prof} de profondeur couverte, pente {pente}, hauteur ≈ {hh} au "
-            "point haut et ≈ {hb} au point bas. Le linéaire et le nombre de rangées "
-            "suivent " + implantation_source + ". Structure en acier galvanisé gris "
-            "clair, sans aucun marquage de couleur ; poteaux caisson, arbalétrier "
-            "effilé et bracon. {modules} {coupe}"
-        ).format(
-            fam=libelle_coupe(p.get("famille")),
-            forme=forme,
-            modules=modules,
-            prof=_fmt(p.get("profondeur_m"), " m"),
-            pente=_fmt(p.get("pente_deg"), "°"),
-            hh=_fmt(p.get("h_haut_m"), " m"),
-            hb=_fmt(p.get("h_bas_m"), " m"),
-            coupe=("Reporte-toi à la COUPE technique jointe pour le profil et les "
-                   "proportions exactes." if coupe_dispo else ""),
-        ).strip()
-    else:
-        b3 = (
-            "L'OBJET — Ombrière de parking classique : poteaux en acier galvanisé "
-            "gris clair, structure fine, modules photovoltaïques full black (noirs "
-            "mats). Renseigne le type d'ombrière à l'étape 3 pour un profil précis."
-        )
-
-    # -- bloc 4 : échelle (avec des emprises tracées, elles seules dimensionnent
-    # l'ombrière : citer un nombre de places pousserait le modèle à déborder)
-    nb_places = omb.get("nb_places")
-    b4_lignes = []
-    if guides and guides.get("emprises"):
-        b4_lignes.append(
-            "ÉCHELLE — Une place de stationnement = 2,50 m de large. L'étendue de "
-            "l'ombrière est celle des emprises vertes tracées, ni plus, ni moins."
-        )
-    elif nb_places:
-        b4_lignes.append(
-            f"ÉCHELLE — L'ombrière couvre environ {nb_places:g} places de "
-            "stationnement (une place = 2,50 m de large)."
-        )
-    else:
-        b4_lignes.append(
-            "ÉCHELLE — Une place de stationnement = 2,50 m de large : sers-t'en "
-            "comme repère pour dimensionner l'ombrière."
-        )
-    if p:
-        b4_lignes.append(
-            f"La garde au sol sous la panne basse est d'environ {_fmt(p.get('h_bas_m'), ' m')} "
-            "(passage véhicule dessous). Dimensionne l'ombrière en cohérence avec ces repères."
-        )
-    echelle_desc = (ins.get("echelle_desc") or "").strip()
-    echelle_d = ins.get("echelle_distance_m")
-    if echelle_desc and echelle_d:
-        b4_lignes.append(
-            f"Repère d'échelle relevé sur la photo : {echelle_desc} mesure environ "
-            f"{_fmt(echelle_d, ' m')} ; sers-t'en pour dimensionner l'ombrière à la bonne taille."
-        )
-    b4 = " ".join(b4_lignes)
-
-    # -- bloc 5 : lumière & intégration
-    b5 = (
-        "LUMIÈRE & INTÉGRATION — Reproduis des ombres portées cohérentes en "
-        "direction et longueur avec celles des mâts, arbres et véhicules déjà "
-        "visibles. Conserve le grain, la netteté, l'exposition et la balance des "
-        "couleurs de la photo source : le montage doit sembler pris au même instant. "
-        "Surfaces MATES partout : aucun reflet spéculaire, aucun éblouissement, "
-        "aucun effet miroir sur les modules ni sur la structure. "
-        "Pour le réalisme de la structure et des matériaux, appuie-toi sur la PHOTO "
-        "DE RÉFÉRENCE jointe (ombrière réelle en service) et sur des photos réelles "
-        "d'ombrières photovoltaïques de parkings de supermarchés français "
-        "(recherche d'images : « ombrière photovoltaïque parking supermarché France »)."
+            lib = f" ({cal['libelle']})" if cal.get("libelle") else ""
+            consignes.append(
+                f"Le segment jaune mesure {_fmt(cal['distance_m'])} m{lib}.")
+        consignes.append("Ne reproduis pas ces tracés dans le rendu.")
+        placement.append(" ".join(consignes))
+    placement.append(
+        "Si des arbres se trouvent sur l'emprise de l'ombrière, retire-les du "
+        "montage (ils seraient abattus avant les travaux) ; ne touche pas aux "
+        "arbres situés hors emprise."
     )
+    blocs.append(" ".join(placement))
 
-    # -- bloc 6 : consignes libres + contraintes négatives
+    # -- structure (la coupe DP3 du BE prime sur le profil catalogue)
+    if coupe_be:
+        tete = ("STRUCTURE. Reproduis le profil exact de la coupe technique du "
+                "projet, dessinée par le bureau d'études (dernière image)")
+    elif "coupe" in idx:
+        tete = "STRUCTURE. Reproduis le profil exact de la coupe technique (dernière image)"
+    else:
+        tete = "STRUCTURE. Ombrière de parking standard"
+    details = []
+    if p and not coupe_be:
+        details.append(DESCRIPTIONS_COUPE.get(p["famille"], "structure standard"))
+    h_bas = omb.get("garde_au_sol_m") or (p and p.get("h_bas_m"))
+    h_haut = omb.get("hauteur_hors_tout_m") or (p and p.get("h_haut_m"))
+    if h_bas and h_haut:
+        details.append(
+            f"hauteur {_fmt(h_bas)} m au point bas et {_fmt(h_haut)} m au point haut")
+    pente = omb.get("pente_deg") or (p and p.get("pente_deg"))
+    if pente:
+        details.append(f"pente {_fmt(pente)}°")
+    details.append("acier galvanisé nu")
+    modules = "toiture de modules photovoltaïques noirs mats"
+    if omb.get("module_dimensions"):
+        modules += f" de {omb['module_dimensions']}"
+    details.append(modules)
+    details.append("sous-face claire")
+    blocs.append(tete + " : " + ", ".join(details) + ".")
+
+    # -- rendu + consignes libres
+    rendu = ["RENDU. L'image produite est UNIQUEMENT la photo montée, plein "
+             "cadre, au même cadrage et au même ratio que l'image 1 : pas de "
+             "cadre, pas de cartouche, pas de légende, pas de mise en page de "
+             "plan — le plan et la coupe sont des références de travail, pas des "
+             "modèles de présentation. Même lumière et mêmes ombres que la photo "
+             "d'origine, sans aucun texte ni tracé."]
     libres = (ins.get("consignes") or "").strip()
     corrections = (affinage or ins.get("affinage") or "").strip()
-    b6_lignes = ["CONSIGNES & INTERDITS —"]
     if libres:
-        b6_lignes.append(f"Consignes : {libres}.")
+        rendu.append(libres if libres.endswith((".", "!", "?")) else libres + ".")
     if corrections:
-        b6_lignes.append(f"Corrections à appliquer : {corrections}.")
-    b6_lignes.append(
-        "Ne déplace pas les véhicules, ne modifie pas les bâtiments, n'invente pas "
-        "d'arrière-plan. Ne peins RIEN de bleu : aucune dalle, aucun marquage, aucune "
-        "surface bleue sur le bitume, aucune bande de couleur sur les poteaux. Le bleu "
-        "des documents techniques est une convention de dessin, pas une couleur à "
-        "reproduire. Conserve le revêtement du parking tel quel. Aucun reflet ajouté. "
-        "FORMAT DE SORTIE : exactement la photo d'origine (image 1) montée, au MÊME "
-        "cadrage et au MÊME ratio, plein cadre. AUCUN bandeau, AUCUN titre, AUCUNE "
-        "légende, AUCUNE bordure blanche, AUCUN texte, AUCUN watermark, AUCUN logo : "
-        "les mises en page des documents joints ne doivent pas déteindre sur le rendu. "
-        "Rends uniquement l'image finale, photoréaliste."
-    )
-    b6 = " ".join(b6_lignes)
-
-    blocs = [b1, b2, b3, b4, b5, b6]
-    if pieces_jointes:
-        NOMS = {"photo": "la PHOTO du site à modifier",
-                "guides": "la même photo ANNOTÉE des guides (emprises vertes, repère jaune)",
-                "schema": "le SCHÉMA D'IMPLANTATION (extrait du plan de masse)",
-                "plan": "le PLAN DE MASSE",
-                "coupe": "la COUPE technique du type d'ombrière",
-                "reference": "une PHOTO DE RÉFÉRENCE d'ombrière réelle (style uniquement)"}
-        liste = " ; ".join(f"image {i} = {NOMS.get(role, role)}"
-                           for i, role in enumerate(pieces_jointes, 1))
-        blocs.append(f"PIÈCES JOINTES — {liste}.")
+        rendu.append(corrections if corrections.endswith((".", "!", "?")) else corrections + ".")
+    blocs.append(" ".join(rendu))
 
     return "\n\n".join(blocs)
 
@@ -395,27 +322,20 @@ def image_kit(projet: dict, role: str) -> Path | None:
             return _pdf_premiere_page_png(source, assets / "kit_plan_masse.png")
         return source
 
-    if role == "schema":
-        # schéma d'implantation extrait du plan de masse (cache par date du plan)
-        source = _document_image(projet, "dp2")
-        if not source or source.suffix.lower() != ".pdf":
+    if role == "coupe_be":
+        # coupe DP3 importée par le bureau d'études : elle PRIME sur le catalogue
+        source = _document_image(projet, "dp3")
+        if not source:
             return None
-        from . import implantation
-        sortie = assets / "kit_schema_implantation.png"
-        if sortie.exists() and sortie.stat().st_mtime >= source.stat().st_mtime:
-            return sortie
-        return implantation.generer_schema(source, sortie)
+        if source.suffix.lower() == ".pdf":
+            return _pdf_premiere_page_png(source, assets / "kit_coupe_be.png")
+        return source
 
     if role == "coupe":
         source = _coupe_source(projet)
         if not source:
             return None
         return _coupe_nettoyee(source, assets / "kit_coupe.png")
-
-    if role == "reference":
-        chemin = (config.REPO_ROOT / "app" / "gabarits" / "refs"
-                  / "ombrieres_bellerive_sur_allier_ccbysa40.jpg")
-        return chemin if chemin.exists() else None
 
     return None
 
@@ -551,8 +471,9 @@ def _extraire_image(reponse: dict) -> bytes:
     raise InsertionError("Aucune image renvoyée par le modèle (réponse vide).")
 
 
-def _appel_gemini(parts: list[dict], recherche: bool = True) -> bytes:
-    """generateContent avec grounding Google Search (repli sans outil si refusé)."""
+def _appel_gemini(parts: list[dict]) -> bytes:
+    """generateContent, sans outil (le grounding Google Search a été retiré
+    le 17/07/2026 : source d'aléa, la structure vient de la coupe jointe)."""
     cle = os.environ.get("GEMINI_API_KEY")
     if not cle:
         raise InsertionError("Clé GEMINI_API_KEY absente (fichier .env CLAUDE).")
@@ -561,16 +482,11 @@ def _appel_gemini(parts: list[dict], recherche: bool = True) -> bytes:
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
     }
-    if recherche:
-        corps["tools"] = [{"google_search": {}}]  # inspiration images réelles
     try:
         with httpx.Client(timeout=180.0) as client:
             resp = client.post(url, headers={"x-goog-api-key": cle}, json=corps)
     except httpx.HTTPError as exc:
         raise InsertionError(f"Appel Gemini impossible ({exc.__class__.__name__}).") from exc
-    if resp.status_code == 400 and recherche:
-        # le modèle (ex. Lite) ne supporte pas le grounding : on réessaie sans
-        return _appel_gemini(parts, recherche=False)
     if resp.status_code == 429:
         raise InsertionError("Quota Gemini atteint (ou facturation à vérifier) : réessayez dans un instant.")
     if resp.status_code in (401, 403):
@@ -580,6 +496,63 @@ def _appel_gemini(parts: list[dict], recherche: bool = True) -> bytes:
     if resp.status_code != 200:
         raise InsertionError(f"Gemini a répondu HTTP {resp.status_code} : {resp.text[:300]}")
     return _extraire_image(resp.json())
+
+
+def decadrer(photo_origine: Path, image_generee: bytes) -> bytes:
+    """Retire un éventuel habillage « type plan » autour de la photo montée.
+
+    Malgré les consignes, le modèle reproduit parfois la mise en page des
+    documents joints (cadre blanc, cartouche, légende — constaté 17/07/2026
+    avec le plan de masse GVN). On repère le plus grand bloc NON blanc de
+    l'image générée ; si son ratio se rapproche de celui de la photo d'origine
+    alors que l'image entière s'en éloigne, on recadre dessus. Sans habillage
+    détecté, l'image repart telle quelle.
+    """
+    import io
+
+    from PIL import Image as PILImage
+
+    try:
+        orig = PILImage.open(photo_origine)
+        gen = PILImage.open(io.BytesIO(image_generee)).convert("RGB")
+    except OSError:
+        return image_generee
+    arr = np.asarray(gen.convert("L"))
+    non_blanc = arr < 235
+
+    def plus_grand_bloc(densites: np.ndarray, seuil: float) -> tuple[int, int] | None:
+        """Plus long groupe d'indices contigus au-dessus du seuil (trous < 6 px)."""
+        actifs = np.where(densites > seuil)[0]
+        if not len(actifs):
+            return None
+        blocs, debut = [], actifs[0]
+        for prec, cour in zip(actifs, actifs[1:]):
+            if cour - prec > 6:
+                blocs.append((debut, prec))
+                debut = cour
+        blocs.append((debut, actifs[-1]))
+        return max(blocs, key=lambda b: b[1] - b[0])
+
+    # la photo = le plus grand bloc de lignes denses (le cartouche, fait de
+    # traits fins, est séparé par une bande blanche et bien plus petit)
+    bloc_y = plus_grand_bloc(non_blanc.mean(axis=1), 0.35)
+    if not bloc_y:
+        return image_generee
+    y0, y1 = bloc_y[0], bloc_y[1] + 1
+    bloc_x = plus_grand_bloc(non_blanc[y0:y1].mean(axis=0), 0.35)
+    if not bloc_x:
+        return image_generee
+    x0, x1 = bloc_x[0], bloc_x[1] + 1
+    if (x1 - x0) > 0.98 * gen.width and (y1 - y0) > 0.98 * gen.height:
+        return image_generee  # pas d'habillage
+    ratio_o = orig.width / orig.height
+    ratio_avant = abs(gen.width / gen.height - ratio_o) / ratio_o
+    ratio_apres = abs((x1 - x0) / (y1 - y0) - ratio_o) / ratio_o
+    if ratio_apres < ratio_avant and ratio_apres < 0.12:
+        tampon = io.BytesIO()
+        gen.crop((x0, y0, x1, y1)).save(tampon, "PNG")
+        return tampon.getvalue()
+    return image_generee
 
 
 def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
@@ -631,10 +604,11 @@ def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
 def generer_image(projet: dict, affinage: str = "") -> dict:
     """Génère UNE insertion via Gemini (Nano Banana Pro).
 
-    Pipeline : photo + SCHÉMA D'IMPLANTATION (extrait du plan de masse ; repli
-    plan brut) + coupe + photo de référence réelle -> génération -> recollage
-    de la scène hors zones construites. Renvoie le dict image {fichier, date,
-    etiquette, modele, prompt}. Lève InsertionError avec un message actionnable.
+    Pipeline v3 (17/07/2026) : photo + PLAN DE MASSE BRUT (le prompt en
+    explique les conventions ; son fond orthophoto relie vue aérienne et photo
+    au sol) + guides tracés (s'il y en a) + coupe DP3 du BE (sinon coupe
+    catalogue nettoyée) -> génération -> recollage de la scène hors zones
+    construites. Renvoie {fichier, date, etiquette, modele, prompt}.
     """
     if not api_configuree():
         raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
@@ -642,10 +616,27 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
     if not photo:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
 
-    # guides tracés sur la photo (contrainte n°1) + schéma extrait du plan
-    implantation_resume = None
     roles: list[str] = ["photo"]
     chemins: list[Path] = [photo]
+
+    # image 2 : le plan de masse BRUT + ses infos extraites (échelle, rangées)
+    plan_infos = None
+    plan = image_kit(projet, "plan")
+    if plan:
+        roles.append("plan")
+        chemins.append(plan)
+        source = _document_image(projet, "dp2")
+        if source and source.suffix.lower() == ".pdf":
+            from . import implantation as mod_implantation
+            analyse = mod_implantation.analyser_plan(source)
+            if analyse:
+                plan_infos = {
+                    "echelle": analyse.get("echelle_plan"),
+                    "dims_m": [(z["longueur_m"], z["largeur_m"])
+                               for z in analyse["rangees"] if "longueur_m" in z],
+                }
+
+    # image 3 : la photo annotée des guides, si tracés
     guides = guides_actifs(projet)
     if guides:
         annotee = photo_guidee(projet)
@@ -655,34 +646,24 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
         else:
             guides = None
 
-    # implantation tirée du plan : résumé texte toujours ; le schéma n'est
-    # JOINT que sans guides photo (sinon sa mise en page déteint sur le rendu)
-    source = _document_image(projet, "dp2")
-    if source:
-        from . import implantation as mod_implantation
-        analyse = mod_implantation.analyser_plan(source) if source.suffix.lower() == ".pdf" else None
-        if analyse:
-            implantation_resume = mod_implantation.resume(analyse, schema_joint=not guides)
-    if not guides:
-        schema = image_kit(projet, "schema")
-        if schema:
-            roles.append("schema")
-            chemins.append(schema)
-        elif (plan := image_kit(projet, "plan")):
-            roles.append("plan")
-            chemins.append(plan)
-    for role in ("coupe", "reference"):
-        chemin = image_kit(projet, role)
-        if chemin:
-            roles.append(role)
-            chemins.append(chemin)
+    # dernière image : la coupe DP3 du BE prime, sinon la coupe catalogue
+    coupe_be = False
+    coupe = image_kit(projet, "coupe_be")
+    if coupe:
+        coupe_be = True
+    else:
+        coupe = image_kit(projet, "coupe")
+    if coupe:
+        roles.append("coupe")
+        chemins.append(coupe)
 
-    prompt = construire_prompt(projet, affinage=affinage,
-                               implantation_resume=implantation_resume,
-                               pieces_jointes=roles, guides=guides)
+    idx = {role: i + 1 for i, role in enumerate(roles)}
+    prompt = construire_prompt(projet, affinage=affinage, plan_infos=plan_infos,
+                               guides=guides, idx=idx, coupe_be=coupe_be)
     parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in chemins]
 
     image = _appel_gemini(parts)
+    image = decadrer(photo, image)
     if os.environ.get("GVDP_PRESERVER_SCENE", "1") != "0":
         image = preserver_scene(photo, image)
     dossier = config.assets_dir(projet["id"]) / "insertion"

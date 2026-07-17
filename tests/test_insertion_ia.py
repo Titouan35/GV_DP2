@@ -19,52 +19,56 @@ def test_apercu_expose_cout_et_modele():
     assert a["images_global"] >= 0
 
 
-def test_prompt_reprend_type_consignes_affinage():
-    projet = {
-        "ombriere": {"famille": "START PLAINE Double", "nb_travees": 6,
-                     "entraxe_m": 5.0, "nb_places": 60, "puissance_kwc": 500},
-        "insertion": {"consignes": "garder le mât d'éclairage"},
-    }
-    prompt = insertion_ia.construire_prompt(projet, affinage="assombris les modules")
-    # 6 blocs identifiables
-    for bloc in ("RÔLE", "LA SCÈNE", "L'OBJET", "ÉCHELLE", "LUMIÈRE", "CONSIGNES"):
-        assert bloc in prompt
-    assert "Double" in prompt          # libellé court de la coupe (Mono/Double)
-    assert "full black" in prompt
-    assert "2,50 m" in prompt              # repère d'échelle place de parking
-    assert "60 places" in prompt
-    assert "garder le mât d'éclairage" in prompt
-    assert "assombris les modules" in prompt
-    assert "watermark" in prompt           # contraintes négatives
-
-
-def test_prompt_schema_fait_foi():
-    """Avec un résumé d'implantation, le bloc scène impose le schéma joint."""
-    projet = {"ombriere": {"famille": "START PLAINE Bas"}}
+def test_prompt_v3_legende_du_plan():
+    """Le prompt explique les conventions du plan de masse (validé 17/07)."""
+    projet = {"ombriere": {"famille": "START PLAINE Double", "entraxe_m": 10.0,
+                           "garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5,
+                           "module_dimensions": "1762 x 1134 mm"}}
     prompt = insertion_ia.construire_prompt(
-        projet, implantation_resume="1 rangée · 17,9 m x 5,4 m",
-        pieces_jointes=["photo", "schema", "coupe", "reference"])
-    assert "SCHÉMA D'IMPLANTATION JOINT FAIT FOI" in prompt
+        projet,
+        plan_infos={"echelle": "1/200", "dims_m": [(17.9, 5.4)]},
+        idx={"photo": 1, "plan": 2, "coupe": 3})
+    assert "LE PLAN DE MASSE (image 2)" in prompt
+    assert "photo aérienne" in prompt
+    assert "à l'échelle 1/200" in prompt
+    assert "zone bleue quadrillée" in prompt and "calepinage" in prompt
     assert "17,9 m x 5,4 m" in prompt
-    assert "trame des poteaux" in prompt
-    assert "DESCENTE" in prompt
-    assert "PIÈCES JOINTES" in prompt and "image 4" in prompt
+    assert "traits rouges" in prompt and "espacées de 10 m" in prompt
+    assert "carrés gris" in prompt and "fondations" in prompt
+    assert "HAUT DE RAMPANT" in prompt and "descend du bord HAUT" in prompt
+    assert "ignore-le" in prompt          # cartouche/raccordements
+    assert "PLACEMENT" in prompt and "mêmes repères" in prompt
+    assert "arbres" in prompt and "hors emprise" in prompt
+    # structure catalogue décrite (pas de coupe BE)
+    assert "poteau central unique" in prompt
+    assert "2,5 m au point bas et 3,5 m au point haut" in prompt
+    assert "acier galvanisé nu" in prompt and "noirs mats" in prompt
+    assert "RENDU" in prompt and "sans aucun texte ni tracé" in prompt
 
 
-def test_prompt_sans_bandes_bleues_ni_reflets():
-    """Décision 17/07 : poteaux sans marquage, surfaces mates, pas de reflet."""
-    projet = {"ombriere": {"famille": "START PLAINE Bas", "puissance_kwc": 100}}
-    prompt = insertion_ia.construire_prompt(projet)
+def test_prompt_v3_coupe_be_prime():
+    """Avec une DP3 importée du BE, on ne décrit pas le profil catalogue."""
+    projet = {"ombriere": {"famille": "START PLAINE Double", "pente_deg": 6}}
+    prompt = insertion_ia.construire_prompt(
+        projet, idx={"photo": 1, "coupe": 2}, coupe_be=True)
+    assert "dessinée par le bureau d'études" in prompt
+    assert "poteau central unique" not in prompt   # la coupe BE fait foi
+    assert "pente 6°" in prompt
+
+
+def test_prompt_v3_consignes_et_affinage():
+    projet = {"ombriere": {"famille": "START PLAINE Bas"},
+              "insertion": {"consignes": "garder le mât d'éclairage"}}
+    prompt = insertion_ia.construire_prompt(projet, affinage="assombris les modules")
+    assert "garder le mât d'éclairage." in prompt
+    assert "assombris les modules." in prompt
     assert "bandes bleues" not in prompt
-    assert "sans aucun marquage de couleur" in prompt
-    assert "aucun reflet" in prompt.lower()
-    # le linéaire vient du schéma, pas des défauts du catalogue
     assert "travées" not in prompt
 
 
 def test_prompt_projet_vide_ne_plante_pas():
     prompt = insertion_ia.construire_prompt({})
-    assert "RÔLE" in prompt and "ombrière" in prompt.lower()
+    assert "Modifie la photo" in prompt and "ombrière" in prompt.lower()
 
 
 def test_image_kit_coupe_convertit_pdf_en_png(tmp_path, monkeypatch):
