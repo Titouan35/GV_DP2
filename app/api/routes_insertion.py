@@ -265,12 +265,21 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
 
 # ------------------------------------------------------------------ guides photo
 
+@router.get("/{projet_id}/insertion/plan-dims")
+def plan_dims(projet_id: str):
+    """Cotes (longueur, largeur) des rangées lues sur le plan, pour préremplir."""
+    projet = _charger(projet_id)
+    dims = insertion_ia.plan_dims(projet.model_dump())
+    return {"dims_m": [{"longueur_m": L, "largeur_m": l} for L, l in dims]}
+
+
 @router.put("/{projet_id}/insertion/guides")
 def sauver_guides(projet_id: str, corps: dict = Body(...)):
-    """Repères tracés sur une photo : segments (axes d'ombrières) + calibrage.
+    """Repères tracés sur une photo : une ombrière = 2 traits (longueur+largeur).
 
-    1 segment [début, fin] = 1 ombrière ; plusieurs possibles. Coordonnées
-    normalisées 0-1. Corps : {photo, segments, calibrage|null}.
+    Corps : {photo, ombrieres:[{longueur:[A,B], largeur:[C,D],
+    longueur_m?, largeur_m?}]}. Coordonnées 0-1. Les cotes manquantes sont
+    préremplies depuis le plan de masse (par ordre des rangées), modifiables.
     """
     projet = _charger(projet_id)
     photo = corps.get("photo")
@@ -284,22 +293,32 @@ def sauver_guides(projet_id: str, corps: dict = Body(...)):
             raise HTTPException(status_code=400, detail="Point de repère invalide.")
         return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
 
-    segments = [[_point(s[0]), _point(s[1])]
-                for s in (corps.get("segments") or []) if len(s) == 2]
-    calibrage = corps.get("calibrage") or None
-    if calibrage:
+    def _cote(v):
         try:
-            calibrage = {
-                "a": _point(calibrage["a"]),
-                "b": _point(calibrage["b"]),
-                "distance_m": float(calibrage["distance_m"]),
-                "libelle": str(calibrage.get("libelle") or "")[:120],
-            }
-        except (KeyError, TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Calibrage invalide (2 points + distance).")
+            return round(float(v), 1) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
 
-    if segments or calibrage:
-        projet.insertion.guides[photo] = {"segments": segments, "calibrage": calibrage}
+    dims = insertion_ia.plan_dims(projet.model_dump())
+    ombrieres = []
+    for i, o in enumerate(corps.get("ombrieres") or []):
+        lo, la = o.get("longueur"), o.get("largeur")
+        if not (lo and la and len(lo) == 2 and len(la) == 2):
+            continue
+        L_m = _cote(o.get("longueur_m"))
+        l_m = _cote(o.get("largeur_m"))
+        if L_m is None and i < len(dims):
+            L_m = round(dims[i][0], 1)
+        if l_m is None and i < len(dims):
+            l_m = round(dims[i][1], 1)
+        ombrieres.append({
+            "longueur": [_point(lo[0]), _point(lo[1])],
+            "largeur": [_point(la[0]), _point(la[1])],
+            "longueur_m": L_m, "largeur_m": l_m,
+        })
+
+    if ombrieres:
+        projet.insertion.guides[photo] = {"ombrieres": ombrieres}
     else:
         projet.insertion.guides.pop(photo, None)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")

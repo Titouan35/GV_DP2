@@ -121,7 +121,7 @@ def construire_prompt(projet: dict, affinage: str = "",
     """
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
-    n = len(guides["segments"]) if guides and guides.get("segments") else 0
+    n = len(guides["ombrieres"]) if guides and guides.get("ombrieres") else 0
     mot = "les ombrières" if n > 1 else "l'ombrière"
     mot_de = "des ombrières" if n > 1 else "de l'ombrière"
 
@@ -352,36 +352,49 @@ def image_kit(projet: dict, role: str) -> Path | None:
 # ------------------------------------------------------------------ guides photo
 
 def guides_actifs(projet: dict) -> dict | None:
-    """Repères tracés sur la photo ACTIVE (segments d'ombrières + calibrage).
+    """Repères tracés sur la photo ACTIVE : une ombrière = 2 traits.
 
-    1 segment [début, fin] = 1 ombrière (son axe, du départ à l'arrivée).
-    Plusieurs ombrières possibles sur la même photo. None si rien d'exploitable.
+    Chaque ombrière = {longueur:[A,B] (bord avant / bas de rampant),
+    largeur:[C,D] (trait tracé du BAS vers le HAUT de rampant, donne la
+    profondeur et le sens de pente), longueur_m, largeur_m}. Plusieurs
+    ombrières possibles. None si rien d'exploitable.
     """
     ins = projet.get("insertion") or {}
     photo = ins.get("photo")
     if not photo:
         return None
     g = (ins.get("guides") or {}).get(photo) or {}
-    segments = [s for s in (g.get("segments") or []) if len(s) == 2]
-    calibrage = g.get("calibrage") or None
-    if calibrage and not (calibrage.get("a") and calibrage.get("b")
-                          and calibrage.get("distance_m")):
-        calibrage = None
-    if not segments and not calibrage:
+    ombrieres = []
+    for o in (g.get("ombrieres") or []):
+        lo, la = o.get("longueur"), o.get("largeur")
+        if lo and la and len(lo) == 2 and len(la) == 2:
+            ombrieres.append({
+                "longueur": lo, "largeur": la,
+                "longueur_m": o.get("longueur_m"), "largeur_m": o.get("largeur_m"),
+            })
+    if not ombrieres:
         return None
-    return {"segments": segments, "calibrage": calibrage}
+    return {"ombrieres": ombrieres}
 
 
-MAGENTA = (255, 0, 200)   # couleur des repères : absente des scènes de parking
-JAUNE = (255, 200, 0)     # repère d'échelle
+MAGENTA = (255, 0, 200)   # trait de LONGUEUR (bord avant)
+CYAN = (0, 200, 255)      # trait de LARGEUR (profondeur, bas -> haut de rampant)
+
+
+def _fleche(dr, a, b, coul, ep):
+    dr.line([a, b], fill=coul, width=ep)
+    ang = math.atan2(b[1] - a[1], b[0] - a[0])
+    t = ep * 3
+    for da in (-0.5, 0.5):
+        dr.line([b, (b[0] - t * math.cos(ang - da), b[1] - t * math.sin(ang - da))],
+                fill=coul, width=ep)
 
 
 def photo_emprise(projet: dict) -> Path | None:
-    """Copie de la photo active avec l'axe de chaque ombrière tracé en MAGENTA.
+    """Copie de la photo active avec, par ombrière, les 2 traits tracés.
 
-    Un trait épais début→fin par ombrière (avec un gros point à chaque bout),
-    AUCUN texte ni numéro (tout ce qui est écrit sur une image jointe déteint
-    sur le rendu — constaté 17/07/2026). Calibrage = segment jaune.
+    Longueur en MAGENTA (bord avant), largeur en CYAN fléchée du bas vers le
+    haut de rampant (sens de pente). Aucun texte (déteint sur le rendu).
     """
     from PIL import ImageDraw
 
@@ -393,24 +406,19 @@ def photo_emprise(projet: dict) -> Path | None:
     image = Image.open(photo).convert("RGB")
     dr = ImageDraw.Draw(image)
     l, h = image.size
-    ep = max(5, round(min(l, h) / 200))
+    ep = max(5, round(min(l, h) / 220))
 
-    for seg in guides["segments"]:
-        a = (seg[0][0] * l, seg[0][1] * h)
-        b = (seg[1][0] * l, seg[1][1] * h)
+    for o in guides["ombrieres"]:
+        la0, lb0 = o["longueur"]
+        a = (la0[0] * l, la0[1] * h)
+        b = (lb0[0] * l, lb0[1] * h)
         dr.line([a, b], fill=MAGENTA, width=ep)
         for px, py in (a, b):
-            r = ep * 2.0
-            dr.ellipse([px - r, py - r, px + r, py + r], fill=MAGENTA)
-
-    cal = guides["calibrage"]
-    if cal:
-        a = (cal["a"][0] * l, cal["a"][1] * h)
-        b = (cal["b"][0] * l, cal["b"][1] * h)
-        dr.line([a, b], fill=JAUNE, width=ep)
-        for px, py in (a, b):
-            r = ep * 1.8
-            dr.ellipse([px - r, py - r, px + r, py + r], fill=JAUNE)
+            dr.ellipse([px - ep * 2, py - ep * 2, px + ep * 2, py + ep * 2], fill=MAGENTA)
+        w0, w1 = o["largeur"]
+        c = (w0[0] * l, w0[1] * h)
+        d = (w1[0] * l, w1[1] * h)
+        _fleche(dr, c, d, CYAN, ep)
 
     sortie = config.assets_dir(projet.get("id")) / "photo_emprise.png"
     sortie.parent.mkdir(parents=True, exist_ok=True)
@@ -422,126 +430,76 @@ def photo_emprise(projet: dict) -> Path | None:
 
 # le placement au pixel est impossible à obtenir du modèle (constaté à
 # répétition 17/07/2026) : on POSE nous-mêmes l'ombrière en volume sur la photo,
-# à partir des axes tracés, et Gemini ne fait plus que l'habillage photoréaliste.
-HORIZON_FRAC = 0.42   # ligne d'horizon estimée (fraction de hauteur), photo à hauteur d'œil
+# à partir des 2 traits tracés (longueur + largeur), et Gemini ne fait plus que
+# l'habillage photoréaliste. Échelle = longueur px / longueur réelle du plan ;
+# sens de pente = sens du trait de largeur (bas -> haut de rampant).
 GRIS_TOIT = (70, 72, 78)
 GRIS_POTEAU = (188, 192, 198)
 GRIS_POTEAU_OMBRE = (150, 154, 160)
 
 
-def _echelle_field(cal, plan_infos, segments, W, H):
-    """Fonction échelle px/m(y) en perspective : scale(y) = k·(y - horizon).
-
-    Calée soit sur le repère jaune (distance connue), soit sur la longueur
-    réelle d'une ombrière (axe tracé vs cote du plan). Renvoie None si aucune
-    référence d'échelle exploitable.
-    """
-    horizon = HORIZON_FRAC * H
-    ref = None  # (y_ref px, scale_ref px/m)
-    if cal:
-        a = (cal["a"][0] * W, cal["a"][1] * H)
-        b = (cal["b"][0] * W, cal["b"][1] * H)
-        lpx = math.hypot(b[0] - a[0], b[1] - a[1])
-        if cal.get("distance_m", 0) > 0 and lpx > 4:
-            ref = ((a[1] + b[1]) / 2, lpx / cal["distance_m"])
-    if ref is None and plan_infos and plan_infos.get("dims_m") and segments:
-        L_m = max(plan_infos["dims_m"][0])  # longueur réelle de la 1re ombrière
-        s = segments[0]
-        a = (s[0][0] * W, s[0][1] * H)
-        b = (s[1][0] * W, s[1][1] * H)
-        lpx = math.hypot(b[0] - a[0], b[1] - a[1])
-        if L_m > 0 and lpx > 4:
-            ref = ((a[1] + b[1]) / 2, lpx / L_m)
-    if ref is None:
-        return None
-    y_ref, scale_ref = ref
-    denom = (y_ref - horizon) or 1.0
-    k = scale_ref / denom
-
-    def scale(y):
-        return max(4.0, k * (max(y, horizon + 1) - horizon))
-    return scale
-
-
 def scaffold_photo(projet: dict) -> Path | None:
-    """Photo avec l'ombrière posée en VOLUME gris sur chaque axe tracé.
+    """Photo avec l'ombrière posée en VOLUME gris, depuis les 2 traits tracés.
 
-    Géométrie approchée mais placée exactement : axe = bord bas de l'ombrière,
-    largeur extrudée perpendiculairement (foreshortening par le champ d'échelle),
-    poteaux verticaux, toiture inclinée sombre. Gemini n'a plus qu'à rendre ce
-    volume photoréaliste sans le déplacer. None si pas d'axe ou pas d'échelle.
+    longueur = bord avant (bas de rampant), largeur = profondeur tracée du bas
+    vers le haut de rampant. Le footprint est le parallélogramme (avant + vecteur
+    largeur) ; la toiture monte de h_bas (avant) à h_haut (fond) ; poteaux
+    verticaux. Placement EXACT (c'est le tracé de l'utilisateur). None sans tracé.
     """
     from PIL import ImageDraw
 
     guides = guides_actifs(projet)
     photo = image_kit(projet, "photo")
-    if not guides or not guides["segments"] or not photo:
+    if not guides or not guides["ombrieres"] or not photo:
         return None
-
-    analyse, _ = _analyse_plan(projet)
-    plan_infos = None
-    if analyse:
-        dims = [(z["longueur_m"], z["largeur_m"])
-                for z in analyse["rangees"] if "longueur_m" in z]
-        if dims:
-            plan_infos = {"dims_m": dims}
 
     image = Image.open(photo).convert("RGB")
     W, H = image.size
-    scale = _echelle_field(guides.get("calibrage"), plan_infos, guides["segments"], W, H)
-    if scale is None:
-        return None   # sans échelle on ne sait pas dimensionner : on s'abstient
-
     omb = projet.get("ombriere") or {}
     h_bas = omb.get("garde_au_sol_m") or 2.5
     h_haut = omb.get("hauteur_hors_tout_m") or 3.5
-    dims = (plan_infos or {}).get("dims_m") or []
 
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     dr = ImageDraw.Draw(overlay)
 
-    for i, seg in enumerate(guides["segments"]):
-        a = (seg[0][0] * W, seg[0][1] * H)
-        b = (seg[1][0] * W, seg[1][1] * H)
-        largeur = 8.0
-        if i < len(dims):
-            largeur = min(dims[i]) or 8.0
-        elif dims:
-            largeur = min(dims[0]) or 8.0
+    for o in guides["ombrieres"]:
+        a = (o["longueur"][0][0] * W, o["longueur"][0][1] * H)
+        b = (o["longueur"][1][0] * W, o["longueur"][1][1] * H)
+        c = (o["largeur"][0][0] * W, o["largeur"][0][1] * H)
+        d = (o["largeur"][1][0] * W, o["largeur"][1][1] * H)
+        long_px = math.hypot(b[0] - a[0], b[1] - a[1])
+        # échelle px/m : longueur du trait / longueur réelle (repli : largeur)
+        L_m = o.get("longueur_m")
+        if L_m and L_m > 0:
+            scale = long_px / L_m
+        else:
+            larg_px = math.hypot(d[0] - c[0], d[1] - c[1])
+            l_m = o.get("largeur_m") or 8.0
+            scale = larg_px / l_m if l_m else long_px / 18.0
+        vx, vy = d[0] - c[0], d[1] - c[1]          # vecteur profondeur (bas->haut)
 
-        ux, uy = b[0] - a[0], b[1] - a[1]
-        norm = math.hypot(ux, uy) or 1.0
-        ux, uy = ux / norm, uy / norm
-        px, py = -uy, ux          # perpendiculaire vers le HAUT (l'ombrière s'éloigne)
-        if py > 0:
-            px, py = -px, -py
+        a_far, b_far = (a[0] + vx, a[1] + vy), (b[0] + vx, b[1] + vy)
 
-        def sol(pt, prof_m):
-            s = scale(pt[1])
-            return (pt[0] + px * prof_m * s, pt[1] + py * prof_m * s)
+        def haut(pt, hm):
+            return (pt[0], pt[1] - hm * scale)
 
-        def haut(pt, hauteur_m):
-            return (pt[0], pt[1] - hauteur_m * scale(pt[1]))
+        av0, av1 = haut(a, h_bas), haut(b, h_bas)          # avant (bas de rampant)
+        ar0, ar1 = haut(a_far, h_haut), haut(b_far, h_haut)  # fond (haut de rampant)
 
-        a_far, b_far = sol(a, largeur), sol(b, largeur)          # bord fond au sol
-        # toiture inclinée : bord avant (côté axe) à h_bas, bord fond à h_haut
-        av0, av1 = haut(a, h_bas), haut(b, h_bas)
-        ar0, ar1 = haut(a_far, h_haut), haut(b_far, h_haut)
-
-        # 1) poteaux : une file avant (sur l'axe) + une file fond, ~ tous les 6 m
-        nb = max(2, int(round(norm / (6 * scale((a[1] + b[1]) / 2)))) + 1)
-        for t in (k / nb for k in range(nb + 1)):
+        # poteaux : file avant + file fond, environ tous les 6 m
+        nb = max(1, int(round((L_m or long_px / scale) / 6)))
+        for k in range(nb + 1):
+            t = k / nb
             pied_av = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-            pied_ar = sol(pied_av, largeur)
+            pied_ar = (pied_av[0] + vx, pied_av[1] + vy)
             for pied, hm in ((pied_av, h_bas), (pied_ar, h_haut)):
                 tete = haut(pied, hm)
-                w = max(4, 0.22 * scale(pied[1]))
+                w = max(4, 0.22 * scale)
                 dr.polygon([(pied[0] - w, pied[1]), (pied[0] + w, pied[1]),
                             (tete[0] + w * 0.85, tete[1]), (tete[0] - w * 0.85, tete[1])],
                            fill=GRIS_POTEAU + (255,), outline=(90, 94, 100, 255))
 
-        # 2) bandeau avant de la toiture (épaisseur) puis le pan de toiture
-        ep = max(5, 0.35 * scale(a[1]))
+        ep = max(5, 0.35 * scale)
         dr.polygon([av0, av1, (av1[0], av1[1] + ep), (av0[0], av0[1] + ep)],
                    fill=GRIS_POTEAU_OMBRE + (255,))
         dr.polygon([av0, av1, ar1, ar0], fill=GRIS_TOIT + (255,),
@@ -675,15 +633,17 @@ def aerienne_emprise(projet: dict) -> Path | None:
 
 def resume_guides(guides: dict) -> str:
     """Résumé texte des repères pour l'UI."""
-    bouts = []
-    n = len(guides["segments"])
-    if n:
-        bouts.append(f"{n} ombrière{'s' if n > 1 else ''} tracée{'s' if n > 1 else ''}")
-    cal = guides["calibrage"]
-    if cal:
-        lib = f" ({cal['libelle']})" if cal.get("libelle") else ""
-        bouts.append(f"échelle {cal['distance_m']:g} m{lib}".replace(".", ","))
-    return " · ".join(bouts)
+    n = len(guides["ombrieres"])
+    return f"{n} ombrière{'s' if n > 1 else ''} tracée{'s' if n > 1 else ''}" if n else ""
+
+
+def plan_dims(projet: dict) -> list[tuple[float, float]]:
+    """Cotes (longueur, largeur) en m des rangées lues sur le plan de masse."""
+    analyse, _ = _analyse_plan(projet)
+    if not analyse:
+        return []
+    return [(z["longueur_m"], z["largeur_m"])
+            for z in analyse["rangees"] if "longueur_m" in z]
 
 
 # ------------------------------------------------------------------ état projet

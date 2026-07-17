@@ -22,8 +22,9 @@ def test_apercu_expose_cout_et_modele():
 def test_prompt_v6_mode_scaffold():
     """Mode scaffold : habiller le volume gris, sans le déplacer ; sans numéros ; positif."""
     projet = {"ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5}}
-    guides = {"segments": [[[0.2, 0.5], [0.7, 0.55]], [[0.15, 0.65], [0.5, 0.68]]],
-              "calibrage": None}
+    guides = {"ombrieres": [
+        {"longueur": [[0.2, 0.5], [0.7, 0.55]], "largeur": [[0.5, 0.52], [0.47, 0.45]]},
+        {"longueur": [[0.15, 0.65], [0.5, 0.68]], "largeur": [[0.3, 0.66], [0.28, 0.6]]}]}
     prompt = insertion_ia.construire_prompt(
         projet, plan_infos={"dims_m": [(18.8, 8.1), (13.1, 4.9)]}, guides=guides,
         idx={"photo": 1, "coupe": 2}, coupe_be=True, mode="scaffold", plan_ref=True)
@@ -46,7 +47,8 @@ def test_prompt_v6_mode_scaffold():
 
 
 def test_prompt_v6_mode_axes_et_libre():
-    guides = {"segments": [[[0.2, 0.5], [0.7, 0.55]]], "calibrage": None}
+    guides = {"ombrieres": [{"longueur": [[0.2, 0.5], [0.7, 0.55]],
+                             "largeur": [[0.5, 0.52], [0.47, 0.45]]}]}
     p_axes = insertion_ia.construire_prompt({}, guides=guides, idx={"photo": 1}, mode="axes")
     assert p_axes.startswith("Insère une ombrière")
     assert "trait magenta marque l'axe" in p_axes

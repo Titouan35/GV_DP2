@@ -114,38 +114,37 @@ def _projet_avec_guides(tmp_path):
         "id": "p",
         "insertion": {
             "photo": rel, "photos": [rel],
-            "guides": {rel: {
-                "segments": [[[0.2, 0.5], [0.7, 0.55]], [[0.15, 0.65], [0.5, 0.68]]],
-                "calibrage": {"a": [0.2, 0.8], "b": [0.35, 0.8],
-                              "distance_m": 2.5, "libelle": "largeur d'une place"},
-            }},
+            "guides": {rel: {"ombrieres": [
+                {"longueur": [[0.2, 0.55], [0.7, 0.58]], "largeur": [[0.5, 0.57], [0.47, 0.5]],
+                 "longueur_m": 18.8, "largeur_m": 8.1},
+                {"longueur": [[0.15, 0.68], [0.5, 0.7]], "largeur": [[0.3, 0.69], [0.28, 0.63]],
+                 "longueur_m": 13.1, "largeur_m": 4.9},
+            ]}},
         },
     }
 
 
-def test_photo_emprise_segments_magenta_sans_texte(tmp_path, monkeypatch):
-    """v5 : 1 trait magenta par ombrière + segment jaune, aucun vert."""
+def test_photo_emprise_deux_traits(tmp_path, monkeypatch):
+    """v6 : longueur MAGENTA + largeur CYAN par ombrière, aucun texte."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet = _projet_avec_guides(tmp_path)
     guides = insertion_ia.guides_actifs(projet)
-    assert guides and len(guides["segments"]) == 2 and guides["calibrage"]
+    assert guides and len(guides["ombrieres"]) == 2
     annotee = insertion_ia.photo_emprise(projet)
     assert annotee and annotee.exists() and annotee.name == "photo_emprise.png"
     arr = np.asarray(Image.open(annotee).convert("RGB"))
     magenta = (arr[..., 0] > 200) & (arr[..., 1] < 90) & (arr[..., 2] > 140)
-    jaune = (arr[..., 0] > 200) & (arr[..., 1] > 150) & (arr[..., 2] < 90)
-    vert = (arr[..., 1] > 190) & (arr[..., 0] < 120) & (arr[..., 2] < 120)
-    assert magenta.sum() > 200 and jaune.sum() > 40
-    assert vert.sum() == 0
+    cyan = (arr[..., 0] < 90) & (arr[..., 1] > 150) & (arr[..., 2] > 200)
+    assert magenta.sum() > 100 and cyan.sum() > 100
     assert "2 ombrières" in insertion_ia.resume_guides(guides)
 
 
-def test_guides_segment_incomplet_ignore(tmp_path, monkeypatch):
-    """Un segment à 1 point (tracé en cours) n'est pas retenu."""
+def test_guides_ombriere_incomplete_ignoree(tmp_path, monkeypatch):
+    """Une ombrière sans ses 2 traits complets n'est pas retenue."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     rel = "x/site.jpg"
     projet = {"id": "p", "insertion": {"photo": rel, "photos": [rel],
-              "guides": {rel: {"segments": [[[0.2, 0.5]]], "calibrage": None}}}}
+              "guides": {rel: {"ombrieres": [{"longueur": [[0.2, 0.5], [0.7, 0.5]]}]}}}}
     assert insertion_ia.guides_actifs(projet) is None
 
 
@@ -154,8 +153,8 @@ def test_guides_absents(tmp_path, monkeypatch):
     assert insertion_ia.guides_actifs({"id": "p", "insertion": {}}) is None
 
 
-def test_scaffold_pose_un_volume_sur_l_axe(tmp_path, monkeypatch):
-    """Le scaffold pose un volume gris (poteaux + toiture) sur l'axe tracé."""
+def test_scaffold_pose_un_volume(tmp_path, monkeypatch):
+    """Le scaffold pose un volume gris (poteaux + toiture) depuis les 2 traits."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     dossier = tmp_path / "p.assets" / "insertion" / "photos"
     dossier.mkdir(parents=True)
@@ -163,29 +162,29 @@ def test_scaffold_pose_un_volume_sur_l_axe(tmp_path, monkeypatch):
     rel = "p.assets/insertion/photos/site.jpg"
     projet = {"id": "p", "ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5},
               "insertion": {"photo": rel, "photos": [rel],
-                "guides": {rel: {
-                    "segments": [[[0.3, 0.55], [0.7, 0.58]]],
-                    "calibrage": {"a": [0.3, 0.62], "b": [0.4, 0.62],
-                                  "distance_m": 2.5, "libelle": "place"}}}}}
+                "guides": {rel: {"ombrieres": [
+                    {"longueur": [[0.25, 0.6], [0.75, 0.62]], "largeur": [[0.5, 0.61], [0.47, 0.5]],
+                     "longueur_m": 18.0, "largeur_m": 8.0}]}}}}
     p = insertion_ia.scaffold_photo(projet)
     assert p and p.exists() and p.name == "scaffold.png"
     arr = np.asarray(Image.open(p).convert("RGB"))
-    # du gris foncé (toiture) et du gris clair (poteaux) sont apparus
     toit = (arr[..., 0] < 100) & (arr[..., 1] < 100) & (arr[..., 2] < 100) & \
            (abs(arr[..., 0].astype(int) - arr[..., 2]) < 20)
     assert toit.sum() > 500
 
 
-def test_scaffold_sans_echelle_none(tmp_path, monkeypatch):
-    """Sans calibrage ni plan (pas d'échelle), le scaffold s'abstient."""
+def test_scaffold_sans_cote_utilise_largeur(tmp_path, monkeypatch):
+    """Sans longueur_m, l'échelle retombe sur la largeur (pas de crash)."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     dossier = tmp_path / "p.assets" / "insertion" / "photos"
     dossier.mkdir(parents=True)
     Image.new("RGB", (800, 600), (150, 150, 150)).save(dossier / "s.jpg")
     rel = "p.assets/insertion/photos/s.jpg"
     projet = {"id": "p", "insertion": {"photo": rel, "photos": [rel],
-              "guides": {rel: {"segments": [[[0.3, 0.5], [0.7, 0.5]]], "calibrage": None}}}}
-    assert insertion_ia.scaffold_photo(projet) is None
+              "guides": {rel: {"ombrieres": [
+                  {"longueur": [[0.3, 0.5], [0.7, 0.5]], "largeur": [[0.5, 0.5], [0.5, 0.4]],
+                   "longueur_m": None, "largeur_m": 8.0}]}}}}
+    assert insertion_ia.scaffold_photo(projet) is not None
 
 
 def test_ratio_photo_supporte(tmp_path):

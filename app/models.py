@@ -101,8 +101,9 @@ class Insertion(BaseModel):
     dans_dossier: list[str] = Field(default_factory=list)  # images incluses au dossier DP
     nb_images_generees: int = 0            # compteur de dépense locale (projet)
     # repères tracés sur les photos, par chemin de photo (coordonnées 0-1) :
-    # {photo: {"segments": [[[x,y] début, [x,y] fin], ...],  # 1 segment = 1 ombrière
-    #          "calibrage": {"a": [x,y], "b": [x,y], "distance_m": f, "libelle": s}}}
+    # {photo: {"ombrieres": [{"longueur": [A, B],   # bord avant / bas de rampant
+    #                         "largeur": [C, D],     # profondeur, bas->haut de rampant
+    #                         "longueur_m": f, "largeur_m": f}]}}  # cotes (auto du plan)
     guides: dict[str, Any] = Field(default_factory=dict)
     # emprise sur la vue aérienne (crop du plan), coordonnées 0-1 du crop :
     # {"emprises": [[[x,y] x4], ...], "auto": bool} — vide = auto (extraction plan)

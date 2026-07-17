@@ -1316,8 +1316,9 @@ function dessinerAerienne() {
   }
 }
 
-// ---- repères tracés sur la photo active : 1 segment = 1 ombrière ----
-const guidesUI = { img: null, mode: null, pts: [], scale: 1 };
+// ---- repères : 1 ombrière = trait de LONGUEUR + trait de LARGEUR (pente) ----
+// tracé en 4 clics : longueur début, longueur fin, largeur bas-de-pente, largeur haut-de-pente
+const guidesUI = { img: null, pts: [], scale: 1, planDims: [] };
 
 function guidesPhotoActive() {
   const ins = state.projet.insertion || {};
@@ -1325,8 +1326,11 @@ function guidesPhotoActive() {
   const data = (ins.guides || {})[ins.photo] || {};
   return {
     photo: ins.photo,
-    segments: (data.segments || []).map((s) => s.map((p) => [...p])),
-    calibrage: data.calibrage ? JSON.parse(JSON.stringify(data.calibrage)) : null,
+    ombrieres: (data.ombrieres || []).map((o) => ({
+      longueur: o.longueur.map((p) => [...p]),
+      largeur: o.largeur.map((p) => [...p]),
+      longueur_m: o.longueur_m, largeur_m: o.largeur_m,
+    })),
   };
 }
 
@@ -1336,8 +1340,8 @@ function sauverGuides(ctx) {
   guidesSaveTimer = setTimeout(() => {
     api(`/api/projets/${state.projet.id}/insertion/guides`, {
       method: "PUT",
-      body: JSON.stringify({ photo: ctx.photo, segments: ctx.segments, calibrage: ctx.calibrage }),
-    }).then((d) => { state.projet = d.projet; majEtatGuides(); rafraichirPayloadEtPrompt(); }).catch(() => {});
+      body: JSON.stringify({ photo: ctx.photo, ombrieres: ctx.ombrieres }),
+    }).then((d) => { state.projet = d.projet; majEtatGuides(); renderCotes(ctx); rafraichirPayloadEtPrompt(); }).catch(() => {});
   }, 500);
 }
 
@@ -1345,13 +1349,11 @@ function majEtatGuides() {
   const el = $("#ins-guides-etat");
   if (!el) return;
   const ctx = guidesPhotoActive();
-  const bouts = [];
-  if (ctx?.segments?.length) bouts.push(`${ctx.segments.length} ombrière${ctx.segments.length > 1 ? "s" : ""}`);
-  if (ctx?.calibrage) bouts.push(`échelle ${ctx.calibrage.distance_m} m`);
-  el.textContent = bouts.length ? `(${bouts.join(" · ")})` : "(rien tracé — Gemini placera seul)";
+  const n = ctx?.ombrieres?.length || 0;
+  el.textContent = n ? `(${n} ombrière${n > 1 ? "s" : ""})` : "(rien tracé — Gemini placera seul)";
 }
 
-function renderGuides() {
+async function renderGuides() {
   const body = $("#ins-guides-body");
   if (!body) return;
   majEtatGuides();
@@ -1360,22 +1362,19 @@ function renderGuides() {
     body.innerHTML = `<p class="sub" style="padding:10px 14px">Choisis d'abord une photo du site.</p>`;
     return;
   }
-  guidesUI.mode = "omb";  // mode par défaut : tracer les ombrières
+  try { guidesUI.planDims = (await api(`/api/projets/${state.projet.id}/insertion/plan-dims`)).dims_m || []; }
+  catch { guidesUI.planDims = []; }
   guidesUI.pts = [];
   body.innerHTML = `
     <div class="mesure-tools">
-      <button class="btn primary" data-gmode="omb">+ Ombrière (début → fin)</button>
-      <button class="btn" data-gmode="cal">Échelle (2 points)</button>
-      <input class="input" id="g-dist" type="number" step="0.1" placeholder="m" style="max-width:64px"
-        value="${ctx.calibrage?.distance_m ?? "2.5"}" />
-      <input class="input" id="g-lib" placeholder="repère (ex. : largeur d'une place)" style="max-width:210px"
-        value="${esc(ctx.calibrage?.libelle || "largeur d'une place")}" />
+      <span class="hint">Par ombrière : clique <b>longueur</b> (2 pts) puis <b>largeur</b> du <b>bas</b> vers le <b>haut de pente</b> (2 pts).</span>
       <span style="flex:1"></span>
       <button class="btn" id="g-annuler">Annuler</button>
       <button class="btn" id="g-effacer">Tout effacer</button>
     </div>
     <div class="mesure-status" id="g-statut"></div>
-    <div class="mesure-canvas-wrap"><canvas id="g-canvas"></canvas></div>`;
+    <div class="mesure-canvas-wrap"><canvas id="g-canvas"></canvas></div>
+    <div id="g-cotes"></div>`;
 
   const canvas = $("#g-canvas");
   const img = new Image();
@@ -1389,63 +1388,65 @@ function renderGuides() {
   };
   img.src = urlInsertion(ctx.photo);
 
-  body.querySelectorAll("[data-gmode]").forEach((b) => b.addEventListener("click", () => {
-    guidesUI.mode = b.dataset.gmode;
-    guidesUI.pts = [];
-    body.querySelectorAll("[data-gmode]").forEach((x) => x.classList.toggle("primary", x === b));
-    majStatutGuides();
-  }));
   canvas.addEventListener("click", (e) => {
-    if (!guidesUI.mode) return;
     const r = canvas.getBoundingClientRect();
     guidesUI.pts.push([
       Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
       Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
     ]);
-    if (guidesUI.mode === "omb" && guidesUI.pts.length === 2) {
-      ctx.segments.push(guidesUI.pts);
+    if (guidesUI.pts.length === 4) {
+      const i = ctx.ombrieres.length;
+      const dim = guidesUI.planDims[i] || {};
+      ctx.ombrieres.push({
+        longueur: [guidesUI.pts[0], guidesUI.pts[1]],
+        largeur: [guidesUI.pts[2], guidesUI.pts[3]],
+        longueur_m: dim.longueur_m ?? null, largeur_m: dim.largeur_m ?? null,
+      });
       guidesUI.pts = [];
       sauverGuides(ctx);
-      toast("Ombrière tracée. Trace la suivante ou passe à l'échelle.", "ok");
-    } else if (guidesUI.mode === "cal" && guidesUI.pts.length === 2) {
-      const dist = parseFloat(($("#g-dist").value || "").replace(",", "."));
-      if (!(dist > 0)) { toast("Renseigne la distance réelle (m).", "err"); guidesUI.pts = []; return; }
-      ctx.calibrage = { a: guidesUI.pts[0], b: guidesUI.pts[1], distance_m: dist,
-                        libelle: $("#g-lib").value.trim() };
-      guidesUI.pts = [];
-      sauverGuides(ctx);
-      toast("Repère d'échelle posé.", "ok");
+      toast("Ombrière tracée. Trace la suivante ou génère.", "ok");
     }
     dessinerGuides(ctx);
     majStatutGuides();
   });
   $("#g-annuler").addEventListener("click", () => {
     if (guidesUI.pts.length) guidesUI.pts.pop();
-    else if (guidesUI.mode === "cal" && ctx.calibrage) { ctx.calibrage = null; sauverGuides(ctx); }
-    else if (ctx.segments.length) { ctx.segments.pop(); sauverGuides(ctx); }
+    else if (ctx.ombrieres.length) { ctx.ombrieres.pop(); sauverGuides(ctx); }
     dessinerGuides(ctx); majStatutGuides();
   });
   $("#g-effacer").addEventListener("click", () => {
-    ctx.segments = []; ctx.calibrage = null; guidesUI.pts = [];
+    ctx.ombrieres = []; guidesUI.pts = [];
     sauverGuides(ctx); dessinerGuides(ctx); majStatutGuides();
   });
-  ["#g-dist", "#g-lib"].forEach((s) => $(s).addEventListener("input", () => {
-    if (!ctx.calibrage) return;
-    const dist = parseFloat(($("#g-dist").value || "").replace(",", "."));
-    if (dist > 0) ctx.calibrage.distance_m = dist;
-    ctx.calibrage.libelle = $("#g-lib").value.trim();
+  renderCotes(ctx);
+}
+
+// tableau des cotes réelles par ombrière (pré-remplies du plan, éditables)
+function renderCotes(ctx) {
+  const box = $("#g-cotes");
+  if (!box) return;
+  if (!ctx.ombrieres.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="cotes-grid">` + ctx.ombrieres.map((o, i) => `
+    <div class="cote-row">
+      <b>Ombrière ${i + 1}</b>
+      <label>L <input class="input mini-m" type="number" step="0.1" data-cote="longueur_m" data-i="${i}" value="${o.longueur_m ?? ""}" /> m</label>
+      <label>l <input class="input mini-m" type="number" step="0.1" data-cote="largeur_m" data-i="${i}" value="${o.largeur_m ?? ""}" /> m</label>
+    </div>`).join("") + `</div>`;
+  box.querySelectorAll("[data-cote]").forEach((inp) => inp.addEventListener("input", () => {
+    const v = parseFloat((inp.value || "").replace(",", "."));
+    ctx.ombrieres[+inp.dataset.i][inp.dataset.cote] = v > 0 ? v : null;
     sauverGuides(ctx);
   }));
 }
 
-function fleche(dr, a, b) {
+function traitFleche(dr, a, b, coul) {
+  dr.strokeStyle = coul; dr.fillStyle = coul; dr.lineWidth = 4;
   dr.beginPath(); dr.moveTo(a[0], a[1]); dr.lineTo(b[0], b[1]); dr.stroke();
   const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
-  const t = 11;
   dr.beginPath(); dr.moveTo(b[0], b[1]);
-  dr.lineTo(b[0] - t * Math.cos(ang - 0.5), b[1] - t * Math.sin(ang - 0.5));
+  dr.lineTo(b[0] - 12 * Math.cos(ang - 0.5), b[1] - 12 * Math.sin(ang - 0.5));
   dr.moveTo(b[0], b[1]);
-  dr.lineTo(b[0] - t * Math.cos(ang + 0.5), b[1] - t * Math.sin(ang + 0.5));
+  dr.lineTo(b[0] - 12 * Math.cos(ang + 0.5), b[1] - 12 * Math.sin(ang + 0.5));
   dr.stroke();
 }
 
@@ -1456,38 +1457,36 @@ function dessinerGuides(ctx) {
   dr.clearRect(0, 0, canvas.width, canvas.height);
   dr.drawImage(guidesUI.img, 0, 0, canvas.width, canvas.height);
   const X = (p) => p[0] * canvas.width, Y = (p) => p[1] * canvas.height;
-  ctx.segments.forEach((seg, i) => {
-    const a = [X(seg[0]), Y(seg[0])], b = [X(seg[1]), Y(seg[1])];
-    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4; dr.fillStyle = "#FF00C8";
-    fleche(dr, a, b);
-    dr.beginPath(); dr.arc(a[0], a[1], 6, 0, 7); dr.fill();
-    dr.font = "bold 14px sans-serif"; dr.fillText(String(i + 1), a[0] + 8, a[1] - 8);
+  ctx.ombrieres.forEach((o, i) => {
+    const la = [X(o.longueur[0]), Y(o.longueur[0])], lb = [X(o.longueur[1]), Y(o.longueur[1])];
+    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4;
+    dr.beginPath(); dr.moveTo(la[0], la[1]); dr.lineTo(lb[0], lb[1]); dr.stroke();
+    dr.fillStyle = "#FF00C8";
+    for (const p of [la, lb]) { dr.beginPath(); dr.arc(p[0], p[1], 5, 0, 7); dr.fill(); }
+    traitFleche(dr, [X(o.largeur[0]), Y(o.largeur[0])], [X(o.largeur[1]), Y(o.largeur[1])], "#00C8FF");
+    dr.fillStyle = "#002455"; dr.font = "bold 14px sans-serif";
+    dr.fillText(String(i + 1), la[0] + 8, la[1] - 8);
   });
-  if (ctx.calibrage) {
-    const { a, b } = ctx.calibrage;
-    dr.strokeStyle = "#FFC800"; dr.lineWidth = 4;
-    dr.beginPath(); dr.moveTo(X(a), Y(a)); dr.lineTo(X(b), Y(b)); dr.stroke();
-    for (const p of [a, b]) {
-      dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fillStyle = "#FFC800"; dr.fill();
-    }
+  // points en cours
+  const cols = ["#FF00C8", "#FF00C8", "#00C8FF", "#00C8FF"];
+  guidesUI.pts.forEach((p, k) => {
+    dr.fillStyle = cols[k]; dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fill();
+  });
+  if (guidesUI.pts.length === 1) {
+    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 3;
   }
-  dr.fillStyle = "#002455";
-  for (const p of guidesUI.pts) { dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fill(); }
 }
 
 function majStatutGuides() {
   const el = $("#g-statut");
   if (!el) return;
-  if (guidesUI.mode === "omb") {
-    el.innerHTML = guidesUI.pts.length === 1
-      ? `<span class="hint">clique le point de FIN de l'ombrière</span>`
-      : `<span class="hint">clique le point de DÉBUT d'une ombrière (tu peux en tracer plusieurs)</span>`;
-  } else if (guidesUI.mode === "cal") {
-    const restant = 2 - guidesUI.pts.length;
-    el.innerHTML = `<span class="hint">clique les 2 extrémités d'une distance connue (${restant} restant${restant > 1 ? "s" : ""})</span>`;
-  } else {
-    el.innerHTML = `<span class="hint">Trait magenta = axe de chaque ombrière · jaune = échelle. C'est la contrainte de placement envoyée à Gemini.</span>`;
-  }
+  const etapes = [
+    "clique le DÉBUT de la longueur (bord avant)",
+    "clique la FIN de la longueur",
+    "clique le BAS de pente (bord avant, côté profondeur)",
+    "clique le HAUT de pente (fond)",
+  ];
+  el.innerHTML = `<span class="hint">${etapes[guidesUI.pts.length]}</span>`;
 }
 
 // sélecteur de photos du site (multi) : active = base de génération
