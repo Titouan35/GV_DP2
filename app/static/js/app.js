@@ -712,10 +712,7 @@ function renderEtapeCaracteristiques(main) {
     <div class="formgrid">
       ${selectCoupe()}
       ${champ("Puissance (kWc)", "ombriere.puissance_kwc", { type: "number", step: "1" })}
-      ${champ("Longueur (m)", "ombriere.longueur_m", { type: "number", step: "0.1" })}
-      ${champ("Largeur (m)", "ombriere.largeur_m", { type: "number", step: "0.1" })}
       ${champ("Orientation (° azimut)", "ombriere.orientation", { type: "number", step: "1", placeholder: "0 = Nord, 90 = Est" })}
-      ${champ("Nombre de travées", "ombriere.nb_travees", { type: "number", step: "1" })}
       ${champ("Entraxe (m)", "ombriere.entraxe_m", { type: "number", step: "0.1" })}
       ${champ("Pente (°)", "ombriere.pente_deg", { type: "number", step: "0.5" })}
       ${champ("Hauteur bas de pente (m)", "ombriere.garde_au_sol_m", { type: "number", step: "0.05" })}

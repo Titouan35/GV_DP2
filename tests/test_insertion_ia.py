@@ -38,17 +38,28 @@ def test_prompt_reprend_type_consignes_affinage():
     assert "watermark" in prompt           # contraintes négatives
 
 
-def test_prompt_plan_mentionne_fleche_et_poteaux(tmp_path, monkeypatch):
-    """Avec un DP2, le prompt impose la flèche de pente et les repères poteaux."""
-    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
-    uploads = tmp_path / "p.assets" / "uploads"
-    uploads.mkdir(parents=True)
-    Image.new("RGB", (80, 60), (250, 250, 250)).save(uploads / "dp2.png")
-    projet = {"id": "p", "ombriere": {"famille": "START PLAINE Bas"},
-              "documents": {"dp2": {"fichier": "p.assets/uploads/dp2.png"}}}
+def test_prompt_schema_fait_foi():
+    """Avec un résumé d'implantation, le bloc scène impose le schéma joint."""
+    projet = {"ombriere": {"famille": "START PLAINE Bas"}}
+    prompt = insertion_ia.construire_prompt(
+        projet, implantation_resume="1 rangée · 17,9 m x 5,4 m",
+        pieces_jointes=["photo", "schema", "coupe", "reference"])
+    assert "SCHÉMA D'IMPLANTATION JOINT FAIT FOI" in prompt
+    assert "17,9 m x 5,4 m" in prompt
+    assert "trame des poteaux" in prompt
+    assert "DESCENTE" in prompt
+    assert "PIÈCES JOINTES" in prompt and "image 4" in prompt
+
+
+def test_prompt_sans_bandes_bleues_ni_reflets():
+    """Décision 17/07 : poteaux sans marquage, surfaces mates, pas de reflet."""
+    projet = {"ombriere": {"famille": "START PLAINE Bas", "puissance_kwc": 100}}
     prompt = insertion_ia.construire_prompt(projet)
-    assert "FLÈCHE" in prompt and "sens de la pente" in prompt
-    assert "POTEAUX" in prompt
+    assert "bandes bleues" not in prompt
+    assert "sans aucun marquage de couleur" in prompt
+    assert "aucun reflet" in prompt.lower()
+    # le linéaire vient du schéma, pas des défauts du catalogue
+    assert "travées" not in prompt
 
 
 def test_prompt_projet_vide_ne_plante_pas():

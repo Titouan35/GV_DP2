@@ -19,14 +19,15 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+import numpy as np
 import pypdfium2 as pdfium
 
 from . import config
 from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
-GEMINI_MODELE_DEFAUT = "gemini-3.1-flash-lite-image"  # Nano Banana 2 Lite
-COUT_IMAGE_EUR_DEFAUT = 0.04
+GEMINI_MODELE_DEFAUT = "gemini-3-pro-image"  # Nano Banana Pro (placement + rendu)
+COUT_IMAGE_EUR_DEFAUT = 0.13
 
 
 class InsertionError(Exception):
@@ -90,11 +91,16 @@ def _fmt(v, suffixe="", defaut="—"):
     return f"{v}{suffixe}"
 
 
-def construire_prompt(projet: dict, affinage: str = "") -> str:
+def construire_prompt(projet: dict, affinage: str = "",
+                      implantation_resume: str | None = None,
+                      pieces_jointes: list[str] | None = None) -> str:
     """Assemble le prompt ultra-détaillé (6 blocs) depuis les inputs du projet.
 
     Déterministe : mêmes inputs → même prompt. Rédigé en français, adressé à
     l'éditeur photo Gemini. Tolère les champs manquants.
+    `implantation_resume` : résumé du schéma d'implantation extrait du plan
+    (implantation.resume) ; sa présence bascule le bloc scène sur le schéma.
+    `pieces_jointes` : rôles des images jointes, dans l'ordre d'envoi.
     """
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
@@ -113,24 +119,30 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         "marquages, végétation)."
     )
 
-    # -- bloc 2 : la scène
+    # -- bloc 2 : la scène et l'implantation
     b2_lignes = [
         "LA SCÈNE — La photo montre l'aire de stationnement à équiper. Conserve à "
         "l'identique les mâts d'éclairage, arbres, bordures, marquages au sol et "
         "véhicules déjà présents.",
     ]
-    if plan_dispo:
+    if implantation_resume:
+        b2_lignes.append(
+            "IMPÉRATIF, LE SCHÉMA D'IMPLANTATION JOINT FAIT FOI : il est extrait du "
+            "plan de masse officiel (vue de dessus). Les zones BLEUES sont l'emprise "
+            f"exacte des rangées de panneaux ({implantation_resume}), les traits ROUGES "
+            "la trame des poteaux, la grande flèche le sens de DESCENTE de la pente. "
+            "Repère sur la photo les rangées de stationnement correspondantes et pose "
+            "l'ombrière exactement là : même nombre de rangées, mêmes proportions, même "
+            "orientation relative, versant descendant dans le sens de la flèche. "
+            "Ne couvre RIEN d'autre que ces emprises, ni plus, ni moins."
+        )
+    elif plan_dispo:
         b2_lignes.append(
             "IMPÉRATIF, LE PLAN DE MASSE JOINT FAIT FOI : reproduis EXACTEMENT le nombre "
             "de rangées d'ombrières, leur position et leur orientation telles qu'elles "
             "figurent sur le plan, par rapport au bâtiment, à l'entrée et aux limites du "
-            "parking. Commence par repérer sur la photo les mêmes éléments que sur le plan "
-            "(façade du magasin, entrée, îlots, bordures, mâts) pour caler l'implantation, "
-            "puis pose les ombrières aux mêmes emplacements. Ne couvre QUE les rangées "
-            "indiquées au plan, ni plus, ni moins. Le plan porte une FLÈCHE indiquant le "
-            "sens de la pente de l'ombrière : oriente le versant exactement dans ce sens. "
-            "Les POTEAUX sont repérés sur le plan : place les poteaux de la structure à "
-            "ces emplacements précis."
+            "parking. Ne couvre QUE les rangées indiquées au plan, ni plus, ni moins, et "
+            "respecte le sens de la pente indiqué."
         )
     else:
         b2_lignes.append(
@@ -139,35 +151,32 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         )
     b2 = " ".join(b2_lignes)
 
-    # -- bloc 3 : l'objet, spécifié précisément
+    # -- bloc 3 : l'objet, spécifié précisément (le linéaire vient du schéma)
     if p:
         double = p.get("double")
         forme = "double pente (structure en T, poteau central)" if double else \
             f"monopente (poteau côté {p.get('poteau', 'haut')})"
-        omb = projet.get("ombriere") or {}
-        modules = "Couverture de modules photovoltaïques full black (noirs mats, non réfléchissants), sous-face claire."
+        modules = ("Couverture de modules photovoltaïques full black (noirs, finition "
+                   "MATE, aucun reflet), sous-face claire.")
         if omb.get("module_puissance_wc") or omb.get("module_dimensions"):
             det = ", ".join(filter(None, [
                 f"{omb['module_puissance_wc']:g} Wc" if omb.get("module_puissance_wc") else None,
                 omb.get("module_dimensions"),
             ]))
-            modules = ("Couverture de modules photovoltaïques full black (noirs mats, non "
-                       f"réfléchissants) de {det}, sous-face claire.")
+            modules = ("Couverture de modules photovoltaïques full black (noirs, finition "
+                       f"MATE, aucun reflet) de {det}, sous-face claire.")
         b3 = (
             "L'OBJET — Ombrière de parking type « {fam} », {forme}. "
-            "Dimensions : {L} de long sur {prof} de profondeur couverte, {trav} travées "
-            "à {entr} d'entraxe, pente {pente}. Hauteur maximale ≈ {hh} au point haut, "
-            "≈ {hb} au point bas. Structure en acier galvanisé gris clair avec fines "
-            "bandes bleues sur les poteaux ; poteaux caisson, arbalétrier effilé et "
+            "Profil : {prof} de profondeur couverte, pente {pente}, hauteur ≈ {hh} au "
+            "point haut et ≈ {hb} au point bas. Le linéaire et le nombre de rangées "
+            "suivent le schéma d'implantation. Structure en acier galvanisé gris clair, "
+            "sans aucun marquage de couleur ; poteaux caisson, arbalétrier effilé et "
             "bracon. {modules} {coupe}"
         ).format(
             fam=libelle_coupe(p.get("famille")),
             forme=forme,
             modules=modules,
-            L=_fmt(p.get("longueur_m"), " m"),
             prof=_fmt(p.get("profondeur_m"), " m"),
-            trav=_fmt(p.get("nb_travees")),
-            entr=_fmt(p.get("entraxe_m"), " m"),
             pente=_fmt(p.get("pente_deg"), "°"),
             hh=_fmt(p.get("h_haut_m"), " m"),
             hb=_fmt(p.get("h_bas_m"), " m"),
@@ -214,10 +223,12 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         "direction et longueur avec celles des mâts, arbres et véhicules déjà "
         "visibles. Conserve le grain, la netteté, l'exposition et la balance des "
         "couleurs de la photo source : le montage doit sembler pris au même instant. "
-        "Pour le réalisme de la structure et des matériaux, inspire-toi de "
-        "photos réelles d'ombrières photovoltaïques de parkings de supermarchés "
-        "français (recherche d'images : « ombrière photovoltaïque parking "
-        "supermarché France »)."
+        "Surfaces MATES partout : aucun reflet spéculaire, aucun éblouissement, "
+        "aucun effet miroir sur les modules ni sur la structure. "
+        "Pour le réalisme de la structure et des matériaux, appuie-toi sur la PHOTO "
+        "DE RÉFÉRENCE jointe (ombrière réelle en service) et sur des photos réelles "
+        "d'ombrières photovoltaïques de parkings de supermarchés français "
+        "(recherche d'images : « ombrière photovoltaïque parking supermarché France »)."
     )
 
     # -- bloc 6 : consignes libres + contraintes négatives
@@ -230,15 +241,27 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         b6_lignes.append(f"Corrections à appliquer : {corrections}.")
     b6_lignes.append(
         "Ne déplace pas les véhicules, ne modifie pas les bâtiments, n'invente pas "
-        "d'arrière-plan. Ne peins RIEN de bleu au sol : aucune dalle, aucun marquage, "
-        "aucune surface bleue sur le bitume (les seules touches bleues autorisées sont "
-        "les fines bandes de signalisation sur les poteaux). Conserve le revêtement du "
-        "parking tel quel. Pas de watermark, pas de texte, pas de logo ajouté. "
+        "d'arrière-plan. Ne peins RIEN de bleu : aucune dalle, aucun marquage, aucune "
+        "surface bleue sur le bitume, aucune bande de couleur sur les poteaux. Le bleu "
+        "du schéma d'implantation est une convention de dessin, pas une couleur à "
+        "reproduire. Conserve le revêtement du parking tel quel. Aucun reflet ajouté. "
+        "Pas de watermark, pas de texte, pas de logo. "
         "Rends uniquement l'image finale, photoréaliste."
     )
     b6 = " ".join(b6_lignes)
 
-    return "\n\n".join([b1, b2, b3, b4, b5, b6])
+    blocs = [b1, b2, b3, b4, b5, b6]
+    if pieces_jointes:
+        NOMS = {"photo": "la PHOTO du site à modifier",
+                "schema": "le SCHÉMA D'IMPLANTATION (extrait du plan de masse)",
+                "plan": "le PLAN DE MASSE",
+                "coupe": "la COUPE technique du type d'ombrière",
+                "reference": "une PHOTO DE RÉFÉRENCE d'ombrière réelle (style uniquement)"}
+        liste = " ; ".join(f"image {i} = {NOMS.get(role, role)}"
+                           for i, role in enumerate(pieces_jointes, 1))
+        blocs.append(f"PIÈCES JOINTES — {liste}.")
+
+    return "\n\n".join(blocs)
 
 
 # ------------------------------------------------------------------ kit d'images
@@ -298,11 +321,27 @@ def image_kit(projet: dict, role: str) -> Path | None:
             return _pdf_premiere_page_png(source, assets / "kit_plan_masse.png")
         return source
 
+    if role == "schema":
+        # schéma d'implantation extrait du plan de masse (cache par date du plan)
+        source = _document_image(projet, "dp2")
+        if not source or source.suffix.lower() != ".pdf":
+            return None
+        from . import implantation
+        sortie = assets / "kit_schema_implantation.png"
+        if sortie.exists() and sortie.stat().st_mtime >= source.stat().st_mtime:
+            return sortie
+        return implantation.generer_schema(source, sortie)
+
     if role == "coupe":
         source = _coupe_source(projet)
         if not source:
             return None
         return _pdf_premiere_page_png(source, assets / "kit_coupe.png")
+
+    if role == "reference":
+        chemin = (config.REPO_ROOT / "app" / "gabarits" / "refs"
+                  / "ombrieres_bellerive_sur_allier_ccbysa40.jpg")
+        return chemin if chemin.exists() else None
 
     return None
 
@@ -380,11 +419,59 @@ def _appel_gemini(parts: list[dict], recherche: bool = True) -> bytes:
     return _extraire_image(resp.json())
 
 
-def generer_image(projet: dict, affinage: str = "") -> dict:
-    """Génère UNE insertion via Gemini (photo + plan + coupe + prompt complet).
+def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
+    """Recolle les pixels d'origine partout où le modèle n'a rien construit.
 
-    Renvoie le dict image {fichier, date, etiquette, modele, prompt} à ajouter
-    à la galerie du projet. Lève InsertionError avec un message actionnable.
+    Diff en niveaux de gris (après normalisation d'exposition), flou, seuil,
+    dilatation puis fondu : seules les zones réellement modifiées (l'ombrière
+    et ses ombres) restent générées ; voitures, sol et bâtiments retrouvent
+    leurs pixels d'origine. Sécurités : formats incompatibles ou image presque
+    entièrement changée -> on rend l'image générée telle quelle.
+    """
+    import io
+
+    from PIL import Image, ImageFilter
+
+    try:
+        orig = Image.open(photo_origine).convert("RGB")
+        gen = Image.open(io.BytesIO(image_generee)).convert("RGB")
+    except OSError:
+        return image_generee
+    ratio_o = orig.width / orig.height
+    ratio_g = gen.width / gen.height
+    if abs(ratio_o - ratio_g) / ratio_o > 0.03:
+        return image_generee  # cadrage différent : diff inexploitable
+    gen = gen.resize(orig.size, Image.LANCZOS)
+
+    o = np.asarray(orig.convert("L"), dtype=np.float32)
+    g = np.asarray(gen.convert("L"), dtype=np.float32)
+    ecart_type = g.std() or 1.0
+    g = (g - g.mean()) / ecart_type * (o.std() or 1.0) + o.mean()  # expo alignée
+
+    diff = Image.fromarray(np.clip(np.abs(g - o), 0, 255).astype(np.uint8))
+    diff = diff.filter(ImageFilter.GaussianBlur(5))
+    masque = np.asarray(diff) > 16
+    fraction = float(masque.mean())
+    if fraction > 0.65:
+        return image_generee  # tout a changé : la restauration effacerait l'ombrière
+
+    alpha = Image.fromarray((masque * 255).astype(np.uint8))
+    alpha = alpha.filter(ImageFilter.MaxFilter(15)).filter(ImageFilter.GaussianBlur(10))
+    a = np.asarray(alpha, dtype=np.float32)[..., None] / 255.0
+    fusion = np.asarray(gen, dtype=np.float32) * a + np.asarray(orig, dtype=np.float32) * (1 - a)
+
+    tampon = io.BytesIO()
+    Image.fromarray(fusion.astype(np.uint8)).save(tampon, "PNG")
+    return tampon.getvalue()
+
+
+def generer_image(projet: dict, affinage: str = "") -> dict:
+    """Génère UNE insertion via Gemini (Nano Banana Pro).
+
+    Pipeline : photo + SCHÉMA D'IMPLANTATION (extrait du plan de masse ; repli
+    plan brut) + coupe + photo de référence réelle -> génération -> recollage
+    de la scène hors zones construites. Renvoie le dict image {fichier, date,
+    etiquette, modele, prompt}. Lève InsertionError avec un message actionnable.
     """
     if not api_configuree():
         raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
@@ -392,14 +479,36 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
     if not photo:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
 
-    prompt = construire_prompt(projet, affinage=affinage)
-    parts: list[dict] = [{"text": prompt}, _part_image(photo)]
-    for role in ("plan", "coupe"):
+    # schéma d'implantation extrait du plan (sinon plan brut en repli)
+    implantation_resume = None
+    roles: list[str] = ["photo"]
+    chemins: list[Path] = [photo]
+    schema = image_kit(projet, "schema")
+    if schema:
+        from . import implantation as mod_implantation
+        source = _document_image(projet, "dp2")
+        analyse = mod_implantation.analyser_plan(source) if source else None
+        if analyse:
+            implantation_resume = mod_implantation.resume(analyse)
+        roles.append("schema")
+        chemins.append(schema)
+    elif (plan := image_kit(projet, "plan")):
+        roles.append("plan")
+        chemins.append(plan)
+    for role in ("coupe", "reference"):
         chemin = image_kit(projet, role)
         if chemin:
-            parts.append(_part_image(chemin))
+            roles.append(role)
+            chemins.append(chemin)
+
+    prompt = construire_prompt(projet, affinage=affinage,
+                               implantation_resume=implantation_resume,
+                               pieces_jointes=roles)
+    parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in chemins]
 
     image = _appel_gemini(parts)
+    if os.environ.get("GVDP_PRESERVER_SCENE", "1") != "0":
+        image = preserver_scene(photo, image)
     dossier = config.assets_dir(projet["id"]) / "insertion"
     dossier.mkdir(parents=True, exist_ok=True)
     nom = f"insertion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
