@@ -365,6 +365,7 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 .cote-row b { color: var(--gv-navy); }
 .cote-row label { display: flex; align-items: center; gap: 4px; color: var(--muted); }
 .input.mini-m { width: 58px; padding: 4px 6px; text-align: right; }
+.btn-sm { padding: 4px 8px; font-size: 12px; }
 
 /* outil de mesure sur le plan de masse */
 .mesure-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 16px 4px; }

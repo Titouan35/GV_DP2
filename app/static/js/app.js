@@ -1431,11 +1431,19 @@ function renderCotes(ctx) {
       <b>Ombrière ${i + 1}</b>
       <label>L <input class="input mini-m" type="number" step="0.1" data-cote="longueur_m" data-i="${i}" value="${o.longueur_m ?? ""}" /> m</label>
       <label>l <input class="input mini-m" type="number" step="0.1" data-cote="largeur_m" data-i="${i}" value="${o.largeur_m ?? ""}" /> m</label>
+      <button class="btn btn-sm" data-inverser-pente="${i}" title="Inverse le sens de la pente (bas/haut) sans retracer">⇅ inverser pente</button>
     </div>`).join("") + `</div>`;
   box.querySelectorAll("[data-cote]").forEach((inp) => inp.addEventListener("input", () => {
     const v = parseFloat((inp.value || "").replace(",", "."));
     ctx.ombrieres[+inp.dataset.i][inp.dataset.cote] = v > 0 ? v : null;
     sauverGuides(ctx);
+  }));
+  box.querySelectorAll("[data-inverser-pente]").forEach((btn) => btn.addEventListener("click", () => {
+    const o = ctx.ombrieres[+btn.dataset.inverserPente];
+    o.largeur = [o.largeur[1], o.largeur[0]];
+    sauverGuides(ctx);
+    dessinerGuides(ctx);
+    toast("Sens de pente inversé.", "ok");
   }));
 }
 
