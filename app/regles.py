@@ -21,7 +21,7 @@ PIECES_DP = [
     {"code": "dp1_cadastral", "titre": "DP1 · Plan cadastral", "mode": "auto"},
     {"code": "dp1_aerien", "titre": "DP1 · Vue aérienne", "mode": "auto"},
     {"code": "dp2", "titre": "DP2 · Plan de masse", "mode": "mixte"},
-    {"code": "dp3", "titre": "DP3 · Plan en coupe", "mode": "mixte"},
+    {"code": "dp3", "titre": "DP3 · Plan en coupe", "mode": "be"},
     {"code": "dp6", "titre": "DP6 · Insertion paysagère", "mode": "be"},
     {"code": "dp7", "titre": "DP7 · Photo environnement proche", "mode": "be"},
     {"code": "dp8", "titre": "DP8 · Photo paysage lointain", "mode": "be"},
@@ -85,11 +85,7 @@ def _statut_piece(piece: dict, projet: Projet) -> dict:
             detail = "à pré-remplir (étape 7)"
         return {**piece, "statut": statut, "detail": detail}
 
-    if mode == "mixte":
-        if code == "dp3" and projet.ombriere.famille:
-            return {**piece, "statut": "prete", "detail": "générée (paramétrique)"}
-        return {**piece, "statut": "en_attente", "detail": "tracé/upload BE attendu"}
-
+    # mixte (DP2) et be : pièce attendue du bureau d'études
     return {**piece, "statut": "en_attente", "detail": "upload BE attendu"}
 
 

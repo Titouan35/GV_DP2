@@ -19,66 +19,52 @@ def test_apercu_expose_cout_et_modele():
     assert a["images_global"] >= 0
 
 
-def test_prompt_v3_legende_du_plan():
-    """Le prompt explique les conventions du plan de masse (validé 17/07)."""
-    projet = {"ombriere": {"famille": "START PLAINE Double", "entraxe_m": 10.0,
-                           "garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5,
-                           "module_dimensions": "1762 x 1134 mm"}}
+def test_prompt_v4_emplacement_double_vue():
+    """Prompt v4 : photo + emprise magenta + aérienne + coupe BE, ultra-cadré."""
+    projet = {"ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5,
+                           "pente_deg": 6}}
+    guides = {"emprises": [[[0.1, 0.2], [0.3, 0.2], [0.3, 0.4], [0.1, 0.4]]],
+              "calibrage": {"a": [0.0, 0.0], "b": [0.1, 0.0],
+                            "distance_m": 2.5, "libelle": "largeur d'une place"}}
     prompt = insertion_ia.construire_prompt(
-        projet,
-        plan_infos={"echelle": "1/200", "dims_m": [(17.9, 5.4)]},
-        idx={"photo": 1, "plan": 2, "coupe": 3})
-    assert "LE PLAN DE MASSE (image 2)" in prompt
-    assert "photo aérienne" in prompt
-    assert "à l'échelle 1/200" in prompt
-    assert "zone bleue quadrillée" in prompt and "calepinage" in prompt
-    assert "17,9 m x 5,4 m" in prompt
-    assert "traits rouges" in prompt and "espacées de 10 m" in prompt
-    assert "carrés gris" in prompt and "fondations" in prompt
-    assert "HAUT DE RAMPANT" in prompt and "descend du bord HAUT" in prompt
-    assert "ignore-le" in prompt          # cartouche/raccordements
-    assert "PLACEMENT" in prompt and "mêmes repères" in prompt
-    assert "arbres" in prompt and "hors emprise" in prompt
-    # structure catalogue décrite (pas de coupe BE)
-    assert "poteau central unique" in prompt
-    assert "2,5 m au point bas et 3,5 m au point haut" in prompt
-    assert "acier galvanisé nu" in prompt and "noirs mats" in prompt
-    assert "RENDU" in prompt and "sans aucun texte ni tracé" in prompt
+        projet, plan_infos={"dims_m": [(18.8, 8.1)]}, guides=guides,
+        idx={"photo": 1, "photo_emprise": 2, "aerienne": 3, "coupe": 4},
+        coupe_be=True)
+    assert prompt.startswith("Insère une ombrière")
+    assert "IMAGE 2" in prompt and "MAGENTA" in prompt
+    assert "segment JAUNE mesure 2,5 m" in prompt and "largeur d'une place" in prompt
+    assert "IMAGE 3 = vue aérienne" in prompt and "DESCENTE" in prompt
+    assert "18,8 m x 8,1 m" in prompt
+    assert "repères de travail" in prompt
+    assert "arbres" in prompt and "retire-les" in prompt
+    assert "IMAGE 4 = la coupe technique du projet" in prompt
+    assert "bureau d'études" in prompt
+    assert "2,5 m au point bas" in prompt and "Pente 6°" in prompt
+    assert "PERSPECTIVE" in prompt and "points de fuite" in prompt
+    assert "poteaux strictement verticaux" in prompt
+    assert "RENDU" in prompt and "bitume reste nu" in prompt
+    # plus de légende du plan brut (il n'est plus joint)
+    assert "PLAN DE MASSE" not in prompt and "cartouche" not in prompt
 
 
-def test_prompt_v3_bloc_perspective():
-    """Le prompt cadre explicitement la perspective / les points de fuite."""
-    projet = {"ombriere": {"famille": "START PLAINE Bas"}}
-    prompt = insertion_ia.construire_prompt(projet, idx={"photo": 1, "plan": 2})
-    assert "PERSPECTIVE" in prompt
-    assert "points de fuite" in prompt
-    assert "poteaux sont strictement verticaux" in prompt
-    assert "touche le sol" in prompt
+def test_prompt_v4_sans_calage():
+    """Sans emprise ni aérienne : placement libre mais cadré."""
+    prompt = insertion_ia.construire_prompt({}, idx={"photo": 1})
+    assert "zone de stationnement la plus cohérente" in prompt
+    assert "PERSPECTIVE" in prompt and "RENDU" in prompt
 
 
-def test_prompt_v3_coupe_be_prime():
-    """Avec une DP3 importée du BE, on ne décrit pas le profil catalogue."""
-    projet = {"ombriere": {"famille": "START PLAINE Double", "pente_deg": 6}}
-    prompt = insertion_ia.construire_prompt(
-        projet, idx={"photo": 1, "coupe": 2}, coupe_be=True)
-    assert "dessinée par le bureau d'études" in prompt
-    assert "poteau central unique" not in prompt   # la coupe BE fait foi
-    assert "pente 6°" in prompt
-
-
-def test_prompt_v3_consignes_et_affinage():
-    projet = {"ombriere": {"famille": "START PLAINE Bas"},
-              "insertion": {"consignes": "garder le mât d'éclairage"}}
+def test_prompt_v4_consignes_et_affinage():
+    projet = {"insertion": {"consignes": "garder le mât d'éclairage"}}
     prompt = insertion_ia.construire_prompt(projet, affinage="assombris les modules")
     assert "garder le mât d'éclairage." in prompt
     assert "assombris les modules." in prompt
     assert "bandes bleues" not in prompt
-    assert "travées" not in prompt
 
 
 def test_prompt_projet_vide_ne_plante_pas():
     prompt = insertion_ia.construire_prompt({})
-    assert "Modifie la photo" in prompt and "ombrière" in prompt.lower()
+    assert "Insère une ombrière" in prompt
 
 
 def test_image_kit_coupe_convertit_pdf_en_png(tmp_path, monkeypatch):

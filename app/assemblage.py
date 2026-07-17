@@ -500,8 +500,6 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     # 1. (re)générer les pièces automatiques
     generees: dict[str, Path] = {}
     for code, generateur in GENERATEURS.items():
-        if code == "dp3_coupe" and not (projet.get("ombriere") or {}).get("famille"):
-            continue
         try:
             image = generateur(projet)
             chemin = assets / f"{code}.png"
@@ -537,21 +535,18 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
                          "l'implantation de l'ombrière, les places de stationnement, les "
                          "accès et le raccordement aux réseaux.", "Pièce DP2"))
 
-    # DP3 coupe : upload BE prioritaire, sinon paramétrique
+    # DP3 coupe : pièce du bureau d'études (upload étape 2)
     titre_dp3 = "Coupe du terrain et de la construction"
     pages = _pages_document(projet, "dp3", assets)
     if pages:
         for page in pages:
             _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=page)
-    elif "dp3_coupe" in generees:
-        _slide_piece_image(prs, projet, assets, titre_dp3, "DP3",
-                           image=generees["dp3_coupe"])
     else:
         _slide_piece_image(
             prs, projet, assets, titre_dp3, "DP3",
-            placeholder=(f"{titre_dp3} à produire",
-                         "Choisissez une coupe à l'étape 3 (génération automatique) "
-                         "ou importez la pièce du BE à l'étape 2.", ""))
+            placeholder=(f"{titre_dp3} en attente",
+                         "Coupe du projet fournie par le bureau d'études "
+                         "(pièce DP3, étape 2).", "Pièce DP3"))
 
     _slide_notice(prs, projet, assets)
     _slide_dp6(prs, projet, assets)

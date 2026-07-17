@@ -104,6 +104,9 @@ class Insertion(BaseModel):
     # {photo: {"emprises": [[[x,y] x4], ...],
     #          "calibrage": {"a": [x,y], "b": [x,y], "distance_m": f, "libelle": s}}}
     guides: dict[str, Any] = Field(default_factory=dict)
+    # emprise sur la vue aérienne (crop du plan), coordonnées 0-1 du crop :
+    # {"emprises": [[[x,y] x4], ...], "auto": bool} — vide = auto (extraction plan)
+    aerienne: dict[str, Any] = Field(default_factory=dict)
 
 
 class Projet(BaseModel):

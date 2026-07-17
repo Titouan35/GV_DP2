@@ -22,12 +22,6 @@ const STEPS = [
 ];
 
 // Libellés « Coupe » présentés à l'utilisateur ; la valeur reste la clé catalogue.
-const COUPES = [
-  { val: "START PLAINE Bas", lbl: "Mono Bas" },
-  { val: "START PLAINE Haut", lbl: "Mono Haut" },
-  { val: "START PLAINE Double", lbl: "Double" },
-];
-const COUPE_LBL = Object.fromEntries(COUPES.map((c) => [c.val, c.lbl]));
 
 // ---------------- utilitaires ----------------
 const $ = (sel) => document.querySelector(sel);
@@ -693,14 +687,7 @@ function renderChips() {
 }
 
 // ---------------- étape 2 : caractéristiques ----------------
-function selectCoupe() {
-  const val = state.projet.ombriere?.famille || "";
-  const opts = COUPES.map((c) =>
-    `<option value="${esc(c.val)}" ${val === c.val ? "selected" : ""}>${esc(c.lbl)}</option>`).join("");
-  return `<div class="field"><label>Coupe</label>
-    <select class="input" data-bind="ombriere.famille"><option value=""></option>${opts}</select></div>`;
-}
-
+// (la coupe du projet = pièce DP3 déposée par le BE, plus de coupe type)
 function renderEtapeCaracteristiques(main) {
   const lecture = state.projet.meta?.plan_lecture;
   const proposes = state.projet.meta?.plan_champs_proposes || [];
@@ -710,7 +697,6 @@ function renderEtapeCaracteristiques(main) {
     ${lecture ? `<div class="note plan-note">Lu sur le plan de masse${lecture.reference_plan ? ` (${esc(lecture.reference_plan)})` : ""} :
       ${esc(resumeLecturePlan(lecture))} <span class="link" id="btn-plan-appliquer">Tout appliquer</span></div>` : ""}
     <div class="formgrid">
-      ${selectCoupe()}
       ${champ("Puissance (kWc)", "ombriere.puissance_kwc", { type: "number", step: "1" })}
       ${champ("Orientation (° azimut)", "ombriere.orientation", { type: "number", step: "1", placeholder: "0 = Nord, 90 = Est" })}
       ${champ("Entraxe (m)", "ombriere.entraxe_m", { type: "number", step: "0.1" })}
@@ -723,23 +709,11 @@ function renderEtapeCaracteristiques(main) {
     </div>
 
     <div class="actionsrow">
-      <button class="btn" id="btn-apercus">Mettre à jour l'aperçu DP3</button>
       <button class="btn navy" id="btn-suivant">Continuer vers l'insertion IA</button>
-    </div>
-    <div class="grid" style="margin-top:18px" id="apercus" hidden>
-      <div class="card"><div class="hd"><span class="ti-title">Aperçu DP3 · Coupe</span></div>
-        <img id="img-dp3" class="planche-img" alt="Coupe DP3" /></div>
     </div>`;
   brancherChamps(main);
   marquerChampsProposes(main, proposes);
   $("#btn-plan-appliquer")?.addEventListener("click", () => appliquerLecturePlan(lecture));
-  const chargerApercus = async () => {
-    if (!state.projet.ombriere?.famille) { toast("Choisissez d'abord une coupe.", "err"); return; }
-    await sauvegarder();
-    $("#apercus").hidden = false;
-    $("#img-dp3").src = `/api/projets/${state.projet.id}/planches/dp3_coupe.png?regen=1&t=${Date.now()}`;
-  };
-  $("#btn-apercus").addEventListener("click", () => chargerApercus().catch(() => {}));
   $("#btn-suivant").addEventListener("click", async () => { await sauvegarder(); allerEtape(4); });
 }
 
@@ -942,7 +916,7 @@ function majStatutMesure() {
 // ---------------- étape 3 : pièces du BE (uploads, glisser-déposer) ----------------
 const PIECES_UPLOAD = [
   { code: "dp2", titre: "DP2 · Plan de masse", note: "" },
-  { code: "dp3", titre: "DP3 · Coupe (repli BE)", note: "facultatif : remplace la coupe paramétrique" },
+  { code: "dp3", titre: "DP3 · Coupe du projet", note: "sert aussi de référence structure à l'insertion IA" },
   { code: "dp6", titre: "DP6 · Photomontage d'insertion", note: "" },
   { code: "dp7", titre: "DP7 · Photo environnement proche", note: "" },
   { code: "dp8", titre: "DP8 · Photo paysage lointain", note: "" },
@@ -1058,12 +1032,11 @@ function ouvrirLightbox(src) {
 
 function resumeOmbriere() {
   const o = state.projet.ombriere || {};
-  if (!o.famille) return "Type d'ombrière non renseigné (étape 3) — le prompt restera générique.";
-  const bits = [o.famille];
+  const bits = [];
   if (o.puissance_kwc) bits.push(`${o.puissance_kwc} kWc`);
-  if (o.nb_places) bits.push(`${o.nb_places} places`);
-  if (o.hauteur_hors_tout_m) bits.push(`h. ${o.hauteur_hors_tout_m} m`);
-  return bits.join(" · ");
+  if (o.garde_au_sol_m && o.hauteur_hors_tout_m) bits.push(`${o.garde_au_sol_m} → ${o.hauteur_hors_tout_m} m`);
+  if (o.pente_deg) bits.push(`pente ${o.pente_deg}°`);
+  return bits.join(" · ") || "caractéristiques à saisir (étape 3)";
 }
 
 async function renderEtapeInsertion(main) {
@@ -1112,45 +1085,65 @@ function renderInsertionAtelier(s) {
   state.coutImage = s.cout_image_eur || 0;
   const main = $("#main");
   main.querySelector("#ia-statut").outerHTML = `
-    <div class="grid">
-      <div class="card">
-        <div class="hd"><span class="ti-title">1 · Photo & consignes</span>
-          <label class="link" style="cursor:pointer">+ ajouter des photos
-            <input type="file" id="ins-photos-add" accept=".png,.jpg,.jpeg,.webp" multiple hidden /></label></div>
-        <div class="bd">
-          <div id="ins-photos" class="sub">Chargement des photos…</div>
-          <details class="foldable" id="ins-guides-fold" style="margin-top:12px">
-            <summary>Guides d'implantation sur la photo <span class="hint" id="ins-guides-etat"></span></summary>
-            <div class="bd" id="ins-guides-body"></div>
-          </details>
-          <div class="field" style="margin-top:14px"><label>Prompt complémentaire (facultatif)</label>
-            <textarea class="input notice-ta" id="ins-consignes" rows="3"
-              placeholder="Ex. : 3 rangées depuis la façade, garder le mât d'éclairage, pas de bleu au sol">${esc(ins.consignes || "")}</textarea></div>
-          <div class="note" style="margin-top:4px">Ombrière : <b>${esc(resumeOmbriere())}</b></div>
-          <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:14px">Générer l'insertion</button>
-          <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
-          <div class="hint" id="ins-depense" style="margin-top:2px;text-align:center">${esc(texteDepense(s.images_projet || 0, s.images_global || 0, s.cout_image_eur))}</div>
-          <details class="foldable" id="ins-prompt-fold" style="margin-top:10px"><summary>Prompt envoyé à Gemini <span class="hint">(modifiable)</span></summary>
-            <div class="bd">
-              <textarea class="input prompt-ta" id="ins-prompt" rows="12" spellcheck="false"></textarea>
-              <div class="actionsrow" style="margin-top:8px">
-                <button class="btn" id="ins-prompt-auto" title="Reconstruire le prompt depuis les données du projet">↺ Prompt auto</button>
-                <span class="hint" id="ins-prompt-etat"></span>
-              </div>
-            </div>
-          </details>
+    <div class="card">
+      <div class="hd"><span class="ti-title">1 · Photo du site</span>
+        <label class="link" style="cursor:pointer">+ ajouter des photos
+          <input type="file" id="ins-photos-add" accept=".png,.jpg,.jpeg,.webp" multiple hidden /></label></div>
+      <div class="bd">
+        <div id="ins-alerte-photo"></div>
+        <div id="ins-photos" class="sub">Chargement des photos…</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="hd"><span class="ti-title">2 · Caler l'ombrière</span>
+        <span class="hint">l'emprise magenta est la contrainte de placement envoyée à Gemini</span></div>
+      <div class="bd">
+        <div class="calage-grid">
+          <div>
+            <div class="calage-titre">Vue aérienne (du plan) <span class="hint" id="aer-etat"></span></div>
+            <div id="aer-body"><p class="sub">Chargement…</p></div>
+          </div>
+          <div>
+            <div class="calage-titre">Sur la photo <span class="hint" id="ins-guides-etat"></span></div>
+            <div id="ins-guides-body"></div>
+          </div>
         </div>
       </div>
+    </div>
 
-      <div class="card">
-        <div class="hd"><span class="ti-title">2 · Insertions générées</span>
-          <span class="hint">cochées = incluses au dossier DP</span></div>
-        <div class="bd">
-          <div class="gallery" id="ins-galerie"></div>
-          <div class="actionsrow" style="margin-top:12px">
-            <button class="btn navy" id="ins-fiche" ${ins.retenue ? "" : "disabled"}>Fiche de validation d'emprise (PPTX)</button>
-            <span id="ins-fiche-lien" class="sub"></span>
+    <div class="card" style="margin-top:16px">
+      <div class="hd"><span class="ti-title">3 · Générer</span>
+        <span class="hint">Ombrière : ${esc(resumeOmbriere())}</span></div>
+      <div class="bd">
+        <div class="calage-titre">Images envoyées à Gemini</div>
+        <div class="payload-strip" id="ins-payload"><p class="sub">Chargement…</p></div>
+        <div class="field" style="margin-top:12px"><label>Consignes complémentaires (facultatif)</label>
+          <textarea class="input notice-ta" id="ins-consignes" rows="2"
+            placeholder="Ex. : garder le mât d'éclairage">${esc(ins.consignes || "")}</textarea></div>
+        <details class="foldable" id="ins-prompt-fold" style="margin-top:10px"><summary>Prompt envoyé <span class="hint">(modifiable)</span></summary>
+          <div class="bd">
+            <textarea class="input prompt-ta" id="ins-prompt" rows="12" spellcheck="false"></textarea>
+            <div class="actionsrow" style="margin-top:8px">
+              <button class="btn" id="ins-prompt-auto" title="Reconstruire le prompt depuis les données du projet">↺ Prompt auto</button>
+              <span class="hint" id="ins-prompt-etat"></span>
+            </div>
           </div>
+        </details>
+        <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:12px">Générer l'insertion</button>
+        <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
+        <div class="hint" id="ins-depense" style="margin-top:2px;text-align:center">${esc(texteDepense(s.images_projet || 0, s.images_global || 0, s.cout_image_eur))}</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div class="hd"><span class="ti-title">Insertions générées</span>
+        <span class="hint">cochées = incluses au dossier DP</span></div>
+      <div class="bd">
+        <div class="gallery" id="ins-galerie"></div>
+        <div class="actionsrow" style="margin-top:12px">
+          <button class="btn navy" id="ins-fiche" ${ins.retenue ? "" : "disabled"}>Fiche de validation d'emprise (PPTX)</button>
+          <span id="ins-fiche-lien" class="sub"></span>
         </div>
       </div>
     </div>`;
@@ -1167,7 +1160,7 @@ function renderInsertionAtelier(s) {
     tc = setTimeout(() => {
       api(`/api/projets/${state.projet.id}/insertion/consignes`, {
         method: "PUT", body: JSON.stringify({ consignes: $("#ins-consignes").value }),
-      }).then((d) => { state.projet = d.projet; }).catch(() => {});
+      }).then((d) => { state.projet = d.projet; rafraichirPayloadEtPrompt(); }).catch(() => {});
     }, 700);
   });
   $("#ins-generer-api").addEventListener("click", () => genererInsertionAPI().catch(() => {}));
@@ -1175,6 +1168,160 @@ function renderInsertionAtelier(s) {
 
   renderPhotosInsertion();
   renderGalerie();
+}
+
+// ---- bandeau du payload : les images EXACTES qui partiront à Gemini ----
+let payloadTimer = null;
+function rafraichirPayloadEtPrompt() {
+  clearTimeout(payloadTimer);
+  payloadTimer = setTimeout(() => {
+    renderPayload();
+    if (!state.promptEdite) chargerApercuPrompt();
+  }, 600);
+}
+
+async function renderPayload() {
+  const box = $("#ins-payload");
+  if (!box) return;
+  let d;
+  try { d = await api(`/api/projets/${state.projet.id}/insertion/apercu-payload`); }
+  catch { return; }
+  if (!d.images.length) {
+    box.innerHTML = `<p class="sub">Ajoute une photo du site pour préparer l'envoi.</p>`;
+    return;
+  }
+  box.innerHTML = d.images.map((im) => `
+    <figure class="payload-item" title="${esc(im.titre)}">
+      <img src="${esc(im.url)}&t=${Date.now()}" alt="${esc(im.titre)}" data-zoom="${esc(im.url)}" />
+      <figcaption>${esc(im.titre)}</figcaption>
+    </figure>`).join("");
+  box.querySelectorAll("[data-zoom]").forEach((img) =>
+    img.addEventListener("click", () => ouvrirLightbox(img.dataset.zoom)));
+}
+
+// ---- alerte si la photo active est une pièce BE réutilisée ----
+function renderAlertePhoto() {
+  const box = $("#ins-alerte-photo");
+  if (!box) return;
+  const photo = state.projet.insertion?.photo || "";
+  const piece = (photo.match(/\/uploads\/(dp[678])\./) || [])[1];
+  box.innerHTML = piece
+    ? `<div class="note warn" style="margin-bottom:10px">La photo active provient de la pièce ${piece.toUpperCase()}.
+       Une photo dédiée du site (bien cadrée, zone dégagée) donne de meilleurs résultats.</div>`
+    : "";
+}
+
+// ---- vue aérienne : emprise auto extraite du plan, coins ajustables ----
+const aerUI = { img: null, data: null, drag: null };
+
+async function renderAerienne() {
+  const body = $("#aer-body");
+  if (!body) return;
+  let d;
+  try { d = await api(`/api/projets/${state.projet.id}/insertion/aerienne`); }
+  catch { return; }
+  const etat = $("#aer-etat");
+  if (!d.disponible) {
+    body.innerHTML = `<p class="sub">Dépose le plan de masse (DP2, étape 2) pour extraire l'emprise automatiquement.</p>`;
+    if (etat) etat.textContent = "";
+    return;
+  }
+  aerUI.data = d;
+  if (etat) etat.textContent = d.auto ? "(auto, extraite du plan)" : "(ajustée à la main)";
+  body.innerHTML = `
+    <div class="mesure-canvas-wrap"><canvas id="aer-canvas"></canvas></div>
+    <div class="actionsrow" style="margin-top:8px">
+      <button class="btn" id="aer-reset" ${d.auto ? "disabled" : ""}>↺ Emprise auto</button>
+      <span class="hint">glisse les coins magenta pour ajuster</span>
+    </div>`;
+  const canvas = $("#aer-canvas");
+  const img = new Image();
+  img.onload = () => {
+    const maxW = 640;
+    const sc = Math.min(1, maxW / img.naturalWidth);
+    canvas.width = Math.round(img.naturalWidth * sc);
+    canvas.height = Math.round(img.naturalHeight * sc);
+    aerUI.img = img;
+    dessinerAerienne();
+  };
+  img.src = `${d.fond}&t=${Date.now()}`;
+
+  const pos = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  };
+  canvas.addEventListener("mousedown", (e) => {
+    const [x, y] = pos(e);
+    let plusProche = null;
+    aerUI.data.emprises.forEach((emp, ei) => emp.forEach((p, pi) => {
+      const dist = Math.hypot((p[0] - x) * canvas.width, (p[1] - y) * canvas.height);
+      if (dist < 14 && (!plusProche || dist < plusProche.dist)) plusProche = { ei, pi, dist };
+    }));
+    aerUI.drag = plusProche;
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    if (!aerUI.drag) return;
+    const [x, y] = pos(e);
+    aerUI.data.emprises[aerUI.drag.ei][aerUI.drag.pi] =
+      [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
+    dessinerAerienne();
+  });
+  const finDrag = () => {
+    if (!aerUI.drag) return;
+    aerUI.drag = null;
+    api(`/api/projets/${state.projet.id}/insertion/aerienne`, {
+      method: "PUT", body: JSON.stringify({ emprises: aerUI.data.emprises }),
+    }).then((d2) => {
+      state.projet = d2.projet;
+      aerUI.data.auto = false;
+      const b = $("#aer-reset"); if (b) b.disabled = false;
+      const et = $("#aer-etat"); if (et) et.textContent = "(ajustée à la main)";
+      rafraichirPayloadEtPrompt();
+    }).catch(() => {});
+  };
+  canvas.addEventListener("mouseup", finDrag);
+  canvas.addEventListener("mouseleave", finDrag);
+  $("#aer-reset").addEventListener("click", async () => {
+    const d2 = await api(`/api/projets/${state.projet.id}/insertion/aerienne`, { method: "DELETE" });
+    state.projet = d2.projet;
+    renderAerienne();
+    rafraichirPayloadEtPrompt();
+  });
+}
+
+function dessinerAerienne() {
+  const canvas = $("#aer-canvas");
+  if (!canvas || !aerUI.img || !aerUI.data) return;
+  const dr = canvas.getContext("2d");
+  dr.clearRect(0, 0, canvas.width, canvas.height);
+  dr.drawImage(aerUI.img, 0, 0, canvas.width, canvas.height);
+  const X = (p) => p[0] * canvas.width, Y = (p) => p[1] * canvas.height;
+  for (const emp of aerUI.data.emprises) {
+    dr.beginPath();
+    emp.forEach((p, i) => (i ? dr.lineTo(X(p), Y(p)) : dr.moveTo(X(p), Y(p))));
+    dr.closePath();
+    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 3; dr.stroke();
+    for (const p of emp) {
+      dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fillStyle = "#FF00C8"; dr.fill();
+      dr.lineWidth = 2; dr.strokeStyle = "#fff"; dr.stroke();
+    }
+  }
+  const f = aerUI.data.fleche;
+  if (f) {
+    const a = [X(f.a), Y(f.a)], b = [X(f.b), Y(f.b)];
+    const v = [b[0] - a[0], b[1] - a[1]];
+    const n = Math.hypot(...v) || 1;
+    const u = [v[0] / n, v[1] / n], p = [-u[1], u[0]];
+    dr.strokeStyle = "#fff"; dr.lineWidth = 6;
+    dr.beginPath(); dr.moveTo(...a); dr.lineTo(...b); dr.stroke();
+    dr.strokeStyle = "#14141e"; dr.lineWidth = 3;
+    dr.beginPath(); dr.moveTo(...a); dr.lineTo(...b);
+    for (const s of [1, -1]) {
+      dr.moveTo(...b);
+      dr.lineTo(b[0] - 14 * u[0] + s * 8 * p[0], b[1] - 14 * u[1] + s * 8 * p[1]);
+    }
+    dr.stroke();
+  }
 }
 
 // ---- guides d'implantation tracés sur la photo active (envoyés à Gemini) ----
@@ -1198,7 +1345,7 @@ function sauverGuides(ctx) {
     api(`/api/projets/${state.projet.id}/insertion/guides`, {
       method: "PUT",
       body: JSON.stringify({ photo: ctx.photo, emprises: ctx.emprises, calibrage: ctx.calibrage }),
-    }).then((d) => { state.projet = d.projet; majEtatGuides(); }).catch(() => {});
+    }).then((d) => { state.projet = d.projet; majEtatGuides(); rafraichirPayloadEtPrompt(); }).catch(() => {});
   }, 500);
 }
 
@@ -1310,10 +1457,9 @@ function dessinerGuides(ctx) {
     dr.beginPath();
     emprise.forEach((p, i) => (i ? dr.lineTo(X(p), Y(p)) : dr.moveTo(X(p), Y(p))));
     dr.closePath();
-    dr.fillStyle = "rgba(0,230,90,0.18)"; dr.fill();
-    dr.strokeStyle = "#00E65A"; dr.lineWidth = 3; dr.stroke();
+    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 3; dr.stroke();
     for (const p of emprise) {
-      dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fillStyle = "#00E65A"; dr.fill();
+      dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fillStyle = "#FF00C8"; dr.fill();
     }
   }
   if (ctx.calibrage) {
@@ -1385,7 +1531,12 @@ async function renderPhotosInsertion(sel = "#ins-photos") {
     });
     state.projet = d.projet; toast("Photo reprise des pièces BE.", "ok"); renderPhotosInsertion(sel);
   }));
-  if (sel === "#ins-photos") renderGuides();  // guides liés à la photo active (étape 4)
+  if (sel === "#ins-photos") {  // étape 4 : tout ce qui dépend de la photo active
+    renderGuides();
+    renderAerienne();
+    renderAlertePhoto();
+    rafraichirPayloadEtPrompt();
+  }
 }
 
 async function uploaderPhotosSite(files, sel = "#ins-photos") {
@@ -1614,7 +1765,6 @@ const PLANCHES_APERCU = [
   ["dp1_situation", "DP1 · Situation"],
   ["dp1_cadastral", "DP1 · Cadastre"],
   ["dp1_aerien", "DP1 · Vue aérienne"],
-  ["dp3_coupe", "DP3 · Coupe"],
 ];
 
 function renderEtapeExport(main) {

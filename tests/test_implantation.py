@@ -123,35 +123,56 @@ def _projet_avec_guides(tmp_path):
     }
 
 
-def test_photo_guidee_dessine_les_traces(tmp_path, monkeypatch):
+def test_photo_emprise_magenta_sans_texte(tmp_path, monkeypatch):
+    """v4 : contours MAGENTA + segment jaune, aucun vert, aucun texte."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet = _projet_avec_guides(tmp_path)
     guides = insertion_ia.guides_actifs(projet)
     assert guides and len(guides["emprises"]) == 1 and guides["calibrage"]
-    annotee = insertion_ia.photo_guidee(projet)
-    assert annotee and annotee.exists()
+    annotee = insertion_ia.photo_emprise(projet)
+    assert annotee and annotee.exists() and annotee.name == "photo_emprise.png"
     arr = np.asarray(Image.open(annotee).convert("RGB"))
-    vert = (arr[..., 1] > 190) & (arr[..., 0] < 120)   # tracés verts présents
+    magenta = (arr[..., 0] > 200) & (arr[..., 1] < 90) & (arr[..., 2] > 140)
     jaune = (arr[..., 0] > 200) & (arr[..., 1] > 150) & (arr[..., 2] < 90)
-    assert vert.sum() > 200 and jaune.sum() > 60
+    vert = (arr[..., 1] > 190) & (arr[..., 0] < 120) & (arr[..., 2] < 120)
+    assert magenta.sum() > 200 and jaune.sum() > 40
+    assert vert.sum() == 0
     assert "1 emprise" in insertion_ia.resume_guides(guides)
-
-
-def test_prompt_guides_confirment_le_plan(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
-    projet = _projet_avec_guides(tmp_path)
-    guides = insertion_ia.guides_actifs(projet)
-    prompt = insertion_ia.construire_prompt(
-        projet, guides=guides,
-        plan_infos={"echelle": "1/200", "dims_m": [(17.9, 5.4)]},
-        idx={"photo": 1, "plan": 2, "guides": 3, "coupe": 4})
-    assert "polygones verts tracés sur l'image 3" in prompt
-    assert "épouser exactement" in prompt
-    assert "2,5 m" in prompt and "largeur d'une place" in prompt
-    assert "Ne reproduis pas ces tracés" in prompt
-    assert "LE PLAN DE MASSE (image 2)" in prompt  # légende du plan conservée
 
 
 def test_guides_absents(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     assert insertion_ia.guides_actifs({"id": "p", "insertion": {}}) is None
+
+
+@anse_requis
+def test_aerienne_extraite_du_plan(tmp_path, monkeypatch):
+    """Fond aérien croppé + emprises auto (rangées du plan) + flèche de pente."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    uploads = tmp_path / "p.assets" / "uploads"
+    uploads.mkdir(parents=True)
+    import shutil
+    shutil.copy(PLAN_ANSE, uploads / "dp2.pdf")
+    projet = {"id": "p", "insertion": {},
+              "documents": {"dp2": {"fichier": "p.assets/uploads/dp2.pdf"}}}
+    d = insertion_ia.aerienne_donnees(projet)
+    assert d and d["auto"] and d["fond"].exists()
+    assert len(d["emprises"]) >= 1
+    for emprise in d["emprises"]:
+        assert len(emprise) == 4
+        for x, y in emprise:
+            assert 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0
+    assert d["fleche"]  # HAUT/BAS DE RAMPANT localisés
+
+    annotee = insertion_ia.aerienne_emprise(projet)
+    assert annotee and annotee.exists()
+    arr = np.asarray(Image.open(annotee).convert("RGB"))
+    magenta = (arr[..., 0] > 200) & (arr[..., 1] < 90) & (arr[..., 2] > 140)
+    assert magenta.sum() > 300
+
+    # override utilisateur : les coins stockés priment
+    projet["insertion"]["aerienne"] = {
+        "emprises": [[[0.1, 0.1], [0.4, 0.1], [0.4, 0.3], [0.1, 0.3]]],
+        "auto": False}
+    d2 = insertion_ia.aerienne_donnees(projet)
+    assert not d2["auto"] and d2["emprises"][0][0] == [0.1, 0.1]

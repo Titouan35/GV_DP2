@@ -43,6 +43,83 @@ def apercu_prompt(projet_id: str):
     return {"prompt": insertion_ia.apercu_prompt(projet.model_dump())}
 
 
+TITRES_PAYLOAD = {
+    "photo": "1 · Photo du site (à modifier)",
+    "photo_emprise": "2 · Photo + emprise tracée",
+    "aerienne": "Vue aérienne + emprise + pente",
+    "coupe": "Coupe technique (DP3)",
+}
+
+
+@router.get("/{projet_id}/insertion/apercu-payload")
+def apercu_payload(projet_id: str):
+    """Le lot d'images EXACT qui partira à Gemini (miniatures UI) + le prompt."""
+    projet = _charger(projet_id)
+    try:
+        req = insertion_ia._preparer_requete(projet.model_dump())
+    except InsertionError:
+        return {"images": [], "prompt": ""}
+    images = []
+    for i, (role, chemin) in enumerate(zip(req["roles"], req["chemins"]), 1):
+        rel = str(Path(chemin).resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
+        images.append({
+            "role": role,
+            "titre": TITRES_PAYLOAD.get(role, role).replace("1 ·", f"{i} ·").replace("2 ·", f"{i} ·"),
+            "url": f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}",
+        })
+    return {"images": images, "prompt": req["prompt"]}
+
+
+# ------------------------------------------------------------------ vue aérienne
+
+@router.get("/{projet_id}/insertion/aerienne")
+def lire_aerienne(projet_id: str):
+    """Fond aérien (crop du plan) + emprises (auto ou ajustées) + flèche."""
+    projet = _charger(projet_id)
+    d = insertion_ia.aerienne_donnees(projet.model_dump())
+    if not d:
+        return {"disponible": False}
+    rel = str(d["fond"].resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
+    return {
+        "disponible": True,
+        "fond": f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}",
+        "emprises": d["emprises"],
+        "fleche": d["fleche"],
+        "auto": d["auto"],
+    }
+
+
+@router.put("/{projet_id}/insertion/aerienne")
+def sauver_aerienne(projet_id: str, corps: dict = Body(...)):
+    """Emprises ajustées sur la vue aérienne (coordonnées 0-1 du crop)."""
+    projet = _charger(projet_id)
+
+    def _point(p):
+        try:
+            x, y = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError):
+            raise HTTPException(status_code=400, detail="Point invalide.")
+        return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
+
+    emprises = [[_point(p) for p in e] for e in (corps.get("emprises") or []) if len(e) >= 3]
+    if not emprises:
+        raise HTTPException(status_code=400, detail="Au moins une emprise attendue.")
+    projet.insertion.aerienne = {"emprises": emprises, "auto": False}
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
+@router.delete("/{projet_id}/insertion/aerienne")
+def reinitialiser_aerienne(projet_id: str):
+    """Revient à l'emprise automatique extraite du plan."""
+    projet = _charger(projet_id)
+    projet.insertion.aerienne = {}
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
 # ------------------------------------------------------------------ photo du site
 
 @router.post("/{projet_id}/insertion/photos")
