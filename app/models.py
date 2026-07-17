@@ -89,7 +89,8 @@ class Insertion(BaseModel):
     prompt ultra-détaillé + un kit d'images à joindre ; l'utilisateur génère
     l'insertion dans son propre ChatGPT, puis ré-importe l'image retenue ici.
     """
-    photo: Optional[str] = None            # chemin relatif de la photo du site
+    photo: Optional[str] = None            # photo du site active (base de génération)
+    photos: list[str] = Field(default_factory=list)  # photos du site déposées (multi)
     consignes: str = ""                    # consignes libres pour le prompt
     affinage: str = ""                     # dernières consignes de correction (affiner le prompt)
     echelle_desc: str = ""                 # ce que représente le repère d'échelle (ex. « largeur d'une place »)

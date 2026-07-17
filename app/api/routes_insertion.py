@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Body, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import config, insertion_ia
@@ -36,61 +37,99 @@ def statut_projet(projet_id: str):
 
 # ------------------------------------------------------------------ photo du site
 
-@router.post("/{projet_id}/insertion/photo")
-async def uploader_photo(projet_id: str, fichier: UploadFile):
-    ext = Path(fichier.filename or "").suffix.lower()
-    if ext not in EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Photo au format PNG, JPG ou WEBP attendue.")
-    contenu = await fichier.read()
-    if len(contenu) > TAILLE_MAX:
-        raise HTTPException(status_code=400, detail="Photo trop volumineuse (40 Mo max).")
-
+@router.post("/{projet_id}/insertion/photos")
+async def uploader_photos(projet_id: str, fichiers: list[UploadFile] = File(...)):
+    """Dépose une ou plusieurs photos du site (base des insertions)."""
     projet = _charger(projet_id)
     dossier = config.assets_dir(projet_id) / "insertion"
     dossier.mkdir(parents=True, exist_ok=True)
-    for ancien in dossier.glob("photo_site.*"):
-        ancien.unlink()
-    chemin = dossier / f"photo_site{ext}"
-    chemin.write_bytes(contenu)
+    ajout = 0
+    for fichier in fichiers:
+        ext = Path(fichier.filename or "").suffix.lower()
+        if ext not in EXTENSIONS:
+            continue
+        contenu = await fichier.read()
+        if len(contenu) > TAILLE_MAX:
+            continue
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+        chemin = dossier / f"site_{stamp}{ext}"
+        chemin.write_bytes(contenu)
+        rel = str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/")
+        projet.insertion.photos.append(rel)
+        ajout += 1
+    if not ajout:
+        raise HTTPException(status_code=400, detail="Aucune image valide (PNG/JPG/WEBP, 40 Mo max).")
+    if not projet.insertion.photo:
+        projet.insertion.photo = projet.insertion.photos[0]
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
 
-    projet.insertion.photo = str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/")
+
+@router.put("/{projet_id}/insertion/photo-active")
+def photo_active(projet_id: str, corps: dict = Body(...)):
+    """Choisit la photo du site sur laquelle générer l'insertion."""
+    projet = _charger(projet_id)
+    chemin = corps.get("chemin")
+    if chemin not in projet.insertion.photos:
+        raise HTTPException(status_code=400, detail="Photo inconnue.")
+    projet.insertion.photo = chemin
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
+@router.delete("/{projet_id}/insertion/photo")
+def supprimer_photo(projet_id: str, chemin: str):
+    projet = _charger(projet_id)
+    projet.insertion.photos = [p for p in projet.insertion.photos if p != chemin]
+    if projet.insertion.photo == chemin:
+        projet.insertion.photo = projet.insertion.photos[0] if projet.insertion.photos else None
+    cible = (config.PROJETS_DIR / chemin).resolve()
+    base = config.assets_dir(projet_id).resolve()
+    if base in cible.parents and cible.exists():
+        cible.unlink()
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
+@router.get("/{projet_id}/insertion/photos-disponibles")
+def photos_disponibles(projet_id: str):
+    """Photos du site déposées + photos réutilisables des Pièces BE (DP7/DP8/DP6)."""
+    projet = _charger(projet_id)
+    photos = [
+        {"chemin": p,
+         "url": f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(p)}"}
+        for p in projet.insertion.photos
+    ]
+    libelles = {"dp7": "DP7 · proche", "dp8": "DP8 · lointain", "dp6": "DP6"}
+    reutil = []
+    for code, libelle in libelles.items():
+        doc = (projet.documents or {}).get(code)
+        if doc and Path(doc.get("fichier", "")).suffix.lower() in EXTENSIONS:
+            reutil.append({"code": code, "libelle": libelle,
+                           "url": f"/api/projets/{projet_id}/documents/{code}/image"})
+    return {"photos": photos, "reutilisables": reutil, "active": projet.insertion.photo}
+
+
+@router.put("/{projet_id}/insertion/photo-piece")
+def photo_depuis_piece(projet_id: str, corps: dict = Body(...)):
+    """Reprend une photo des Pièces BE (DP7/DP8/DP6) dans les photos du site."""
+    code = corps.get("code")
+    projet = _charger(projet_id)
+    doc = (projet.documents or {}).get(code)
+    if not doc or Path(doc.get("fichier", "")).suffix.lower() not in EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Pièce image introuvable.")
+    if doc["fichier"] not in projet.insertion.photos:
+        projet.insertion.photos.append(doc["fichier"])
+    projet.insertion.photo = doc["fichier"]
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet}
 
 
 # ------------------------------------------------------------------ consignes
-
-@router.get("/{projet_id}/insertion/photos-disponibles")
-def photos_disponibles(projet_id: str):
-    """Photos déjà importées dans les Pièces BE (utilisables comme base d'insertion)."""
-    projet = _charger(projet_id)
-    libelles = {"dp7": "Photo environnement proche (DP7)",
-                "dp8": "Photo paysage lointain (DP8)",
-                "dp6": "Photomontage (DP6)"}
-    dispo = []
-    for code, libelle in libelles.items():
-        doc = (projet.documents or {}).get(code)
-        if doc and Path(doc.get("fichier", "")).suffix.lower() in EXTENSIONS:
-            dispo.append({"code": code, "libelle": libelle,
-                          "url": f"/api/projets/{projet_id}/documents/{code}/image"})
-    return {"photos": dispo, "actuelle": projet.insertion.photo}
-
-
-@router.put("/{projet_id}/insertion/photo-piece")
-def photo_depuis_piece(projet_id: str, corps: dict = Body(...)):
-    """Réutilise une photo des Pièces BE (DP7/DP8/DP6) comme photo du site."""
-    code = corps.get("code")
-    projet = _charger(projet_id)
-    doc = (projet.documents or {}).get(code)
-    if not doc:
-        raise HTTPException(status_code=400, detail="Pièce introuvable.")
-    if Path(doc.get("fichier", "")).suffix.lower() not in EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Cette pièce n'est pas une image (un PDF ne peut pas servir de photo).")
-    projet.insertion.photo = doc["fichier"]
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
-    return {"projet": projet}
 
 
 @router.put("/{projet_id}/insertion/consignes")

@@ -262,6 +262,23 @@ body {
   margin-left: auto; font-size: 11px; font-weight: 600; border-radius: 6px; padding: 3px 8px;
   background: var(--gv-violet-l); color: var(--gv-violet);
 }
+/* fiche projet */
+.fiche-tete { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.fiche-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fiche-etapes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fiche-etape {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: var(--r); background: var(--card); cursor: pointer; text-align: left; font-family: inherit;
+}
+.fiche-etape:hover { border-color: var(--gv-green); }
+.fiche-etape .dot {
+  width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600; flex: none; border: 1px solid var(--line); color: var(--muted); background: var(--card);
+}
+.fiche-etape.done .dot { background: var(--gv-green); border-color: var(--gv-green); color: var(--gv-navy); }
+.fiche-etape span { font-size: 13px; font-weight: 500; color: var(--ink); }
+.fiche-etape small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+
 .placeholder {
   border: 1.5px dashed var(--line); border-radius: var(--r-lg); padding: 34px;
   text-align: center; color: var(--muted); max-width: 720px; background: var(--card);
@@ -352,6 +369,16 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 .photo-choice:hover { border-color: var(--gv-green); }
 .photo-choice img { width: 100%; height: 78px; object-fit: cover; display: block; background: var(--bg); }
 .photo-choice span { display: block; padding: 6px 8px; font-size: 11px; color: var(--gv-navy); line-height: 1.3; }
+.photo-choice { position: relative; }
+.photo-choice.actif { border-color: var(--gv-green); box-shadow: 0 0 0 2px var(--gv-green-l); }
+.photo-choice.petite { width: 112px; }
+.photo-choice.petite img { height: 66px; }
+.photo-suppr {
+  position: absolute; top: 5px; right: 5px; width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: rgba(0, 36, 85, 0.62); color: #fff; cursor: pointer;
+  font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.photo-suppr:hover { background: var(--red); }
 
 @media (max-width: 1100px) {
   .rightpanel { display: none; }

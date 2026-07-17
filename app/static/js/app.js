@@ -17,7 +17,7 @@ const STEPS = [
   { n: 2, titre: "Pièces du BE", sous: "Masse, coupe, façades, DP6" },
   { n: 3, titre: "Caractéristiques", sous: "Ombrière, coupe" },
   { n: 4, titre: "Insertion IA", sous: "Visuel commercial" },
-  { n: 5, titre: "Notice descriptive", sous: "Rédaction assistée" },
+  { n: 5, titre: "Notice + Cerfa", sous: "Notice, maître d'ouvrage" },
   { n: 6, titre: "Aperçu & export", sous: "PPTX, PDF, Cerfa" },
 ];
 
@@ -158,8 +158,7 @@ function renderChrome() {
       const div = document.createElement("div");
       div.className = "piece";
       div.innerHTML = `<span class="st ${esc(piece.statut)}"></span>
-        <span class="nm">${esc(piece.titre)}<small>${esc(piece.detail)}</small></span>
-        <span class="tag ${esc(piece.mode)}">${esc(piece.mode)}</span>`;
+        <span class="nm">${esc(piece.titre)}<small>${esc(piece.detail)}</small></span>`;
       list.appendChild(div);
     }
   } else {
@@ -190,6 +189,7 @@ function render() {
   renderChrome();
   const main = $("#main");
   if (state.etape === 0) return renderAccueil(main);
+  if (state.etape === "fiche") return renderFicheProjet(main);
   if (state.etape === 1) return renderEtapeLocalisation(main);
   if (state.etape === 2) return renderEtapePieces(main);
   if (state.etape === 3) return renderEtapeCaracteristiques(main);
@@ -254,8 +254,68 @@ async function ouvrirProjet(id) {
   state.projet = data.projet;
   state.evaluation = data.evaluation;
   state.suggestions = [];
-  state.etape = 1;
+  state.etape = "fiche";
   render();
+}
+
+// ---------------- fiche projet (avant d'entrer dans le dossier) ----------------
+function renderFicheProjet(main) {
+  const p = state.projet;
+  const ev = state.evaluation;
+  const c = ev?.completude;
+  const pct = c ? Math.round((c.pretes / c.total) * 100) : 0;
+  const loc = p.localisation || {};
+  main.innerHTML = `
+    <div class="crumb"><span class="link" id="fp-retour">← Projets</span></div>
+    <div class="fiche-tete">
+      <div>
+        <h1 style="margin-bottom:2px">${esc(p.nom)}</h1>
+        <p class="sub" style="margin:0">${esc(loc.adresse || "Localisation à saisir")}
+          ${loc.code_insee ? " · INSEE " + esc(loc.code_insee) : ""} · ${esc(ev?.regime?.regime || "DP")} ${esc(ev?.regime?.cerfa || "")}</p>
+      </div>
+      <div class="fiche-actions">
+        <button class="btn" id="fp-renommer">Renommer</button>
+        <button class="btn" id="fp-suppr">Supprimer</button>
+        <button class="btn primary" id="fp-ouvrir">Ouvrir le dossier</button>
+      </div>
+    </div>
+
+    <div class="grid" style="grid-template-columns:260px minmax(0,1fr);margin-top:20px">
+      <div class="card"><div class="bd" style="text-align:center">
+        <div class="ring" style="--p:${pct};margin:6px auto 10px"><span>${pct}%</span></div>
+        <b style="color:var(--gv-navy)">${c ? c.pretes : 0}/${c ? c.total : 0} pièces prêtes</b>
+        <div class="sub" style="margin-top:2px">Avancement du dossier</div>
+      </div></div>
+      <div class="card"><div class="bd">
+        <div class="ti-title" style="margin-bottom:8px">Aller à une étape</div>
+        <div class="fiche-etapes" id="fp-etapes"></div>
+      </div></div>
+    </div>`;
+
+  $("#fp-retour").addEventListener("click", () => { state.etape = 0; render(); });
+  $("#fp-ouvrir").addEventListener("click", () => allerEtape(1));
+  $("#fp-renommer").addEventListener("click", async () => {
+    const nom = window.prompt("Nouveau nom du projet :", p.nom);
+    if (!nom || !nom.trim()) return;
+    state.projet.nom = nom.trim();
+    await sauvegarder(false);
+    renderFicheProjet($("#main"));
+  });
+  $("#fp-suppr").addEventListener("click", async () => {
+    if (!window.confirm(`Supprimer définitivement le projet « ${p.nom} » ?`)) return;
+    await api(`/api/projets/${p.id}`, { method: "DELETE" });
+    toast("Projet supprimé.", "ok");
+    state.projet = null; state.etape = 0; render();
+  });
+  const box = $("#fp-etapes");
+  for (const s of STEPS) {
+    const b = document.createElement("button");
+    b.className = "fiche-etape" + (etapeFaite(s.n) ? " done" : "");
+    b.innerHTML = `<span class="dot">${etapeFaite(s.n) ? "✓" : s.n}</span>
+      <span>${esc(s.titre)}<small>${esc(s.sous)}</small></span>`;
+    b.addEventListener("click", () => allerEtape(s.n));
+    box.appendChild(b);
+  }
 }
 
 // ---------------- étape 1 : projet ----------------
@@ -711,12 +771,8 @@ function renderEtapeCaracteristiques(main) {
       ${champ("Dimensions module (mm)", "ombriere.module_dimensions", { placeholder: "Ex. : 1762 x 1134" })}
       ${champ("Nombre de places couvertes", "ombriere.nb_places", { type: "number", step: "1" })}
     </div>
-    <p class="sub" style="margin-top:6px">La puissance pilote le régime : ≥ 3 000 kWc bascule le dossier en permis de construire.</p>
-
-    <details class="foldable" id="fold-mesure">
-      <summary>Mesurer Longueur / Largeur / Orientation sur le plan de masse <span class="hint">(optionnel, à l'échelle)</span></summary>
-      <div class="bd" id="mesure-body"></div>
-    </details>
+    <p class="sub" style="margin-top:6px">La puissance pilote le régime : ≥ 3 000 kWc bascule le dossier en permis de construire.
+      Astuce : mesurez Longueur / Largeur / Orientation sur le plan de masse à l'étape Pièces du BE.</p>
 
     <div class="actionsrow">
       <button class="btn" id="btn-apercus">Mettre à jour les aperçus DP3 / DP4</button>
@@ -729,7 +785,6 @@ function renderEtapeCaracteristiques(main) {
         <img id="img-dp4" class="planche-img" alt="Façades DP4" /></div>
     </div>`;
   brancherChamps(main);
-  renderMesure();
   const chargerApercus = async () => {
     if (!state.projet.ombriere?.famille) { toast("Choisissez d'abord une coupe.", "err"); return; }
     await sauvegarder();
@@ -963,13 +1018,46 @@ function renderEtapePieces(main) {
   main.innerHTML = `
     <div class="crumb">Étape 2 / 6</div>
     <h1>Pièces du bureau d'études</h1>
-    <p class="sub">Glissez-déposez chaque pièce (PDF, PNG ou JPG, 40 Mo max). Un fichier par pièce ; le dernier envoi remplace le précédent. Le plan de masse (DP2) servira à mesurer les dimensions à l'étape suivante.</p>
+    <p class="sub">Glissez-déposez chaque pièce (PDF, PNG ou JPG, 40 Mo max). Un fichier par pièce ; le dernier envoi remplace le précédent.</p>
     <div class="home-list" id="slots"></div>
+
+    <details class="foldable" id="fold-mesure" style="margin-top:18px">
+      <summary>Mesurer Longueur / Largeur / Orientation sur le plan de masse <span class="hint">(optionnel, à l'échelle)</span></summary>
+      <div class="bd" id="mesure-body"></div>
+    </details>
+
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:24px 0 4px">Photos du site (pour l'insertion)</h2>
+    <p class="sub" style="margin:0 0 10px">Plusieurs photos possibles. Elles serviront de base à l'insertion IA (étape 4). Repère d'échelle facultatif pour aider l'IA à dimensionner.</p>
+    <div id="pieces-photos" class="sub" style="margin-bottom:10px"></div>
+    <div class="scale-row" style="margin-bottom:6px">
+      <label class="btn navy" style="cursor:pointer">+ ajouter des photos
+        <input type="file" id="pieces-photos-add" accept=".png,.jpg,.jpeg,.webp" multiple hidden /></label>
+      <input class="input" id="pieces-scale-desc" placeholder="repère d'échelle (ex. : largeur d'une place)" value="${esc((state.projet.insertion || {}).echelle_desc || "")}" />
+      <input class="input" id="pieces-scale-dist" type="number" step="0.1" placeholder="m" value="${(state.projet.insertion || {}).echelle_distance_m ?? ""}" style="max-width:80px" />
+    </div>
+
     <div class="actionsrow">
       <button class="btn navy" id="btn-suivant-pieces">Continuer vers les caractéristiques</button>
     </div>`;
   const box = $("#slots");
   $("#btn-suivant-pieces").addEventListener("click", () => allerEtape(3));
+  renderMesure();
+  renderPhotosInsertion("#pieces-photos");
+  $("#pieces-photos-add").addEventListener("change", (e) => {
+    if (e.target.files.length) uploaderPhotosSite(e.target.files, "#pieces-photos").catch(() => {});
+  });
+  const sauverEchellePieces = () => {
+    api(`/api/projets/${state.projet.id}/insertion/consignes`, {
+      method: "PUT",
+      body: JSON.stringify({
+        echelle_desc: $("#pieces-scale-desc").value,
+        echelle_distance_m: $("#pieces-scale-dist").value || "",
+      }),
+    }).then((d) => { state.projet = d.projet; }).catch(() => {});
+  };
+  ["#pieces-scale-desc", "#pieces-scale-dist"].forEach((s) => {
+    let t; $(s).addEventListener("input", () => { clearTimeout(t); t = setTimeout(sauverEchellePieces, 700); });
+  });
   for (const piece of PIECES_UPLOAD) {
     const doc = state.projet.documents?.[piece.code];
     const div = document.createElement("div");
@@ -1044,103 +1132,57 @@ function resumeOmbriere() {
 async function renderEtapeInsertion(main) {
   main.innerHTML = `
     <div class="crumb">Étape 4 / 6</div>
-    <h1>Insertion IA · générateur de prompt</h1>
-    <p class="sub">Prépare le prompt et le kit d'images pour générer un visuel d'insertion dans <b>ton ChatGPT</b>.
-      Aucune clé, aucun coût, aucune donnée sortante. Visuel « visuel IA » réservé au commercial, jamais utilisé en pièce DP6.</p>
+    <h1>Insertion IA</h1>
+    <p class="sub">Génère un visuel d'insertion photoréaliste (Gemini) depuis une photo du site, le plan de masse et la coupe.
+      Visuel « visuel IA » réservé au commercial, jamais utilisé en pièce DP6.</p>
     <div id="ia-statut" class="placeholder">Chargement…</div>`;
   let s;
   try { s = await api(`/api/projets/${state.projet.id}/insertion/statut`); }
   catch { return; }
+  if (!s.api_configuree) {
+    $("#ia-statut").innerHTML = `<b>Clé Gemini absente</b>
+      Ajoute <code>GEMINI_API_KEY</code> dans le fichier .env puis relance GV_DP pour activer la génération d'insertion.`;
+    return;
+  }
   renderInsertionAtelier(s);
 }
 
 function renderInsertionAtelier(s) {
   const ins = state.projet.insertion || {};
   const main = $("#main");
-  const etat = s.etat || {};
   main.querySelector("#ia-statut").outerHTML = `
     <div class="grid">
       <div class="card">
-        <div class="hd"><span class="ti-title">1 · Inputs</span></div>
+        <div class="hd"><span class="ti-title">1 · Photo & consignes</span>
+          <label class="link" style="cursor:pointer">+ ajouter des photos
+            <input type="file" id="ins-photos-add" accept=".png,.jpg,.jpeg,.webp" multiple hidden /></label></div>
         <div class="bd">
-          <div class="field">
-            <label>Photo du site
-              <span style="float:right"><label class="link" style="cursor:pointer">${ins.photo ? "changer" : "téléverser"}
-                <input type="file" id="ins-photo" accept=".png,.jpg,.jpeg,.webp" hidden /></label></span></label>
-            <div id="ins-photo-wrap" style="${ins.photo ? "" : "display:none"}">
-              <canvas id="ins-photo-canvas" style="width:100%;display:block;border-radius:8px;border:1px solid var(--gv-grey);cursor:crosshair"></canvas>
-            </div>
-            <div id="ins-photo-vide" class="placeholder" style="${ins.photo ? "display:none" : ""};padding:22px">
-              <b>Ajoute une photo du parking</b>Nette, à hauteur d'œil, zone d'implantation dégagée.</div>
-            <div id="ins-photo-choices" style="${ins.photo ? "display:none" : ""};margin-top:10px"></div>
-          </div>
-          <div class="field" id="ins-scale-field" style="${ins.photo ? "" : "display:none"}">
-            <label>Repère d'échelle sur la photo <span class="hint">(aide l'IA à dimensionner)</span></label>
-            <div class="scale-row">
-              <button class="btn" id="ins-scale-btn">Placer 2 points</button>
-              <input class="input" id="ins-scale-desc" placeholder="ce qu'ils relient (ex. : largeur d'une place)" value="${esc(ins.echelle_desc || "")}" />
-              <input class="input" id="ins-scale-dist" type="number" step="0.1" placeholder="m" value="${ins.echelle_distance_m ?? ""}" />
-            </div>
-          </div>
-          <div class="field"><label>Prompt complémentaire (facultatif)</label>
+          <div id="ins-photos" class="sub">Chargement des photos…</div>
+          <div class="field" style="margin-top:14px"><label>Prompt complémentaire (facultatif)</label>
             <textarea class="input notice-ta" id="ins-consignes" rows="3"
-              placeholder="Ex. : deux rangées face à face, garder le mât d'éclairage visible, vue depuis l'entrée">${esc(ins.consignes || "")}</textarea></div>
-          <div class="note" style="margin-top:4px">Type d'ombrière (étape 3) : <b>${esc(resumeOmbriere())}</b></div>
-          ${s.api_configuree ? `
+              placeholder="Ex. : 3 rangées depuis la façade, garder le mât d'éclairage, pas de bleu au sol">${esc(ins.consignes || "")}</textarea></div>
+          <div class="note" style="margin-top:4px">Ombrière : <b>${esc(resumeOmbriere())}</b></div>
           <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:14px">Générer l'insertion</button>
-          <div class="hint" style="margin-top:6px;text-align:center">Gemini ${esc(s.api_modele)} · photo + plan de masse + coupe envoyés · ≈ 0,04 €/image</div>
+          <div class="hint" style="margin-top:6px;text-align:center">Gemini ${esc(s.api_modele)} · photo + plan de masse + coupe · ≈ 0,04 €/image</div>
           <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
-          <button class="btn" id="ins-generer" style="width:100%;margin-top:10px">Backup : générer le prompt (ChatGPT)</button>
-          ` : `
-          <button class="btn primary" id="ins-generer" style="width:100%;margin-top:14px">Générer le prompt</button>
-          `}
         </div>
       </div>
 
       <div class="card">
-        <div class="hd"><span class="ti-title">2 · Prompt & kit à joindre <span class="hint">(mode backup ChatGPT)</span></span></div>
-        <div class="bd" id="ins-sortie">
-          <div class="placeholder" style="padding:22px"><b>${s.api_configuree ? "Mode API actif : utilise « Générer l'insertion » à gauche" : "Le prompt apparaîtra ici"}</b>${s.api_configuree ? "Ce panneau sert de secours : « générer le prompt » copie le texte et affiche le kit pour ChatGPT." : "Clique « Générer le prompt » : il est copié dans le presse-papier et le kit d'images s'affiche."}</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" style="margin-top:18px">
-      <div class="hd"><span class="ti-title">3 · Image générée</span>
-        <span style="font-size:11px;color:var(--muted)">glisse ici l'image obtenue dans ChatGPT</span></div>
-      <div class="bd">
-        <div id="ins-drop" class="dropzone">
-          <input type="file" id="ins-import" accept=".png,.jpg,.jpeg,.webp" hidden />
-          <b>Dépose l'image ici</b><span>ou clique pour choisir un fichier (PNG, JPG, WEBP)</span>
-        </div>
-        <div class="gallery" id="ins-galerie" style="margin-top:16px"></div>
-        <div class="actionsrow" style="margin-top:12px">
-          <button class="btn navy" id="ins-fiche" ${ins.retenue ? "" : "disabled"}>Générer la fiche de validation d'emprise (PPTX)</button>
-          <span id="ins-fiche-lien" class="sub"></span>
+        <div class="hd"><span class="ti-title">2 · Insertions générées</span></div>
+        <div class="bd">
+          <div class="gallery" id="ins-galerie"></div>
+          <div class="actionsrow" style="margin-top:12px">
+            <button class="btn navy" id="ins-fiche" ${ins.retenue ? "" : "disabled"}>Fiche de validation d'emprise (PPTX)</button>
+            <span id="ins-fiche-lien" class="sub"></span>
+          </div>
         </div>
       </div>
     </div>`;
 
-  // photo + repère d'échelle
-  const fichier = $("#ins-photo");
-  fichier.addEventListener("change", () => uploaderPhotoSite(fichier).catch(() => {}));
-  if (ins.photo) initPhotoScale(ins);
-  else chargerPhotosDispo();
-  const sauverEchelle = () => {
-    api(`/api/projets/${state.projet.id}/insertion/consignes`, {
-      method: "PUT",
-      body: JSON.stringify({
-        echelle_desc: $("#ins-scale-desc")?.value || "",
-        echelle_distance_m: $("#ins-scale-dist")?.value || "",
-      }),
-    }).then((d) => { state.projet = d.projet; }).catch(() => {});
-  };
-  ["#ins-scale-desc", "#ins-scale-dist"].forEach((sel) => {
-    const el = $(sel); if (!el) return;
-    let t; el.addEventListener("input", () => { clearTimeout(t); t = setTimeout(sauverEchelle, 700); });
+  $("#ins-photos-add").addEventListener("change", (e) => {
+    if (e.target.files.length) uploaderPhotosSite(e.target.files).catch(() => {});
   });
-
-  // consignes (debounce)
   let tc;
   $("#ins-consignes").addEventListener("input", () => {
     clearTimeout(tc);
@@ -1150,31 +1192,71 @@ function renderInsertionAtelier(s) {
       }).then((d) => { state.projet = d.projet; }).catch(() => {});
     }, 700);
   });
-
-  $("#ins-generer").addEventListener("click", () => genererPrompt().catch(() => {}));
-  $("#ins-generer-api")?.addEventListener("click", () => genererInsertionAPI().catch(() => {}));
-
-  // zone de dépôt
-  const drop = $("#ins-drop");
-  const imp = $("#ins-import");
-  drop.addEventListener("click", () => imp.click());
-  imp.addEventListener("change", () => { if (imp.files.length) importerImage(imp.files[0]).catch(() => {}); });
-  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => {
-    e.preventDefault(); drop.classList.add("over");
-  }));
-  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
-    e.preventDefault(); drop.classList.remove("over");
-  }));
-  drop.addEventListener("drop", (e) => {
-    const f = e.dataTransfer?.files?.[0];
-    if (f) importerImage(f).catch(() => {});
-  });
-
+  $("#ins-generer-api").addEventListener("click", () => genererInsertionAPI().catch(() => {}));
   $("#ins-fiche").addEventListener("click", () => genererFiche().catch(() => {}));
 
-  // si un prompt a déjà été généré, on le réaffiche
-  if (ins.prompt) renderSortiePrompt(ins.prompt, s.mode_emploi);
+  renderPhotosInsertion();
   renderGalerie();
+}
+
+// sélecteur de photos du site (multi) : active = base de génération
+async function renderPhotosInsertion(sel = "#ins-photos") {
+  const box = $(sel);
+  if (!box) return;
+  let data;
+  try { data = await api(`/api/projets/${state.projet.id}/insertion/photos-disponibles`); }
+  catch { return; }
+  let html = "";
+  if (data.photos.length) {
+    html += `<div class="hint" style="margin-bottom:6px">Photo de génération (clique pour choisir) :</div>
+      <div class="photo-choices">${data.photos.map((p) => `
+        <div class="photo-choice ${p.chemin === data.active ? "actif" : ""}" data-active="${esc(p.chemin)}">
+          <img src="${esc(p.url)}&t=${Date.now()}" alt="photo site" />
+          <button class="photo-suppr" data-suppr="${esc(p.chemin)}" title="Retirer">✕</button>
+        </div>`).join("")}</div>`;
+  } else {
+    html += `<div class="placeholder" style="padding:18px"><b>Aucune photo du site</b>Ajoute-les ici ou à l'étape Pièces du BE.</div>`;
+  }
+  if (data.reutilisables.length) {
+    html += `<div class="hint" style="margin:12px 0 6px">Ou reprends une photo des Pièces BE :</div>
+      <div class="photo-choices">${data.reutilisables.map((p) => `
+        <button class="photo-choice petite" data-piece="${esc(p.code)}" title="${esc(p.libelle)}">
+          <img src="${esc(p.url)}?t=${Date.now()}" alt="${esc(p.libelle)}" />
+          <span>${esc(p.libelle)}</span>
+        </button>`).join("")}</div>`;
+  }
+  box.innerHTML = html;
+  box.querySelectorAll("[data-active]").forEach((el) => el.addEventListener("click", async (e) => {
+    if (e.target.closest("[data-suppr]")) return;
+    const d = await api(`/api/projets/${state.projet.id}/insertion/photo-active`, {
+      method: "PUT", body: JSON.stringify({ chemin: el.dataset.active }),
+    });
+    state.projet = d.projet; renderPhotosInsertion(sel);
+  }));
+  box.querySelectorAll("[data-suppr]").forEach((b) => b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const d = await api(`/api/projets/${state.projet.id}/insertion/photo?chemin=${encodeURIComponent(b.dataset.suppr)}`,
+      { method: "DELETE" });
+    state.projet = d.projet; renderPhotosInsertion(sel);
+  }));
+  box.querySelectorAll("[data-piece]").forEach((b) => b.addEventListener("click", async () => {
+    const d = await api(`/api/projets/${state.projet.id}/insertion/photo-piece`, {
+      method: "PUT", body: JSON.stringify({ code: b.dataset.piece }),
+    });
+    state.projet = d.projet; toast("Photo reprise des pièces BE.", "ok"); renderPhotosInsertion(sel);
+  }));
+}
+
+async function uploaderPhotosSite(files, sel = "#ins-photos") {
+  const fd = new FormData();
+  for (const f of files) fd.append("fichiers", f);
+  let resp;
+  try { resp = await fetch(`/api/projets/${state.projet.id}/insertion/photos`, { method: "POST", body: fd }); }
+  catch { toast("Serveur injoignable.", "err"); return; }
+  if (!resp.ok) { toast((await resp.json()).detail || "Échec.", "err"); return; }
+  state.projet = (await resp.json()).projet;
+  toast("Photo(s) ajoutée(s).", "ok");
+  renderPhotosInsertion(sel);
 }
 
 // génération directe via l'API Gemini (Nano Banana) — 1 image par clic
@@ -1462,9 +1544,9 @@ function renderEtapeNotice(main) {
   const n = state.projet.notice || { sections: {} };
   main.innerHTML = `
     <div class="crumb">Étape 5 / 6</div>
-    <h1>Notice descriptive (DP11)</h1>
+    <h1>Notice + Cerfa</h1>
     <p class="sub">Notice type pré-remplie depuis la saisie et les données officielles (PLU, Géorisques).
-      Les <mark class="v">informations du projet</mark> sont surlignées ; relisez, ajustez, puis validez avant export.</p>
+      Les <mark class="v">informations du projet</mark> sont surlignées ; relisez, ajustez, puis validez.</p>
     <div class="actionsrow" style="margin:0 0 16px">
       <button class="btn navy" id="btn-gen-notice">Générer / remplir la notice</button>
       <button class="btn" id="btn-regen-notice" title="Écrase les 7 sections avec la notice type remplie">Tout regénérer</button>
@@ -1473,8 +1555,21 @@ function renderEtapeNotice(main) {
         Notice relue et validée
       </label>
     </div>
-    <div class="home-list" id="notice-sections"></div>`;
+    <div class="home-list" id="notice-sections"></div>
 
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:26px 0 4px">Informations pour le Cerfa</h2>
+    <p class="sub" style="margin:0 0 12px">Le déclarant (maître d'ouvrage) et son contact, nécessaires au pré-remplissage du Cerfa. Le reste (adresse, parcelles, puissance) est repris des étapes précédentes.</p>
+    <div class="formgrid" style="max-width:820px">
+      ${champ("Type de maître d'ouvrage", "mo.type", { select: ["Société", "Collectivité", "Particulier"] })}
+      ${champ("Raison sociale / nom", "mo.raison_sociale")}
+      ${champ("Représentant", "mo.representant")}
+      ${champ("SIRET", "mo.siret", { placeholder: "14 chiffres" })}
+      ${champ("Adresse du maître d'ouvrage", "mo.adresse", { wide: true })}
+      ${champ("Courriel", "mo.email", { type: "email", placeholder: "suivi du dossier" })}
+      ${champ("Téléphone", "mo.telephone")}
+    </div>`;
+
+  brancherChamps(main);  // champs maître d'ouvrage (Cerfa)
   const generer = async (force) => {
     const data = await api(`/api/projets/${state.projet.id}/notice/generer?force=${force}`, { method: "POST" });
     state.projet = data.projet; state.evaluation = data.evaluation;
@@ -1553,20 +1648,7 @@ function renderEtapeExport(main) {
   main.innerHTML = `
     <div class="crumb">Étape 6 / 6</div>
     <h1>Aperçu & export</h1>
-    <p class="sub">Renseignez le maître d'ouvrage (déclarant), vérifiez les planches, pré-remplissez le Cerfa puis assemblez le dossier (export PDF pour le dépôt).</p>
-
-    <details class="foldable" id="fold-mo" open>
-      <summary>Maître d'ouvrage <span class="hint">(déclarant du Cerfa)</span></summary>
-      <div class="formgrid" style="padding:6px 2px">
-        ${champ("Type de maître d'ouvrage", "mo.type", { select: ["Société", "Collectivité", "Particulier"] })}
-        ${champ("Raison sociale / nom", "mo.raison_sociale")}
-        ${champ("Représentant", "mo.representant")}
-        ${champ("SIRET", "mo.siret", { placeholder: "14 chiffres" })}
-        ${champ("Adresse du maître d'ouvrage", "mo.adresse", { wide: true })}
-        ${champ("Courriel", "mo.email", { type: "email", placeholder: "pour le suivi du dossier" })}
-        ${champ("Téléphone", "mo.telephone")}
-      </div>
-    </details>
+    <p class="sub">Vérifiez les planches, pré-remplissez le Cerfa (le maître d'ouvrage se saisit à l'étape Notice + Cerfa) puis assemblez le dossier (export PDF pour le dépôt).</p>
 
     <div class="actionsrow" style="margin:14px 0 8px">
       <button class="btn" id="btn-cerfa">Pré-remplir le Cerfa 16702</button>
