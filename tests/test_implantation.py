@@ -154,6 +154,40 @@ def test_guides_absents(tmp_path, monkeypatch):
     assert insertion_ia.guides_actifs({"id": "p", "insertion": {}}) is None
 
 
+def test_scaffold_pose_un_volume_sur_l_axe(tmp_path, monkeypatch):
+    """Le scaffold pose un volume gris (poteaux + toiture) sur l'axe tracé."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    dossier = tmp_path / "p.assets" / "insertion" / "photos"
+    dossier.mkdir(parents=True)
+    Image.new("RGB", (1200, 800), (150, 150, 150)).save(dossier / "site.jpg")
+    rel = "p.assets/insertion/photos/site.jpg"
+    projet = {"id": "p", "ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5},
+              "insertion": {"photo": rel, "photos": [rel],
+                "guides": {rel: {
+                    "segments": [[[0.3, 0.55], [0.7, 0.58]]],
+                    "calibrage": {"a": [0.3, 0.62], "b": [0.4, 0.62],
+                                  "distance_m": 2.5, "libelle": "place"}}}}}
+    p = insertion_ia.scaffold_photo(projet)
+    assert p and p.exists() and p.name == "scaffold.png"
+    arr = np.asarray(Image.open(p).convert("RGB"))
+    # du gris foncé (toiture) et du gris clair (poteaux) sont apparus
+    toit = (arr[..., 0] < 100) & (arr[..., 1] < 100) & (arr[..., 2] < 100) & \
+           (abs(arr[..., 0].astype(int) - arr[..., 2]) < 20)
+    assert toit.sum() > 500
+
+
+def test_scaffold_sans_echelle_none(tmp_path, monkeypatch):
+    """Sans calibrage ni plan (pas d'échelle), le scaffold s'abstient."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    dossier = tmp_path / "p.assets" / "insertion" / "photos"
+    dossier.mkdir(parents=True)
+    Image.new("RGB", (800, 600), (150, 150, 150)).save(dossier / "s.jpg")
+    rel = "p.assets/insertion/photos/s.jpg"
+    projet = {"id": "p", "insertion": {"photo": rel, "photos": [rel],
+              "guides": {rel: {"segments": [[[0.3, 0.5], [0.7, 0.5]]], "calibrage": None}}}}
+    assert insertion_ia.scaffold_photo(projet) is None
+
+
 def test_ratio_photo_supporte(tmp_path):
     """Le ratio de sortie est le plus proche supporté par Nano Banana."""
     p = tmp_path / "photo.jpg"

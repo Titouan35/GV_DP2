@@ -44,8 +44,9 @@ def apercu_prompt(projet_id: str):
 
 
 TITRES_PAYLOAD = {
-    "photo": "Photo à modifier (axes tracés)",
+    "photo": "Photo avec l'ombrière posée (à habiller)",
     "coupe": "Coupe technique (structure)",
+    "plan": "Plan de masse (implantation)",
 }
 
 

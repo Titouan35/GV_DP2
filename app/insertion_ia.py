@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -103,100 +104,105 @@ def construire_prompt(projet: dict, affinage: str = "",
                       plan_infos: dict | None = None,
                       guides: dict | None = None,
                       idx: dict | None = None,
-                      coupe_be: bool = False) -> str:
-    """Prompt Gemini v5 (méthode officielle Nano Banana, recherchée 17/07/2026).
+                      coupe_be: bool = False,
+                      mode: str = "libre",
+                      plan_ref: bool = False) -> str:
+    """Prompt Gemini v6 (17/07/2026). Trois modes selon la base envoyee :
 
-    Règles Google appliquées : (1) commencer par un verbe fort ; (2) NE PAS
-    numéroter les images, décrire leur rôle en langage naturel ; (3)
-    formulation POSITIVE (dire ce qu'on veut, pas ce qu'on ne veut pas) ;
-    (4) dire explicitement ce qui doit rester identique ; (5) vocabulaire
-    photo pour la perspective. Le lot d'images est minimal : la photo annotée
-    des axes magenta (base à éditer) + la coupe technique (structure).
+    - "scaffold" : la photo contient deja l'ombrière posee en VOLUME GRIS a la
+      bonne position. Consigne = habiller ce volume, sans le deplacer ni le
+      redimensionner. C'est le mode fiable (placement garanti par nous).
+    - "axes" : la photo porte des axes magenta (repli si pas d'echelle).
+    - "libre" : aucune indication, placement au juge.
 
-    `guides` : guides_actifs (segments = axes des ombrières + calibrage).
-    `plan_infos` : {"dims_m": [(L, l), ...]} pour les cotes réelles.
+    Regles Google : verbe fort, images decrites sans numero, formulation
+    positive, keep-explicit. La coupe (structure) et le plan de masse (legende
+    couleurs) sont joints en reference.
     """
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
     n = len(guides["segments"]) if guides and guides.get("segments") else 0
+    mot = "les ombrières" if n > 1 else "l'ombrière"
+    mot_de = "des ombrières" if n > 1 else "de l'ombrière"
 
-    # -- ouverture : verbe fort + nombre d'ombrières
-    if n == 1:
-        ouverture = ("Insère une ombrière photovoltaïque de parking dans cette "
-                     "photographie, de façon photoréaliste, comme si elle avait "
-                     "toujours été là.")
-    elif n > 1:
-        ouverture = (f"Insère {n} ombrières photovoltaïques de parking dans cette "
-                     "photographie, de façon photoréaliste, comme si elles avaient "
-                     "toujours été là.")
+    if mode == "scaffold":
+        tete = (f"Transforme {'les' if n > 1 else 'la'} forme"
+                f"{'s' if n > 1 else ''} grise"
+                f"{'s' if n > 1 else ''} en volume, déjà présente"
+                f"{'s' if n > 1 else ''} sur cette photographie, en "
+                f"{'ombrières photovoltaïques de parking' if n > 1 else 'une ombrière photovoltaïque de parking'} "
+                "photoréaliste"
+                f"{'s' if n > 1 else ''}, comme si elle"
+                f"{'s avaient' if n > 1 else ' avait'} toujours été là.")
+        blocs = [tete]
+        blocs.append(
+            "PLACEMENT. " + ("Chaque forme grise" if n > 1 else "La forme grise")
+            + " marque l'emplacement, la taille et l'orientation EXACTS "
+            + mot_de + " : garde-les rigoureusement identiques, ne déplace pas et "
+            "ne redimensionne pas. Remplace simplement le volume gris par la "
+            "vraie structure et sa toiture."
+        )
+    elif mode == "axes":
+        blocs = [f"Insère {n if n > 1 else 'une'} ombrière"
+                 f"{'s' if n > 1 else ''} photovoltaïque"
+                 f"{'s' if n > 1 else ''} de parking dans cette photographie, "
+                 "de façon photoréaliste."]
+        blocs.append(
+            "PLACEMENT. Un trait magenta marque l'axe " + mot_de
+            + " : construis " + mot + " le long de chaque trait, centrée sur le "
+            "trait et posée au sol.")
     else:
-        ouverture = ("Insère une ombrière photovoltaïque de parking dans cette "
-                     "photographie, de façon photoréaliste, comme si elle avait "
-                     "toujours été là.")
-    blocs = [ouverture]
-
-    # -- emplacement : les axes magenta (positif, décrit le rôle de l'image)
-    if n:
-        empl = [
-            "Sur la photo, un trait magenta épais marque l'axe de "
-            + ("chaque ombrière" if n > 1 else "l'ombrière")
-            + " : construis "
-            + ("une ombrière le long de chaque trait magenta" if n > 1
-               else "l'ombrière le long du trait magenta")
-            + ", d'un point à l'autre, centrée sur le trait et posée au sol. "
-        ]
-        cal = guides.get("calibrage")
-        if cal:
-            lib = f", {cal['libelle']}" if cal.get("libelle") else ""
-            empl.append(
-                f"Le trait jaune mesure {_fmt(cal['distance_m'])} m dans la "
-                f"réalité{lib} : sers-t'en pour l'échelle. ")
-        if plan_infos and plan_infos.get("dims_m"):
-            liste = " ; ".join(
-                f"{L:g} m x {l:g} m".replace(".", ",") for L, l in plan_infos["dims_m"])
-            empl.append(f"Dimensions réelles au sol : {liste}. ")
-        empl.append("Dans l'image finale, le sol montre du bitume propre là où "
-                    "passaient les traits colorés.")
-        blocs.append("EMPLACEMENT. " + "".join(empl))
-    else:
-        blocs.append("EMPLACEMENT. Implante l'ombrière sur la zone de "
+        blocs = ["Insère une ombrière photovoltaïque de parking dans cette "
+                 "photographie, de façon photoréaliste."]
+        blocs.append("PLACEMENT. Implante l'ombrière sur la zone de "
                      "stationnement la plus dégagée et cohérente de la photo.")
 
-    # -- structure : la coupe technique (rôle décrit, formulation positive)
+    # cotes reelles
+    if plan_infos and plan_infos.get("dims_m"):
+        liste = " ; ".join(f"{L:g} m x {l:g} m".replace(".", ",")
+                           for L, l in plan_infos["dims_m"])
+        blocs[-1] += f" Dimensions réelles au sol : {liste}."
+
+    # structure : la coupe
     if "coupe" in (idx or {}):
         origine = ("la coupe technique du projet, dessinée par le bureau d'études"
                    if coupe_be else "la coupe technique fournie")
-        struct = [f"Reproduis fidèlement le profil de {origine} : mêmes poteaux, "
-                  "même position des poteaux sous la toiture, même pente, mêmes "
-                  "proportions. "]
+        struct = [f"STRUCTURE. Reproduis fidèlement le profil de {origine} : "
+                  "mêmes poteaux, même position des poteaux sous la toiture, "
+                  "même pente, mêmes proportions. "]
     else:
-        struct = ["L'ombrière a des poteaux en acier galvanisé et une toiture "
-                  "inclinée. "]
+        struct = ["STRUCTURE. Poteaux en acier galvanisé et toiture inclinée. "]
     h_bas, h_haut = omb.get("garde_au_sol_m"), omb.get("hauteur_hors_tout_m")
     if h_bas and h_haut:
-        struct.append(f"Elle mesure {_fmt(h_bas)} m de haut au point bas et "
-                      f"{_fmt(h_haut)} m au point haut. ")
+        struct.append(f"Hauteur {_fmt(h_bas)} m au point bas et {_fmt(h_haut)} m "
+                      "au point haut. ")
     struct.append("Structure en acier galvanisé gris clair, toiture de modules "
                   "photovoltaïques noirs et mats, sous-face claire.")
-    blocs.append("STRUCTURE. " + "".join(struct))
+    blocs.append("".join(struct))
 
-    # -- intégration : positif + keep-explicit + vocabulaire photo
+    # reference implantation : le plan de masse et sa legende couleurs
+    if plan_ref:
+        blocs.append(
+            "REFERENCE. Le plan de masse joint (vue de dessus) confirme "
+            "l'implantation : les zones bleues quadrillées sont les panneaux, "
+            "les traits rouges la trame des poteaux, les carres gris les "
+            "fondations, et les mentions HAUT/BAS DE RAMPANT le sens de descente "
+            "de la toiture. Sers-t'en pour l'orientation et les proportions ; "
+            "ne le recopie pas dans l'image."
+        )
+
+    # integration : positif + keep-explicit + photo
     blocs.append(
-        "INTÉGRATION. Garde le reste de la scène rigoureusement identique : les "
+        "INTEGRATION. Garde le reste de la scène rigoureusement identique : les "
         "voitures, le revêtement du sol et ses marquages, les bordures, les "
-        "arbres situés hors des ombrières, les bâtiments et le ciel restent "
-        "exactement à leur place. Reproduis le grand-angle, la lumière du jour "
-        "et la direction des ombres de la photo d'origine ; ajoute sous chaque "
-        "ombrière une ombre portée douce, cohérente avec les ombres existantes. "
-        "Les poteaux sont verticaux et posés sur le bitume, et l'ombrière suit "
-        "les lignes de fuite du parking. Si un arbre se trouve exactement sous "
-        "une ombrière, remplace-le par l'ombrière."
+        "arbres hors ombrière, les bâtiments et le ciel restent exactement a "
+        "leur place. Reproduis le grand-angle, la lumière du jour et la "
+        "direction des ombres de la photo ; ajoute une ombre portée douce sous "
+        "chaque ombrière. Les poteaux sont verticaux et posés sur le bitume."
     )
 
-    # -- rendu + consignes libres (positif)
-    rendu = ["RENDU. Le résultat est une photographie plein cadre au même "
-             "cadrage que l'originale, montrant uniquement le parking avec ses "
-             "nouvelles ombrières."]
+    rendu = ["RENDU. Le résultat est une photographie plein cadre au meme "
+             "cadrage que l'originale, montrant le parking avec ses ombrières."]
     libres = (ins.get("consignes") or "").strip()
     corrections = (affinage or ins.get("affinage") or "").strip()
     if libres:
@@ -407,6 +413,142 @@ def photo_emprise(projet: dict) -> Path | None:
             dr.ellipse([px - r, py - r, px + r, py + r], fill=JAUNE)
 
     sortie = config.assets_dir(projet.get("id")) / "photo_emprise.png"
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    image.save(sortie)
+    return sortie
+
+
+# ------------------------------------------------------------------ scaffold 3D
+
+# le placement au pixel est impossible à obtenir du modèle (constaté à
+# répétition 17/07/2026) : on POSE nous-mêmes l'ombrière en volume sur la photo,
+# à partir des axes tracés, et Gemini ne fait plus que l'habillage photoréaliste.
+HORIZON_FRAC = 0.42   # ligne d'horizon estimée (fraction de hauteur), photo à hauteur d'œil
+GRIS_TOIT = (70, 72, 78)
+GRIS_POTEAU = (188, 192, 198)
+GRIS_POTEAU_OMBRE = (150, 154, 160)
+
+
+def _echelle_field(cal, plan_infos, segments, W, H):
+    """Fonction échelle px/m(y) en perspective : scale(y) = k·(y - horizon).
+
+    Calée soit sur le repère jaune (distance connue), soit sur la longueur
+    réelle d'une ombrière (axe tracé vs cote du plan). Renvoie None si aucune
+    référence d'échelle exploitable.
+    """
+    horizon = HORIZON_FRAC * H
+    ref = None  # (y_ref px, scale_ref px/m)
+    if cal:
+        a = (cal["a"][0] * W, cal["a"][1] * H)
+        b = (cal["b"][0] * W, cal["b"][1] * H)
+        lpx = math.hypot(b[0] - a[0], b[1] - a[1])
+        if cal.get("distance_m", 0) > 0 and lpx > 4:
+            ref = ((a[1] + b[1]) / 2, lpx / cal["distance_m"])
+    if ref is None and plan_infos and plan_infos.get("dims_m") and segments:
+        L_m = max(plan_infos["dims_m"][0])  # longueur réelle de la 1re ombrière
+        s = segments[0]
+        a = (s[0][0] * W, s[0][1] * H)
+        b = (s[1][0] * W, s[1][1] * H)
+        lpx = math.hypot(b[0] - a[0], b[1] - a[1])
+        if L_m > 0 and lpx > 4:
+            ref = ((a[1] + b[1]) / 2, lpx / L_m)
+    if ref is None:
+        return None
+    y_ref, scale_ref = ref
+    denom = (y_ref - horizon) or 1.0
+    k = scale_ref / denom
+
+    def scale(y):
+        return max(4.0, k * (max(y, horizon + 1) - horizon))
+    return scale
+
+
+def scaffold_photo(projet: dict) -> Path | None:
+    """Photo avec l'ombrière posée en VOLUME gris sur chaque axe tracé.
+
+    Géométrie approchée mais placée exactement : axe = bord bas de l'ombrière,
+    largeur extrudée perpendiculairement (foreshortening par le champ d'échelle),
+    poteaux verticaux, toiture inclinée sombre. Gemini n'a plus qu'à rendre ce
+    volume photoréaliste sans le déplacer. None si pas d'axe ou pas d'échelle.
+    """
+    from PIL import ImageDraw
+
+    guides = guides_actifs(projet)
+    photo = image_kit(projet, "photo")
+    if not guides or not guides["segments"] or not photo:
+        return None
+
+    analyse, _ = _analyse_plan(projet)
+    plan_infos = None
+    if analyse:
+        dims = [(z["longueur_m"], z["largeur_m"])
+                for z in analyse["rangees"] if "longueur_m" in z]
+        if dims:
+            plan_infos = {"dims_m": dims}
+
+    image = Image.open(photo).convert("RGB")
+    W, H = image.size
+    scale = _echelle_field(guides.get("calibrage"), plan_infos, guides["segments"], W, H)
+    if scale is None:
+        return None   # sans échelle on ne sait pas dimensionner : on s'abstient
+
+    omb = projet.get("ombriere") or {}
+    h_bas = omb.get("garde_au_sol_m") or 2.5
+    h_haut = omb.get("hauteur_hors_tout_m") or 3.5
+    dims = (plan_infos or {}).get("dims_m") or []
+
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(overlay)
+
+    for i, seg in enumerate(guides["segments"]):
+        a = (seg[0][0] * W, seg[0][1] * H)
+        b = (seg[1][0] * W, seg[1][1] * H)
+        largeur = 8.0
+        if i < len(dims):
+            largeur = min(dims[i]) or 8.0
+        elif dims:
+            largeur = min(dims[0]) or 8.0
+
+        ux, uy = b[0] - a[0], b[1] - a[1]
+        norm = math.hypot(ux, uy) or 1.0
+        ux, uy = ux / norm, uy / norm
+        px, py = -uy, ux          # perpendiculaire vers le HAUT (l'ombrière s'éloigne)
+        if py > 0:
+            px, py = -px, -py
+
+        def sol(pt, prof_m):
+            s = scale(pt[1])
+            return (pt[0] + px * prof_m * s, pt[1] + py * prof_m * s)
+
+        def haut(pt, hauteur_m):
+            return (pt[0], pt[1] - hauteur_m * scale(pt[1]))
+
+        a_far, b_far = sol(a, largeur), sol(b, largeur)          # bord fond au sol
+        # toiture inclinée : bord avant (côté axe) à h_bas, bord fond à h_haut
+        av0, av1 = haut(a, h_bas), haut(b, h_bas)
+        ar0, ar1 = haut(a_far, h_haut), haut(b_far, h_haut)
+
+        # 1) poteaux : une file avant (sur l'axe) + une file fond, ~ tous les 6 m
+        nb = max(2, int(round(norm / (6 * scale((a[1] + b[1]) / 2)))) + 1)
+        for t in (k / nb for k in range(nb + 1)):
+            pied_av = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
+            pied_ar = sol(pied_av, largeur)
+            for pied, hm in ((pied_av, h_bas), (pied_ar, h_haut)):
+                tete = haut(pied, hm)
+                w = max(4, 0.22 * scale(pied[1]))
+                dr.polygon([(pied[0] - w, pied[1]), (pied[0] + w, pied[1]),
+                            (tete[0] + w * 0.85, tete[1]), (tete[0] - w * 0.85, tete[1])],
+                           fill=GRIS_POTEAU + (255,), outline=(90, 94, 100, 255))
+
+        # 2) bandeau avant de la toiture (épaisseur) puis le pan de toiture
+        ep = max(5, 0.35 * scale(a[1]))
+        dr.polygon([av0, av1, (av1[0], av1[1] + ep), (av0[0], av0[1] + ep)],
+                   fill=GRIS_POTEAU_OMBRE + (255,))
+        dr.polygon([av0, av1, ar1, ar0], fill=GRIS_TOIT + (255,),
+                   outline=(30, 32, 36, 255))
+
+    image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
+    sortie = config.assets_dir(projet.get("id")) / "scaffold.png"
     sortie.parent.mkdir(parents=True, exist_ok=True)
     image.save(sortie)
     return sortie
@@ -756,20 +898,22 @@ def _preparer_requete(projet: dict, affinage: str = "") -> dict:
     if not base_propre:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
 
-    # base à éditer : la photo annotée des axes si tracés, sinon la photo nue
+    # base à éditer : PRIORITÉ au scaffold (ombrière déjà posée en volume gris ;
+    # Gemini n'a plus qu'à l'habiller sans la déplacer). Repli : axes magenta,
+    # puis photo nue.
     guides = guides_actifs(projet)
-    base = base_propre
-    if guides:
-        annotee = photo_emprise(projet)
-        if annotee:
-            base = annotee
-        else:
-            guides = None
+    scaffold = scaffold_photo(projet) if guides else None
+    if scaffold:
+        base, mode = scaffold, "scaffold"
+    elif guides and (annotee := photo_emprise(projet)):
+        base, mode = annotee, "axes"
+    else:
+        base, mode = base_propre, "libre"
 
     roles = ["photo"]
     chemins: list[Path] = [base]
 
-    # cotes réelles du plan (texte du prompt seulement, aucune image envoyée)
+    # cotes réelles du plan
     plan_infos = None
     analyse, _ = _analyse_plan(projet)
     if analyse:
@@ -789,11 +933,20 @@ def _preparer_requete(projet: dict, affinage: str = "") -> dict:
         roles.append("coupe")
         chemins.append(coupe)
 
+    # référence implantation : le plan de masse (crop nettoyé, avec sa légende)
+    plan_ref = None
+    aer = aerienne_donnees(projet)
+    if aer and aer.get("fond"):
+        plan_ref = aer["fond"]
+        roles.append("plan")
+        chemins.append(plan_ref)
+
     idx = {role: i + 1 for i, role in enumerate(roles)}
     prompt = construire_prompt(projet, affinage=affinage, plan_infos=plan_infos,
-                               guides=guides, idx=idx, coupe_be=coupe_be)
+                               guides=guides, idx=idx, coupe_be=coupe_be,
+                               mode=mode, plan_ref=bool(plan_ref))
     return {"chemins": chemins, "roles": roles, "prompt": prompt,
-            "base_propre": base_propre}
+            "base_propre": base_propre, "mode": mode}
 
 
 def apercu_prompt(projet: dict) -> str:
