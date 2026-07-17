@@ -1099,6 +1099,10 @@ function renderInsertionAtelier(s) {
             <input type="file" id="ins-photos-add" accept=".png,.jpg,.jpeg,.webp" multiple hidden /></label></div>
         <div class="bd">
           <div id="ins-photos" class="sub">Chargement des photos…</div>
+          <details class="foldable" id="ins-guides-fold" style="margin-top:12px">
+            <summary>Guides d'implantation sur la photo <span class="hint" id="ins-guides-etat"></span></summary>
+            <div class="bd" id="ins-guides-body"></div>
+          </details>
           <div class="field" style="margin-top:14px"><label>Prompt complémentaire (facultatif)</label>
             <textarea class="input notice-ta" id="ins-consignes" rows="3"
               placeholder="Ex. : 3 rangées depuis la façade, garder le mât d'éclairage, pas de bleu au sol">${esc(ins.consignes || "")}</textarea></div>
@@ -1139,6 +1143,168 @@ function renderInsertionAtelier(s) {
 
   renderPhotosInsertion();
   renderGalerie();
+}
+
+// ---- guides d'implantation tracés sur la photo active (envoyés à Gemini) ----
+const guidesUI = { img: null, mode: null, pts: [], scale: 1 };
+
+function guidesPhotoActive() {
+  const ins = state.projet.insertion || {};
+  if (!ins.photo) return null;
+  const data = (ins.guides || {})[ins.photo] || {};
+  return {
+    photo: ins.photo,
+    emprises: (data.emprises || []).map((e) => e.map((p) => [...p])),
+    calibrage: data.calibrage ? JSON.parse(JSON.stringify(data.calibrage)) : null,
+  };
+}
+
+let guidesSaveTimer = null;
+function sauverGuides(ctx) {
+  clearTimeout(guidesSaveTimer);
+  guidesSaveTimer = setTimeout(() => {
+    api(`/api/projets/${state.projet.id}/insertion/guides`, {
+      method: "PUT",
+      body: JSON.stringify({ photo: ctx.photo, emprises: ctx.emprises, calibrage: ctx.calibrage }),
+    }).then((d) => { state.projet = d.projet; majEtatGuides(); }).catch(() => {});
+  }, 500);
+}
+
+function majEtatGuides() {
+  const el = $("#ins-guides-etat");
+  if (!el) return;
+  const ctx = guidesPhotoActive();
+  const bouts = [];
+  if (ctx?.emprises?.length) bouts.push(`${ctx.emprises.length} emprise${ctx.emprises.length > 1 ? "s" : ""}`);
+  if (ctx?.calibrage) bouts.push(`échelle ${ctx.calibrage.distance_m} m`);
+  el.textContent = bouts.length ? `(${bouts.join(" · ")})` : "(aucun guide — Gemini placera seul)";
+}
+
+function renderGuides() {
+  const body = $("#ins-guides-body");
+  if (!body) return;
+  majEtatGuides();
+  const ctx = guidesPhotoActive();
+  if (!ctx) {
+    body.innerHTML = `<p class="sub" style="padding:10px 14px">Choisis d'abord une photo du site.</p>`;
+    return;
+  }
+  guidesUI.mode = null;
+  guidesUI.pts = [];
+  body.innerHTML = `
+    <div class="mesure-tools">
+      <button class="btn" data-gmode="emprise">+ Emprise (4 coins au sol)</button>
+      <button class="btn" data-gmode="cal">Échelle (2 points)</button>
+      <input class="input" id="g-dist" type="number" step="0.1" placeholder="m" style="max-width:74px"
+        value="${ctx.calibrage?.distance_m ?? "2.5"}" />
+      <input class="input" id="g-lib" placeholder="repère (ex. : largeur d'une place)" style="max-width:230px"
+        value="${esc(ctx.calibrage?.libelle || "largeur d'une place")}" />
+      <span style="flex:1"></span>
+      <button class="btn" id="g-annuler">Annuler</button>
+      <button class="btn" id="g-effacer">Tout effacer</button>
+    </div>
+    <div class="mesure-status" id="g-statut"></div>
+    <div class="mesure-canvas-wrap"><canvas id="g-canvas"></canvas></div>`;
+
+  const canvas = $("#g-canvas");
+  const img = new Image();
+  img.onload = () => {
+    guidesUI.scale = Math.min(1, 760 / img.naturalWidth);
+    canvas.width = Math.round(img.naturalWidth * guidesUI.scale);
+    canvas.height = Math.round(img.naturalHeight * guidesUI.scale);
+    guidesUI.img = img;
+    dessinerGuides(ctx);
+    majStatutGuides();
+  };
+  img.src = urlInsertion(ctx.photo);
+
+  body.querySelectorAll("[data-gmode]").forEach((b) => b.addEventListener("click", () => {
+    guidesUI.mode = b.dataset.gmode;
+    guidesUI.pts = [];
+    body.querySelectorAll("[data-gmode]").forEach((x) => x.classList.toggle("primary", x === b));
+    majStatutGuides();
+  }));
+  canvas.addEventListener("click", (e) => {
+    if (!guidesUI.mode) { toast("Choisis d'abord Emprise ou Échelle.", ""); return; }
+    const r = canvas.getBoundingClientRect();
+    guidesUI.pts.push([
+      Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
+      Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
+    ]);
+    if (guidesUI.mode === "emprise" && guidesUI.pts.length === 4) {
+      ctx.emprises.push(guidesUI.pts);
+      guidesUI.pts = [];
+      sauverGuides(ctx);
+      toast("Emprise ajoutée.", "ok");
+    } else if (guidesUI.mode === "cal" && guidesUI.pts.length === 2) {
+      const dist = parseFloat(($("#g-dist").value || "").replace(",", "."));
+      if (!(dist > 0)) { toast("Renseigne la distance réelle (m).", "err"); guidesUI.pts = []; return; }
+      ctx.calibrage = { a: guidesUI.pts[0], b: guidesUI.pts[1], distance_m: dist,
+                        libelle: $("#g-lib").value.trim() };
+      guidesUI.pts = [];
+      sauverGuides(ctx);
+      toast("Repère d'échelle posé.", "ok");
+    }
+    dessinerGuides(ctx);
+    majStatutGuides();
+  });
+  $("#g-annuler").addEventListener("click", () => {
+    if (guidesUI.pts.length) guidesUI.pts.pop();
+    else if (ctx.emprises.length) { ctx.emprises.pop(); sauverGuides(ctx); }
+    else if (ctx.calibrage) { ctx.calibrage = null; sauverGuides(ctx); }
+    dessinerGuides(ctx); majStatutGuides();
+  });
+  $("#g-effacer").addEventListener("click", () => {
+    ctx.emprises = []; ctx.calibrage = null; guidesUI.pts = [];
+    sauverGuides(ctx); dessinerGuides(ctx); majStatutGuides();
+  });
+  ["#g-dist", "#g-lib"].forEach((s) => $(s).addEventListener("input", () => {
+    if (!ctx.calibrage) return;
+    const dist = parseFloat(($("#g-dist").value || "").replace(",", "."));
+    if (dist > 0) ctx.calibrage.distance_m = dist;
+    ctx.calibrage.libelle = $("#g-lib").value.trim();
+    sauverGuides(ctx);
+  }));
+}
+
+function dessinerGuides(ctx) {
+  const canvas = $("#g-canvas");
+  if (!canvas || !guidesUI.img) return;
+  const dr = canvas.getContext("2d");
+  dr.clearRect(0, 0, canvas.width, canvas.height);
+  dr.drawImage(guidesUI.img, 0, 0, canvas.width, canvas.height);
+  const X = (p) => p[0] * canvas.width, Y = (p) => p[1] * canvas.height;
+  for (const emprise of ctx.emprises) {
+    dr.beginPath();
+    emprise.forEach((p, i) => (i ? dr.lineTo(X(p), Y(p)) : dr.moveTo(X(p), Y(p))));
+    dr.closePath();
+    dr.fillStyle = "rgba(0,230,90,0.18)"; dr.fill();
+    dr.strokeStyle = "#00E65A"; dr.lineWidth = 3; dr.stroke();
+    for (const p of emprise) {
+      dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fillStyle = "#00E65A"; dr.fill();
+    }
+  }
+  if (ctx.calibrage) {
+    const { a, b } = ctx.calibrage;
+    dr.strokeStyle = "#FFC800"; dr.lineWidth = 3;
+    dr.beginPath(); dr.moveTo(X(a), Y(a)); dr.lineTo(X(b), Y(b)); dr.stroke();
+    for (const p of [a, b]) {
+      dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fillStyle = "#FFC800"; dr.fill();
+    }
+  }
+  dr.fillStyle = "#002455";
+  for (const p of guidesUI.pts) { dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fill(); }
+}
+
+function majStatutGuides() {
+  const el = $("#g-statut");
+  if (!el) return;
+  const restant = guidesUI.mode === "emprise" ? 4 - guidesUI.pts.length
+    : guidesUI.mode === "cal" ? 2 - guidesUI.pts.length : 0;
+  const consigne = { emprise: `clique les 4 coins de l'emprise AU SOL (${restant} restant${restant > 1 ? "s" : ""})`,
+                     cal: `clique les 2 extrémités d'une distance connue (${restant} restant${restant > 1 ? "s" : ""})` }[guidesUI.mode];
+  el.innerHTML = consigne ? `<span class="hint">${consigne}</span>`
+    : `<span class="hint">Vert = emprise des rangées · jaune = repère d'échelle. Envoyés à Gemini comme contrainte de placement.</span>`;
 }
 
 // sélecteur de photos du site (multi) : active = base de génération
@@ -1187,6 +1353,7 @@ async function renderPhotosInsertion(sel = "#ins-photos") {
     });
     state.projet = d.projet; toast("Photo reprise des pièces BE.", "ok"); renderPhotosInsertion(sel);
   }));
+  if (sel === "#ins-photos") renderGuides();  // guides liés à la photo active (étape 4)
 }
 
 async function uploaderPhotosSite(files, sel = "#ins-photos") {

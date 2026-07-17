@@ -100,6 +100,10 @@ class Insertion(BaseModel):
     retenue: Optional[str] = None          # image retenue (fiche d'emprise)
     dans_dossier: list[str] = Field(default_factory=list)  # images incluses au dossier DP
     nb_images_generees: int = 0            # compteur de dépense locale (projet)
+    # guides tracés sur les photos, par chemin de photo (coordonnées 0-1) :
+    # {photo: {"emprises": [[[x,y] x4], ...],
+    #          "calibrage": {"a": [x,y], "b": [x,y], "distance_m": f, "libelle": s}}}
+    guides: dict[str, Any] = Field(default_factory=dict)
 
 
 class Projet(BaseModel):

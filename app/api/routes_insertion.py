@@ -178,6 +178,48 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
             "images_global": images_global}
 
 
+# ------------------------------------------------------------------ guides photo
+
+@router.put("/{projet_id}/insertion/guides")
+def sauver_guides(projet_id: str, corps: dict = Body(...)):
+    """Guides tracés sur une photo : emprises (quadrilatères) + calibrage.
+
+    Coordonnées normalisées 0-1. Corps : {photo, emprises, calibrage|null}.
+    """
+    projet = _charger(projet_id)
+    photo = corps.get("photo")
+    if photo not in (projet.insertion.photos or []):
+        raise HTTPException(status_code=400, detail="Photo inconnue.")
+
+    def _point(p):
+        try:
+            x, y = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError):
+            raise HTTPException(status_code=400, detail="Point de guide invalide.")
+        return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
+
+    emprises = [[_point(p) for p in e] for e in (corps.get("emprises") or []) if len(e) >= 3]
+    calibrage = corps.get("calibrage") or None
+    if calibrage:
+        try:
+            calibrage = {
+                "a": _point(calibrage["a"]),
+                "b": _point(calibrage["b"]),
+                "distance_m": float(calibrage["distance_m"]),
+                "libelle": str(calibrage.get("libelle") or "")[:120],
+            }
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Calibrage invalide (2 points + distance).")
+
+    if emprises or calibrage:
+        projet.insertion.guides[photo] = {"emprises": emprises, "calibrage": calibrage}
+    else:
+        projet.insertion.guides.pop(photo, None)
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
 # ------------------------------------------------------------------ sélection & exports
 
 @router.put("/{projet_id}/insertion/dossier")

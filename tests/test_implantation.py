@@ -82,3 +82,58 @@ def test_preserver_scene_cadrage_different(tmp_path):
     orig.save(chemin)
     gen = _png(Image.new("RGB", (400, 200), (50, 50, 50)))
     assert insertion_ia.preserver_scene(chemin, gen) == gen
+
+
+def _projet_avec_guides(tmp_path):
+    dossier = tmp_path / "p.assets" / "insertion" / "photos"
+    dossier.mkdir(parents=True)
+    Image.new("RGB", (400, 300), (120, 120, 120)).save(dossier / "site.jpg")
+    rel = "p.assets/insertion/photos/site.jpg"
+    return {
+        "id": "p",
+        "insertion": {
+            "photo": rel, "photos": [rel],
+            "guides": {rel: {
+                "emprises": [[[0.1, 0.4], [0.6, 0.35], [0.65, 0.6], [0.12, 0.7]]],
+                "calibrage": {"a": [0.2, 0.8], "b": [0.35, 0.8],
+                              "distance_m": 2.5, "libelle": "largeur d'une place"},
+            }},
+        },
+    }
+
+
+def test_photo_guidee_dessine_les_traces(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet = _projet_avec_guides(tmp_path)
+    guides = insertion_ia.guides_actifs(projet)
+    assert guides and len(guides["emprises"]) == 1 and guides["calibrage"]
+    annotee = insertion_ia.photo_guidee(projet)
+    assert annotee and annotee.exists()
+    arr = np.asarray(Image.open(annotee).convert("RGB"))
+    vert = (arr[..., 1] > 190) & (arr[..., 0] < 120)   # tracés verts présents
+    jaune = (arr[..., 0] > 200) & (arr[..., 1] > 150) & (arr[..., 2] < 90)
+    assert vert.sum() > 200 and jaune.sum() > 60
+    assert "1 emprise" in insertion_ia.resume_guides(guides)
+
+
+def test_prompt_guides_prioritaires(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet = _projet_avec_guides(tmp_path)
+    guides = insertion_ia.guides_actifs(projet)
+    prompt = insertion_ia.construire_prompt(
+        projet, guides=guides, implantation_resume="1 rangée",
+        pieces_jointes=["photo", "guides", "schema"])
+    assert "TRACÉS SUR PHOTO FONT FOI" in prompt
+    assert "polygones VERTS" in prompt
+    assert "2,5 m" in prompt and "largeur d'une place" in prompt
+    assert "ne reproduis NI les traits" in prompt
+    # l'implantation du plan passe en info texte quand les guides existent
+    assert "Pour information, le plan de masse officiel" in prompt
+    assert "SCHÉMA D'IMPLANTATION JOINT FAIT FOI" not in prompt
+    # le format de sortie interdit bandeaux et légendes (contamination schéma)
+    assert "AUCUN bandeau" in prompt and "MÊME cadrage" in prompt
+
+
+def test_guides_absents(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    assert insertion_ia.guides_actifs({"id": "p", "insertion": {}}) is None

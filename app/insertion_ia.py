@@ -21,6 +21,7 @@ from pathlib import Path
 import httpx
 import numpy as np
 import pypdfium2 as pdfium
+from PIL import Image
 
 from . import config
 from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
@@ -93,13 +94,14 @@ def _fmt(v, suffixe="", defaut="—"):
 
 def construire_prompt(projet: dict, affinage: str = "",
                       implantation_resume: str | None = None,
-                      pieces_jointes: list[str] | None = None) -> str:
+                      pieces_jointes: list[str] | None = None,
+                      guides: dict | None = None) -> str:
     """Assemble le prompt ultra-détaillé (6 blocs) depuis les inputs du projet.
 
     Déterministe : mêmes inputs → même prompt. Rédigé en français, adressé à
     l'éditeur photo Gemini. Tolère les champs manquants.
-    `implantation_resume` : résumé du schéma d'implantation extrait du plan
-    (implantation.resume) ; sa présence bascule le bloc scène sur le schéma.
+    `implantation_resume` : résumé du schéma d'implantation extrait du plan.
+    `guides` : guides tracés sur la photo (guides_actifs) — contrainte n°1.
     `pieces_jointes` : rôles des images jointes, dans l'ordre d'envoi.
     """
     omb = projet.get("ombriere") or {}
@@ -125,7 +127,38 @@ def construire_prompt(projet: dict, affinage: str = "",
         "l'identique les mâts d'éclairage, arbres, bordures, marquages au sol et "
         "véhicules déjà présents.",
     ]
-    if implantation_resume:
+    if guides:
+        consignes_guides = []
+        if guides["emprises"]:
+            n = len(guides["emprises"])
+            consignes_guides.append(
+                "les polygones VERTS délimitent l'emprise au sol EXACTE de "
+                f"{'chacune des ' + str(n) + ' rangées' if n > 1 else 'la rangée'} "
+                "d'ombrière : construis l'ombrière pour que sa projection au sol "
+                "épouse précisément chaque polygone vert (poteaux à l'intérieur, "
+                "rien qui déborde)"
+            )
+        if guides["calibrage"]:
+            cal = guides["calibrage"]
+            lib = f", {cal['libelle']}" if cal.get("libelle") else ""
+            consignes_guides.append(
+                "le segment JAUNE est un repère d'échelle : il mesure "
+                f"{cal['distance_m']:g} m dans la réalité{lib} ; sers-t'en pour "
+                "dimensionner l'ombrière".replace(".", ",")
+            )
+        b2_lignes.append(
+            "PRIORITÉ ABSOLUE, LES TRACÉS SUR PHOTO FONT FOI : la deuxième image "
+            "est la MÊME photo annotée de guides ; " + " ; ".join(consignes_guides) +
+            ". Ces tracés sont des GUIDES DE TRAVAIL : ne reproduis NI les traits "
+            "verts, NI le segment jaune, NI les numéros dans l'image finale."
+        )
+    if implantation_resume and guides:
+        b2_lignes.append(
+            f"Pour information, le plan de masse officiel indique : {implantation_resume}. "
+            "Respecte ces proportions et ce sens de pente pour tout ce que les "
+            "tracés verts ne montrent pas."
+        )
+    elif implantation_resume:
         b2_lignes.append(
             "IMPÉRATIF, LE SCHÉMA D'IMPLANTATION JOINT FAIT FOI : il est extrait du "
             "plan de masse officiel (vue de dessus). Les zones BLEUES sont l'emprise "
@@ -243,9 +276,12 @@ def construire_prompt(projet: dict, affinage: str = "",
         "Ne déplace pas les véhicules, ne modifie pas les bâtiments, n'invente pas "
         "d'arrière-plan. Ne peins RIEN de bleu : aucune dalle, aucun marquage, aucune "
         "surface bleue sur le bitume, aucune bande de couleur sur les poteaux. Le bleu "
-        "du schéma d'implantation est une convention de dessin, pas une couleur à "
+        "des documents techniques est une convention de dessin, pas une couleur à "
         "reproduire. Conserve le revêtement du parking tel quel. Aucun reflet ajouté. "
-        "Pas de watermark, pas de texte, pas de logo. "
+        "FORMAT DE SORTIE : exactement la photo d'origine (image 1) montée, au MÊME "
+        "cadrage et au MÊME ratio, plein cadre. AUCUN bandeau, AUCUN titre, AUCUNE "
+        "légende, AUCUNE bordure blanche, AUCUN texte, AUCUN watermark, AUCUN logo : "
+        "les mises en page des documents joints ne doivent pas déteindre sur le rendu. "
         "Rends uniquement l'image finale, photoréaliste."
     )
     b6 = " ".join(b6_lignes)
@@ -253,6 +289,7 @@ def construire_prompt(projet: dict, affinage: str = "",
     blocs = [b1, b2, b3, b4, b5, b6]
     if pieces_jointes:
         NOMS = {"photo": "la PHOTO du site à modifier",
+                "guides": "la même photo ANNOTÉE des guides (emprises vertes, repère jaune)",
                 "schema": "le SCHÉMA D'IMPLANTATION (extrait du plan de masse)",
                 "plan": "le PLAN DE MASSE",
                 "coupe": "la COUPE technique du type d'ombrière",
@@ -297,6 +334,35 @@ def _pdf_premiere_page_png(chemin_pdf: Path, sortie: Path, dpi: int = 200) -> Pa
     return sortie
 
 
+def _coupe_nettoyee(chemin_pdf: Path, sortie: Path, dpi: int = 200) -> Path:
+    """Coupe du catalogue rendue POUR GEMINI : sans cartouche ni bandes bleues.
+
+    Le gabarit Solstyce porte un cadre et un bandeau cartouche en bas de page
+    (logo, adresse, échelle) : recadré. Les bandes bleues de signalisation du
+    poteau contredisent la consigne « sans marquage de couleur » : recolorées
+    dans le gris de l'acier. Cache par date du PDF.
+    """
+    if sortie.exists() and sortie.stat().st_mtime >= chemin_pdf.stat().st_mtime:
+        return sortie
+    doc = pdfium.PdfDocument(str(chemin_pdf))
+    try:
+        image = doc[0].render(scale=dpi / 72).to_pil().convert("RGB")
+    finally:
+        doc.close()
+    l, h = image.size
+    image = image.crop((round(l * 0.015), round(h * 0.015),
+                        round(l * 0.985), round(h * 0.93)))
+    arr = np.array(image)
+    r = arr[..., 0].astype(np.int16)
+    g = arr[..., 1].astype(np.int16)
+    b = arr[..., 2].astype(np.int16)
+    bandes = (b > 150) & (b > r + 60) & (b > g + 60)  # bleu vif de signalisation
+    arr[bandes] = (176, 183, 191)                     # gris acier galvanisé
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(arr).save(sortie)
+    return sortie
+
+
 def image_kit(projet: dict, role: str) -> Path | None:
     """Résout le fichier image d'un rôle du kit (photo / plan / coupe).
 
@@ -336,7 +402,7 @@ def image_kit(projet: dict, role: str) -> Path | None:
         source = _coupe_source(projet)
         if not source:
             return None
-        return _pdf_premiere_page_png(source, assets / "kit_coupe.png")
+        return _coupe_nettoyee(source, assets / "kit_coupe.png")
 
     if role == "reference":
         chemin = (config.REPO_ROOT / "app" / "gabarits" / "refs"
@@ -344,6 +410,95 @@ def image_kit(projet: dict, role: str) -> Path | None:
         return chemin if chemin.exists() else None
 
     return None
+
+
+# ------------------------------------------------------------------ guides photo
+
+def guides_actifs(projet: dict) -> dict | None:
+    """Guides tracés sur la photo ACTIVE (emprises et/ou calibrage), sinon None."""
+    ins = projet.get("insertion") or {}
+    photo = ins.get("photo")
+    if not photo:
+        return None
+    g = (ins.get("guides") or {}).get(photo) or {}
+    emprises = [e for e in (g.get("emprises") or []) if len(e) >= 3]
+    calibrage = g.get("calibrage") or None
+    if calibrage and not (calibrage.get("a") and calibrage.get("b")
+                          and calibrage.get("distance_m")):
+        calibrage = None
+    if not emprises and not calibrage:
+        return None
+    return {"emprises": emprises, "calibrage": calibrage}
+
+
+def photo_guidee(projet: dict) -> Path | None:
+    """Copie de la photo active avec les guides dessinés (pour Gemini).
+
+    Emprises = polygones VERT vif à sommets numérotés ; calibrage = segment
+    JAUNE coté. Régénérée à chaque appel (les guides changent souvent).
+    """
+    from PIL import ImageDraw
+
+    guides = guides_actifs(projet)
+    photo = image_kit(projet, "photo")
+    if not guides or not photo:
+        return None
+    from .planches.base import police
+
+    image = Image.open(photo).convert("RGB")
+    dr = ImageDraw.Draw(image, "RGBA")
+    l, h = image.size
+    ep = max(4, round(min(l, h) / 220))
+
+    VERT = (0, 230, 90)
+    for n, emprise in enumerate(guides["emprises"], 1):
+        pts = [(x * l, y * h) for x, y in emprise]
+        dr.polygon(pts, fill=(0, 230, 90, 46))
+        dr.line(pts + [pts[0]], fill=VERT, width=ep)
+        for i, (px, py) in enumerate(pts, 1):
+            r = ep * 2.2
+            dr.ellipse([px - r, py - r, px + r, py + r], fill=VERT)
+            dr.text((px + r + 2, py - r - 2), str(i), font=police(ep * 7), fill=VERT)
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        dr.text((cx, cy), f"RANGÉE {n}", font=police(ep * 8, True),
+                fill=(255, 255, 255, 235), anchor="mm")
+
+    cal = guides["calibrage"]
+    if cal:
+        JAUNE = (255, 200, 0)
+        a = (cal["a"][0] * l, cal["a"][1] * h)
+        b = (cal["b"][0] * l, cal["b"][1] * h)
+        dr.line([a, b], fill=JAUNE, width=ep)
+        for px, py in (a, b):
+            r = ep * 2.2
+            dr.ellipse([px - r, py - r, px + r, py + r], fill=JAUNE)
+        etiquette = f"{cal['distance_m']:g} m".replace(".", ",")
+        if cal.get("libelle"):
+            etiquette += f" ({cal['libelle']})"
+        # étiquette maintenue dans le cadre (ancrage à droite près du bord)
+        cx = (a[0] + b[0]) / 2
+        ancre = "rb" if cx > l * 0.72 else ("lb" if cx < l * 0.28 else "mb")
+        dr.text((cx, (a[1] + b[1]) / 2 - ep * 5), etiquette,
+                font=police(ep * 8, True), fill=JAUNE, anchor=ancre)
+
+    sortie = config.assets_dir(projet.get("id")) / "photo_guidee.png"
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    image.save(sortie)
+    return sortie
+
+
+def resume_guides(guides: dict) -> str:
+    """Résumé texte des guides pour le prompt."""
+    bouts = []
+    n = len(guides["emprises"])
+    if n:
+        bouts.append(f"{n} emprise{'s' if n > 1 else ''} tracée{'s' if n > 1 else ''}")
+    cal = guides["calibrage"]
+    if cal:
+        lib = f" ({cal['libelle']})" if cal.get("libelle") else ""
+        bouts.append(f"repère d'échelle {cal['distance_m']:g} m{lib}".replace(".", ","))
+    return " · ".join(bouts)
 
 
 # ------------------------------------------------------------------ état projet
@@ -479,22 +634,35 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
     if not photo:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
 
-    # schéma d'implantation extrait du plan (sinon plan brut en repli)
+    # guides tracés sur la photo (contrainte n°1) + schéma extrait du plan
     implantation_resume = None
     roles: list[str] = ["photo"]
     chemins: list[Path] = [photo]
-    schema = image_kit(projet, "schema")
-    if schema:
+    guides = guides_actifs(projet)
+    if guides:
+        annotee = photo_guidee(projet)
+        if annotee:
+            roles.append("guides")
+            chemins.append(annotee)
+        else:
+            guides = None
+
+    # implantation tirée du plan : résumé texte toujours ; le schéma n'est
+    # JOINT que sans guides photo (sinon sa mise en page déteint sur le rendu)
+    source = _document_image(projet, "dp2")
+    if source:
         from . import implantation as mod_implantation
-        source = _document_image(projet, "dp2")
-        analyse = mod_implantation.analyser_plan(source) if source else None
+        analyse = mod_implantation.analyser_plan(source) if source.suffix.lower() == ".pdf" else None
         if analyse:
             implantation_resume = mod_implantation.resume(analyse)
-        roles.append("schema")
-        chemins.append(schema)
-    elif (plan := image_kit(projet, "plan")):
-        roles.append("plan")
-        chemins.append(plan)
+    if not guides:
+        schema = image_kit(projet, "schema")
+        if schema:
+            roles.append("schema")
+            chemins.append(schema)
+        elif (plan := image_kit(projet, "plan")):
+            roles.append("plan")
+            chemins.append(plan)
     for role in ("coupe", "reference"):
         chemin = image_kit(projet, role)
         if chemin:
@@ -503,7 +671,7 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
 
     prompt = construire_prompt(projet, affinage=affinage,
                                implantation_resume=implantation_resume,
-                               pieces_jointes=roles)
+                               pieces_jointes=roles, guides=guides)
     parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in chemins]
 
     image = _appel_gemini(parts)
