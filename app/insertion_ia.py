@@ -231,7 +231,10 @@ def construire_prompt(projet: dict, affinage: str = "", api: bool = False) -> st
         b6_lignes.append(f"Corrections à appliquer : {corrections}.")
     b6_lignes.append(
         "Ne déplace pas les véhicules, ne modifie pas les bâtiments, n'invente pas "
-        "d'arrière-plan. Pas de watermark, pas de texte, pas de logo ajouté. "
+        "d'arrière-plan. Ne peins RIEN de bleu au sol : aucune dalle, aucun marquage, "
+        "aucune surface bleue sur le bitume (les seules touches bleues autorisées sont "
+        "les fines bandes de signalisation sur les poteaux). Conserve le revêtement du "
+        "parking tel quel. Pas de watermark, pas de texte, pas de logo ajouté. "
         "Rends uniquement l'image finale, photoréaliste."
     )
     b6 = " ".join(b6_lignes)

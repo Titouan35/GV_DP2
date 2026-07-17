@@ -76,17 +76,22 @@ def gradient_h(w: int, h: int, c1=VERT, c2=VIOLET) -> Image.Image:
 class Planche:
     """Canvas d'une pièce du dossier, avec cartouche standard en pied."""
 
-    def __init__(self, titre: str, projet: dict, echelle_txt: str = ""):
+    def __init__(self, titre: str, projet: dict, echelle_txt: str = "",
+                 cartouche: bool = False):
+        # cartouche=False par défaut : le dossier PPTX pose son propre cartouche
+        # (charte maquette), on évite le double cartouche sur les planches.
         self.img = Image.new("RGB", (PLATE_W, PLATE_H), BLANC)
         self.draw = ImageDraw.Draw(self.img)
         self.titre = titre
         self.projet = projet
         self.echelle_txt = echelle_txt
+        self.avec_cartouche = cartouche
 
-    # zone utile au-dessus du cartouche
+    # zone utile (au-dessus du cartouche si présent)
     @property
     def content_box(self) -> tuple[int, int, int, int]:
-        return (MARGE, MARGE, PLATE_W - MARGE, PLATE_H - CARTOUCHE_H - MARGE)
+        bas = PLATE_H - (CARTOUCHE_H if self.avec_cartouche else 0) - MARGE
+        return (MARGE, MARGE, PLATE_W - MARGE, bas)
 
     def coller_contenu(self, image: Image.Image):
         """Colle une image (fond de carte...) centrée dans la zone utile."""
@@ -162,9 +167,11 @@ class Planche:
         wd = self.draw.textlength(droite, font=f)
         self.draw.text((PLATE_W - MARGE - wd, y0 + 44), droite, font=f, fill=ENCRE)
 
-    def finaliser(self) -> Image.Image:
-        self.cadre_contenu()
-        self.cartouche()
+    def finaliser(self, cadre: bool = True) -> Image.Image:
+        if cadre:
+            self.cadre_contenu()
+        if self.avec_cartouche:
+            self.cartouche()
         return self.img
 
 

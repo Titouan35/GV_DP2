@@ -468,42 +468,6 @@ def _slide_photos(prs, projet, assets):
     return slide
 
 
-def _slide_cerfa(prs, projet, assets, evaluation):
-    slide = _slide(prs)
-    numero = evaluation["regime"]["cerfa"]
-    _entete(slide, "Formulaire Cerfa", f"Cerfa n° {numero} · pré-rempli, à relire")
-    chemin_cerfa = assets / "cerfa_16702_prerempli.pdf"
-    if chemin_cerfa.exists():
-        page1 = _pdf_en_images(chemin_cerfa, assets, "cerfa", max_pages=1)[0]
-        _zone_cadre(slide)
-        _image_zone(slide, page1)
-        _texte(slide, 48, 620, 1184, 22,
-               "Le formulaire complet (PDF pré-rempli) est joint au dépôt. Relecture obligatoire avant signature.",
-               px=12, couleur=MUTED, centre=True)
-    else:
-        _placeholder_zone(slide, "Cerfa à pré-remplir",
-                          "Générez le Cerfa depuis l'étape Aperçu & export de l'outil.")
-    _cartouche(slide, projet, "Cerfa")
-    return slide
-
-
-def _slide_checklist(prs, projet, evaluation, avertissements):
-    slide = _slide(prs)
-    _entete(slide, "Checklist du dossier", "Page de contrôle interne — à retirer avant dépôt")
-    completude = evaluation["completude"]
-    lignes = [
-        f"{'✓' if p['statut'] == 'prete' else '•'}  {p['titre']} — {p['statut'].replace('_', ' ')} ({p['detail']})"
-        for p in completude["pieces"]
-    ]
-    lignes.append("")
-    lignes.append(f"{completude['pretes']}/{completude['total']} pièces prêtes.")
-    if avertissements:
-        lignes.append("Avertissements : " + " ; ".join(avertissements))
-    _texte(slide, 60, 130, 1160, 500, lignes, px=14, couleur=SOFT, interligne=1.5)
-    _cartouche(slide, projet, "GV_DP", NAVY, BLANC)
-    return slide
-
-
 # ------------------------------------------------------------------ assemblage
 
 def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
@@ -577,8 +541,8 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     _slide_notice(prs, projet, assets)
     _slide_dp6(prs, projet, assets)
     _slide_photos(prs, projet, assets)
-    _slide_cerfa(prs, projet, assets, evaluation)
-    _slide_checklist(prs, projet, evaluation, avertissements)
+    # Cerfa et checklist retirés du PPTX (Florent) : le Cerfa pré-rempli reste
+    # un PDF joint au dépôt, la checklist reste dans l'outil (panneau complétude).
 
     chemin = assets / f"Dossier_DP_{projet_id}.pptx"
     prs.save(str(chemin))
