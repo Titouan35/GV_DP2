@@ -46,6 +46,16 @@ def test_prompt_v3_legende_du_plan():
     assert "RENDU" in prompt and "sans aucun texte ni tracé" in prompt
 
 
+def test_prompt_v3_bloc_perspective():
+    """Le prompt cadre explicitement la perspective / les points de fuite."""
+    projet = {"ombriere": {"famille": "START PLAINE Bas"}}
+    prompt = insertion_ia.construire_prompt(projet, idx={"photo": 1, "plan": 2})
+    assert "PERSPECTIVE" in prompt
+    assert "points de fuite" in prompt
+    assert "poteaux sont strictement verticaux" in prompt
+    assert "touche le sol" in prompt
+
+
 def test_prompt_v3_coupe_be_prime():
     """Avec une DP3 importée du BE, on ne décrit pas le profil catalogue."""
     projet = {"ombriere": {"famille": "START PLAINE Double", "pente_deg": 6}}

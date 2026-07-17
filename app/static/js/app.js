@@ -1082,6 +1082,26 @@ async function renderEtapeInsertion(main) {
   renderInsertionAtelier(s);
 }
 
+// aperçu éditable du prompt : chargé depuis l'auto, modifiable, envoyé tel quel
+async function chargerApercuPrompt(force = false) {
+  const ta = $("#ins-prompt");
+  if (!ta) return;
+  if (state.promptEdite && !force) { majEtatPrompt(); return; }
+  try {
+    const d = await api(`/api/projets/${state.projet.id}/insertion/apercu-prompt`);
+    ta.value = d.prompt || "";
+    state.promptEdite = false;
+    majEtatPrompt();
+  } catch { /* toast déjà affiché */ }
+}
+
+function majEtatPrompt() {
+  const el = $("#ins-prompt-etat");
+  if (el) el.textContent = state.promptEdite
+    ? "prompt modifié — c'est cette version qui sera envoyée"
+    : "prompt automatique (issu du plan, de la coupe et des saisies)";
+}
+
 function texteDepense(imagesProjet, imagesGlobal, cout) {
   const eur = (n) => (n * (cout || 0)).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
   return `${imagesProjet} image${imagesProjet > 1 ? "s" : ""} (projet, ≈ ${eur(imagesProjet)}) · ${imagesGlobal} au total (≈ ${eur(imagesGlobal)})`;
@@ -1110,8 +1130,14 @@ function renderInsertionAtelier(s) {
           <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:14px">Générer l'insertion</button>
           <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
           <div class="hint" id="ins-depense" style="margin-top:2px;text-align:center">${esc(texteDepense(s.images_projet || 0, s.images_global || 0, s.cout_image_eur))}</div>
-          <details class="foldable" style="margin-top:10px"><summary>Dernier prompt envoyé</summary>
-            <pre class="prompt-pre" id="ins-prompt">${esc(ins.prompt || "Aucune génération pour l'instant.")}</pre>
+          <details class="foldable" id="ins-prompt-fold" style="margin-top:10px"><summary>Prompt envoyé à Gemini <span class="hint">(modifiable)</span></summary>
+            <div class="bd">
+              <textarea class="input prompt-ta" id="ins-prompt" rows="12" spellcheck="false"></textarea>
+              <div class="actionsrow" style="margin-top:8px">
+                <button class="btn" id="ins-prompt-auto" title="Reconstruire le prompt depuis les données du projet">↺ Prompt auto</button>
+                <span class="hint" id="ins-prompt-etat"></span>
+              </div>
+            </div>
           </details>
         </div>
       </div>
@@ -1132,6 +1158,9 @@ function renderInsertionAtelier(s) {
   $("#ins-photos-add").addEventListener("change", (e) => {
     if (e.target.files.length) uploaderPhotosSite(e.target.files).catch(() => {});
   });
+  chargerApercuPrompt();
+  $("#ins-prompt").addEventListener("input", () => { state.promptEdite = true; majEtatPrompt(); });
+  $("#ins-prompt-auto").addEventListener("click", () => chargerApercuPrompt(true));
   let tc;
   $("#ins-consignes").addEventListener("input", () => {
     clearTimeout(tc);
@@ -1380,12 +1409,11 @@ async function genererInsertionAPI() {
   if (btn) btn.disabled = true;
   if (prog) prog.textContent = "Génération en cours (10 à 30 s)…";
   try {
+    const promptEdite = state.promptEdite ? ($("#ins-prompt")?.value || "") : "";
     const data = await api(`/api/projets/${state.projet.id}/insertion/generer`, {
-      method: "POST", body: JSON.stringify({}),
+      method: "POST", body: JSON.stringify(promptEdite ? { prompt: promptEdite } : {}),
     });
     state.projet = data.projet;
-    const pre = $("#ins-prompt");
-    if (pre && state.projet.insertion?.prompt) pre.textContent = state.projet.insertion.prompt;
     if (prog) prog.textContent = "Image générée — regarde la galerie ci-contre.";
     const dep = $("#ins-depense");
     if (dep && data.images_projet != null) {

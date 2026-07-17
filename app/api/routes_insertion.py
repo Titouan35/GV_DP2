@@ -36,6 +36,13 @@ def statut_projet(projet_id: str):
     }
 
 
+@router.get("/{projet_id}/insertion/apercu-prompt")
+def apercu_prompt(projet_id: str):
+    """Prompt auto qui serait envoyé, pour l'aperçu éditable de l'UI."""
+    projet = _charger(projet_id)
+    return {"prompt": insertion_ia.apercu_prompt(projet.model_dump())}
+
+
 # ------------------------------------------------------------------ photo du site
 
 @router.post("/{projet_id}/insertion/photos")
@@ -161,8 +168,10 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
     affinage = str(corps.get("affinage", "") or "")
     if affinage:
         projet.insertion.affinage = affinage[:2000]
+    prompt_override = str(corps.get("prompt", "") or "")[:8000]
     try:
-        image = insertion_ia.generer_image(projet.model_dump(), affinage=affinage)
+        image = insertion_ia.generer_image(projet.model_dump(), affinage=affinage,
+                                           prompt_override=prompt_override)
     except InsertionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     projet.insertion.images = [image, *projet.insertion.images]

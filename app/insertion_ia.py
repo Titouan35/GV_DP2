@@ -191,6 +191,20 @@ def construire_prompt(projet: dict, affinage: str = "",
     )
     blocs.append(" ".join(placement))
 
+    # -- perspective (point faible constaté : lignes de fuite)
+    blocs.append(
+        "PERSPECTIVE. Respecte rigoureusement la perspective de la photo. Les "
+        "lignes de l'ombrière (bord avant et bord arrière de la toiture, "
+        "alignement des poteaux, arêtes des modules et des pannes) doivent fuir "
+        "vers les MÊMES points de fuite que les lignes du parking déjà visibles "
+        "(marquages au sol, bordures, façade du bâtiment) : elles sont parallèles "
+        "dans la réalité, donc elles convergent vers le même point à l'horizon. "
+        "Les poteaux sont strictement verticaux. Plus une partie de l'ombrière "
+        "est loin de l'objectif, plus elle est petite et haute vers la ligne "
+        "d'horizon. La base de chaque poteau touche le sol au niveau du bitume "
+        "(l'ombrière ne flotte pas et n'est pas vue de trop haut)."
+    )
+
     # -- structure (la coupe DP3 du BE prime sur le profil catalogue)
     if coupe_be:
         tete = ("STRUCTURE. Reproduis le profil exact de la coupe technique du "
@@ -223,8 +237,12 @@ def construire_prompt(projet: dict, affinage: str = "",
              "cadre, au même cadrage et au même ratio que l'image 1 : pas de "
              "cadre, pas de cartouche, pas de légende, pas de mise en page de "
              "plan — le plan et la coupe sont des références de travail, pas des "
-             "modèles de présentation. Même lumière et mêmes ombres que la photo "
-             "d'origine, sans aucun texte ni tracé."]
+             "modèles de présentation. Ne peins AUCUNE couleur sur le sol : ni "
+             "vert, ni bleu, ni grille, ni quadrillage. Les zones bleues du plan "
+             "et les contours verts/jaunes sont des repères de travail, jamais "
+             "un marquage à reproduire sur le bitume, qui reste du bitume nu. "
+             "Même lumière et mêmes ombres que la photo d'origine, sans aucun "
+             "texte ni tracé."]
     libres = (ins.get("consignes") or "").strip()
     corrections = (affinage or ins.get("affinage") or "").strip()
     if libres:
@@ -381,7 +399,8 @@ def photo_guidee(projet: dict) -> Path | None:
     VERT = (0, 230, 90)
     for n, emprise in enumerate(guides["emprises"], 1):
         pts = [(x * l, y * h) for x, y in emprise]
-        dr.polygon(pts, fill=(0, 230, 90, 46))
+        # contour seul (pas de remplissage : une zone verte pleine se fait
+        # recopier au sol par le modèle — constaté 17/07/2026)
         dr.line(pts + [pts[0]], fill=VERT, width=ep)
         for i, (px, py) in enumerate(pts, 1):
             r = ep * 2.2
@@ -601,17 +620,12 @@ def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
     return tampon.getvalue()
 
 
-def generer_image(projet: dict, affinage: str = "") -> dict:
-    """Génère UNE insertion via Gemini (Nano Banana Pro).
+def _preparer_requete(projet: dict, affinage: str = "") -> dict:
+    """Assemble images + prompt auto (sans appeler Gemini).
 
-    Pipeline v3 (17/07/2026) : photo + PLAN DE MASSE BRUT (le prompt en
-    explique les conventions ; son fond orthophoto relie vue aérienne et photo
-    au sol) + guides tracés (s'il y en a) + coupe DP3 du BE (sinon coupe
-    catalogue nettoyée) -> génération -> recollage de la scène hors zones
-    construites. Renvoie {fichier, date, etiquette, modele, prompt}.
+    Renvoie {chemins, roles, prompt}. Sert à la fois à la génération et à
+    l'aperçu éditable du prompt côté UI. Lève InsertionError si pas de photo.
     """
-    if not api_configuree():
-        raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
     photo = image_kit(projet, "photo")
     if not photo:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
@@ -660,7 +674,32 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
     idx = {role: i + 1 for i, role in enumerate(roles)}
     prompt = construire_prompt(projet, affinage=affinage, plan_infos=plan_infos,
                                guides=guides, idx=idx, coupe_be=coupe_be)
-    parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in chemins]
+    return {"chemins": chemins, "roles": roles, "prompt": prompt}
+
+
+def apercu_prompt(projet: dict) -> str:
+    """Prompt qui SERAIT envoyé, pour l'aperçu éditable (sans génération)."""
+    try:
+        return _preparer_requete(projet)["prompt"]
+    except InsertionError:
+        return ""
+
+
+def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -> dict:
+    """Génère UNE insertion via Gemini (Nano Banana Pro).
+
+    Pipeline v3 (17/07/2026) : photo + PLAN DE MASSE BRUT (le prompt en
+    explique les conventions) + guides tracés (s'il y en a) + coupe DP3 du BE
+    (sinon coupe catalogue nettoyée) -> génération -> décadrage + recollage de
+    la scène. `prompt_override` : prompt édité à la main (l'auto est ignoré,
+    les images restent les mêmes). Renvoie {fichier, date, etiquette, modele, prompt}.
+    """
+    if not api_configuree():
+        raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
+    req = _preparer_requete(projet, affinage=affinage)
+    photo = req["chemins"][0]
+    prompt = prompt_override.strip() if prompt_override and prompt_override.strip() else req["prompt"]
+    parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in req["chemins"]]
 
     image = _appel_gemini(parts)
     image = decadrer(photo, image)

@@ -336,10 +336,9 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 
 .card.retenue { border-color: var(--gv-green); box-shadow: 0 0 0 2px var(--gv-green-l); }
 
-.prompt-pre {
-  margin: 0; padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
-  font-family: "Consolas", "SF Mono", monospace; font-size: 11.5px; line-height: 1.55;
-  color: var(--ink); max-height: 280px; overflow: auto; background: var(--card);
+.prompt-ta {
+  width: 100%; font-family: "Consolas", "SF Mono", monospace; font-size: 11.5px;
+  line-height: 1.5; resize: vertical; min-height: 160px;
 }
 
 /* outil de mesure sur le plan de masse */
