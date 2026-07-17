@@ -44,10 +44,8 @@ def apercu_prompt(projet_id: str):
 
 
 TITRES_PAYLOAD = {
-    "photo": "1 · Photo du site (à modifier)",
-    "photo_emprise": "2 · Photo + emprise tracée",
-    "aerienne": "Vue aérienne + emprise + pente",
-    "coupe": "Coupe technique (DP3)",
+    "photo": "Photo à modifier (axes tracés)",
+    "coupe": "Coupe technique (structure)",
 }
 
 
@@ -64,7 +62,7 @@ def apercu_payload(projet_id: str):
         rel = str(Path(chemin).resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
         images.append({
             "role": role,
-            "titre": TITRES_PAYLOAD.get(role, role).replace("1 ·", f"{i} ·").replace("2 ·", f"{i} ·"),
+            "titre": f"{i} · {TITRES_PAYLOAD.get(role, role)}",
             "url": f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}",
         })
     return {"images": images, "prompt": req["prompt"]}
@@ -268,9 +266,10 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
 
 @router.put("/{projet_id}/insertion/guides")
 def sauver_guides(projet_id: str, corps: dict = Body(...)):
-    """Guides tracés sur une photo : emprises (quadrilatères) + calibrage.
+    """Repères tracés sur une photo : segments (axes d'ombrières) + calibrage.
 
-    Coordonnées normalisées 0-1. Corps : {photo, emprises, calibrage|null}.
+    1 segment [début, fin] = 1 ombrière ; plusieurs possibles. Coordonnées
+    normalisées 0-1. Corps : {photo, segments, calibrage|null}.
     """
     projet = _charger(projet_id)
     photo = corps.get("photo")
@@ -281,10 +280,11 @@ def sauver_guides(projet_id: str, corps: dict = Body(...)):
         try:
             x, y = float(p[0]), float(p[1])
         except (TypeError, ValueError, IndexError):
-            raise HTTPException(status_code=400, detail="Point de guide invalide.")
+            raise HTTPException(status_code=400, detail="Point de repère invalide.")
         return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
 
-    emprises = [[_point(p) for p in e] for e in (corps.get("emprises") or []) if len(e) >= 3]
+    segments = [[_point(s[0]), _point(s[1])]
+                for s in (corps.get("segments") or []) if len(s) == 2]
     calibrage = corps.get("calibrage") or None
     if calibrage:
         try:
@@ -297,8 +297,8 @@ def sauver_guides(projet_id: str, corps: dict = Body(...)):
         except (KeyError, TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Calibrage invalide (2 points + distance).")
 
-    if emprises or calibrage:
-        projet.insertion.guides[photo] = {"emprises": emprises, "calibrage": calibrage}
+    if segments or calibrage:
+        projet.insertion.guides[photo] = {"segments": segments, "calibrage": calibrage}
     else:
         projet.insertion.guides.pop(photo, None)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")

@@ -115,7 +115,7 @@ def _projet_avec_guides(tmp_path):
         "insertion": {
             "photo": rel, "photos": [rel],
             "guides": {rel: {
-                "emprises": [[[0.1, 0.4], [0.6, 0.35], [0.65, 0.6], [0.12, 0.7]]],
+                "segments": [[[0.2, 0.5], [0.7, 0.55]], [[0.15, 0.65], [0.5, 0.68]]],
                 "calibrage": {"a": [0.2, 0.8], "b": [0.35, 0.8],
                               "distance_m": 2.5, "libelle": "largeur d'une place"},
             }},
@@ -123,12 +123,12 @@ def _projet_avec_guides(tmp_path):
     }
 
 
-def test_photo_emprise_magenta_sans_texte(tmp_path, monkeypatch):
-    """v4 : contours MAGENTA + segment jaune, aucun vert, aucun texte."""
+def test_photo_emprise_segments_magenta_sans_texte(tmp_path, monkeypatch):
+    """v5 : 1 trait magenta par ombrière + segment jaune, aucun vert."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet = _projet_avec_guides(tmp_path)
     guides = insertion_ia.guides_actifs(projet)
-    assert guides and len(guides["emprises"]) == 1 and guides["calibrage"]
+    assert guides and len(guides["segments"]) == 2 and guides["calibrage"]
     annotee = insertion_ia.photo_emprise(projet)
     assert annotee and annotee.exists() and annotee.name == "photo_emprise.png"
     arr = np.asarray(Image.open(annotee).convert("RGB"))
@@ -137,12 +137,31 @@ def test_photo_emprise_magenta_sans_texte(tmp_path, monkeypatch):
     vert = (arr[..., 1] > 190) & (arr[..., 0] < 120) & (arr[..., 2] < 120)
     assert magenta.sum() > 200 and jaune.sum() > 40
     assert vert.sum() == 0
-    assert "1 emprise" in insertion_ia.resume_guides(guides)
+    assert "2 ombrières" in insertion_ia.resume_guides(guides)
+
+
+def test_guides_segment_incomplet_ignore(tmp_path, monkeypatch):
+    """Un segment à 1 point (tracé en cours) n'est pas retenu."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    rel = "x/site.jpg"
+    projet = {"id": "p", "insertion": {"photo": rel, "photos": [rel],
+              "guides": {rel: {"segments": [[[0.2, 0.5]]], "calibrage": None}}}}
+    assert insertion_ia.guides_actifs(projet) is None
 
 
 def test_guides_absents(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     assert insertion_ia.guides_actifs({"id": "p", "insertion": {}}) is None
+
+
+def test_ratio_photo_supporte(tmp_path):
+    """Le ratio de sortie est le plus proche supporté par Nano Banana."""
+    p = tmp_path / "photo.jpg"
+    Image.new("RGB", (4080, 3060)).save(p)   # 4:3
+    assert insertion_ia._ratio_photo(p) == "4:3"
+    p2 = tmp_path / "large.jpg"
+    Image.new("RGB", (1920, 1080)).save(p2)  # 16:9
+    assert insertion_ia._ratio_photo(p2) == "16:9"
 
 
 @anse_requis

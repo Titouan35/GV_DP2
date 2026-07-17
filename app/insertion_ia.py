@@ -104,103 +104,99 @@ def construire_prompt(projet: dict, affinage: str = "",
                       guides: dict | None = None,
                       idx: dict | None = None,
                       coupe_be: bool = False) -> str:
-    """Prompt Gemini v4 ULTRA-CADRÉ, co-écrit avec Florent le 17/07/2026.
+    """Prompt Gemini v5 (méthode officielle Nano Banana, recherchée 17/07/2026).
 
-    Principe : le lot d'images est fabriqué pour la tâche (photo propre,
-    photo + emprise magenta, vue aérienne + emprise + flèche, coupe DP3 du
-    BE) et le prompt cite chaque image UNE fois, sans redondance. Le plan de
-    masse brut n'est plus joint (cartouche/ortho parasites).
+    Règles Google appliquées : (1) commencer par un verbe fort ; (2) NE PAS
+    numéroter les images, décrire leur rôle en langage naturel ; (3)
+    formulation POSITIVE (dire ce qu'on veut, pas ce qu'on ne veut pas) ;
+    (4) dire explicitement ce qui doit rester identique ; (5) vocabulaire
+    photo pour la perspective. Le lot d'images est minimal : la photo annotée
+    des axes magenta (base à éditer) + la coupe technique (structure).
 
-    `plan_infos` : {"dims_m": [(L, l), ...]} extraites du plan.
-    `guides` : guides_actifs(projet). `idx` : {role: numéro d'image jointe}
-    parmi photo / photo_emprise / aerienne / coupe.
-    `coupe_be` : la coupe jointe est la DP3 du bureau d'études.
+    `guides` : guides_actifs (segments = axes des ombrières + calibrage).
+    `plan_infos` : {"dims_m": [(L, l), ...]} pour les cotes réelles.
     """
-    idx = idx or {}
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
+    n = len(guides["segments"]) if guides and guides.get("segments") else 0
 
-    blocs = [
-        "Insère une ombrière photovoltaïque de parking dans la photo "
-        "(IMAGE 1), photoréaliste, comme si elle était déjà construite. "
-        "Ne modifie rien d'autre de la scène."
-    ]
+    # -- ouverture : verbe fort + nombre d'ombrières
+    if n == 1:
+        ouverture = ("Insère une ombrière photovoltaïque de parking dans cette "
+                     "photographie, de façon photoréaliste, comme si elle avait "
+                     "toujours été là.")
+    elif n > 1:
+        ouverture = (f"Insère {n} ombrières photovoltaïques de parking dans cette "
+                     "photographie, de façon photoréaliste, comme si elles avaient "
+                     "toujours été là.")
+    else:
+        ouverture = ("Insère une ombrière photovoltaïque de parking dans cette "
+                     "photographie, de façon photoréaliste, comme si elle avait "
+                     "toujours été là.")
+    blocs = [ouverture]
 
-    # -- emplacement : photo annotée + vue aérienne + cotes réelles
-    empl = []
-    if "photo_emprise" in idx:
-        empl.append(
-            f"IMAGE {idx['photo_emprise']} = cette même photo avec, en MAGENTA "
-            "(rose vif), l'emprise au sol exacte de l'ombrière : construis-la "
-            "pour que sa base épouse ce contour, pas ailleurs."
-        )
-        cal = (guides or {}).get("calibrage")
+    # -- emplacement : les axes magenta (positif, décrit le rôle de l'image)
+    if n:
+        empl = [
+            "Sur la photo, un trait magenta épais marque l'axe de "
+            + ("chaque ombrière" if n > 1 else "l'ombrière")
+            + " : construis "
+            + ("une ombrière le long de chaque trait magenta" if n > 1
+               else "l'ombrière le long du trait magenta")
+            + ", d'un point à l'autre, centrée sur le trait et posée au sol. "
+        ]
+        cal = guides.get("calibrage")
         if cal:
-            lib = f" ({cal['libelle']})" if cal.get("libelle") else ""
+            lib = f", {cal['libelle']}" if cal.get("libelle") else ""
             empl.append(
-                f"Sur cette image, le segment JAUNE mesure "
-                f"{_fmt(cal['distance_m'])} m dans la réalité{lib} : "
-                "sers-t'en pour l'échelle."
-            )
-    if "aerienne" in idx:
-        empl.append(
-            f"IMAGE {idx['aerienne']} = vue aérienne du site : le contour "
-            "MAGENTA y délimite la même emprise vue de dessus (la zone "
-            "quadrillée bleue est le calepinage des panneaux du plan), et la "
-            "grande flèche indique le sens de DESCENTE de la toiture. "
-            "Retrouve les bâtiments et rangées de stationnement communs aux "
-            "deux vues pour caler la position et l'orientation."
-        )
-    if plan_infos and plan_infos.get("dims_m"):
-        liste = " ; ".join(
-            f"{L:g} m x {l:g} m".replace(".", ",") for L, l in plan_infos["dims_m"])
-        empl.append(f"Emprise réelle au sol : {liste}.")
-    if not empl:
-        empl.append("Implante l'ombrière sur la zone de stationnement la plus "
-                    "cohérente de la photo.")
-    empl.append(
-        "Les contours magenta et la flèche sont des repères de travail : ne "
-        "les dessine pas dans le rendu. Si des arbres se trouvent sur "
-        "l'emprise, retire-les du montage ; ne touche pas aux autres arbres."
-    )
-    blocs.append("EMPLACEMENT — " + " ".join(empl))
+                f"Le trait jaune mesure {_fmt(cal['distance_m'])} m dans la "
+                f"réalité{lib} : sers-t'en pour l'échelle. ")
+        if plan_infos and plan_infos.get("dims_m"):
+            liste = " ; ".join(
+                f"{L:g} m x {l:g} m".replace(".", ",") for L, l in plan_infos["dims_m"])
+            empl.append(f"Dimensions réelles au sol : {liste}. ")
+        empl.append("Dans l'image finale, le sol montre du bitume propre là où "
+                    "passaient les traits colorés.")
+        blocs.append("EMPLACEMENT. " + "".join(empl))
+    else:
+        blocs.append("EMPLACEMENT. Implante l'ombrière sur la zone de "
+                     "stationnement la plus dégagée et cohérente de la photo.")
 
-    # -- structure : la coupe DP3 du BE fait foi
-    struct = []
-    if "coupe" in idx:
-        origine = " du projet, dessinée par le bureau d'études" if coupe_be else ""
-        struct.append(
-            f"IMAGE {idx['coupe']} = la coupe technique{origine} : reproduis "
-            "exactement ce profil (forme des poteaux, position des poteaux "
-            "sous la toiture, pente, proportions)."
-        )
+    # -- structure : la coupe technique (rôle décrit, formulation positive)
+    if "coupe" in (idx or {}):
+        origine = ("la coupe technique du projet, dessinée par le bureau d'études"
+                   if coupe_be else "la coupe technique fournie")
+        struct = [f"Reproduis fidèlement le profil de {origine} : mêmes poteaux, "
+                  "même position des poteaux sous la toiture, même pente, mêmes "
+                  "proportions. "]
+    else:
+        struct = ["L'ombrière a des poteaux en acier galvanisé et une toiture "
+                  "inclinée. "]
     h_bas, h_haut = omb.get("garde_au_sol_m"), omb.get("hauteur_hors_tout_m")
     if h_bas and h_haut:
-        struct.append(f"Hauteur {_fmt(h_bas)} m au point bas et "
-                      f"{_fmt(h_haut)} m au point haut.")
-    if omb.get("pente_deg"):
-        struct.append(f"Pente {_fmt(omb['pente_deg'])}°.")
-    struct.append("Acier galvanisé gris nu, toiture de modules photovoltaïques "
-                  "noirs mats, sous-face claire.")
-    blocs.append("STRUCTURE — " + " ".join(struct))
+        struct.append(f"Elle mesure {_fmt(h_bas)} m de haut au point bas et "
+                      f"{_fmt(h_haut)} m au point haut. ")
+    struct.append("Structure en acier galvanisé gris clair, toiture de modules "
+                  "photovoltaïques noirs et mats, sous-face claire.")
+    blocs.append("STRUCTURE. " + "".join(struct))
 
-    # -- perspective
+    # -- intégration : positif + keep-explicit + vocabulaire photo
     blocs.append(
-        "PERSPECTIVE — poteaux strictement verticaux ; les lignes de "
-        "l'ombrière fuient vers les mêmes points de fuite que les marquages "
-        "et bordures du parking ; base des poteaux posée sur le bitume ; "
-        "l'ombrière rapetisse avec la distance."
+        "INTÉGRATION. Garde le reste de la scène rigoureusement identique : les "
+        "voitures, le revêtement du sol et ses marquages, les bordures, les "
+        "arbres situés hors des ombrières, les bâtiments et le ciel restent "
+        "exactement à leur place. Reproduis le grand-angle, la lumière du jour "
+        "et la direction des ombres de la photo d'origine ; ajoute sous chaque "
+        "ombrière une ombre portée douce, cohérente avec les ombres existantes. "
+        "Les poteaux sont verticaux et posés sur le bitume, et l'ombrière suit "
+        "les lignes de fuite du parking. Si un arbre se trouve exactement sous "
+        "une ombrière, remplace-le par l'ombrière."
     )
 
-    # -- rendu + consignes libres
-    rendu = [
-        "RENDU — uniquement la photo (image 1) montée, plein cadre, même "
-        "cadrage, même ratio, même lumière et mêmes ombres. L'ombre portée de "
-        "l'ombrière est douce et translucide, cohérente avec les autres ombres "
-        "de la photo, jamais un aplat noir uniforme. Aucun texte, aucun cadre, "
-        "aucune légende, aucun tracé, aucune couleur peinte au sol : le bitume "
-        "reste nu et ses marquages restent visibles."
-    ]
+    # -- rendu + consignes libres (positif)
+    rendu = ["RENDU. Le résultat est une photographie plein cadre au même "
+             "cadrage que l'originale, montrant uniquement le parking avec ses "
+             "nouvelles ombrières."]
     libres = (ins.get("consignes") or "").strip()
     corrections = (affinage or ins.get("affinage") or "").strip()
     if libres:
@@ -350,32 +346,36 @@ def image_kit(projet: dict, role: str) -> Path | None:
 # ------------------------------------------------------------------ guides photo
 
 def guides_actifs(projet: dict) -> dict | None:
-    """Guides tracés sur la photo ACTIVE (emprises et/ou calibrage), sinon None."""
+    """Repères tracés sur la photo ACTIVE (segments d'ombrières + calibrage).
+
+    1 segment [début, fin] = 1 ombrière (son axe, du départ à l'arrivée).
+    Plusieurs ombrières possibles sur la même photo. None si rien d'exploitable.
+    """
     ins = projet.get("insertion") or {}
     photo = ins.get("photo")
     if not photo:
         return None
     g = (ins.get("guides") or {}).get(photo) or {}
-    emprises = [e for e in (g.get("emprises") or []) if len(e) >= 3]
+    segments = [s for s in (g.get("segments") or []) if len(s) == 2]
     calibrage = g.get("calibrage") or None
     if calibrage and not (calibrage.get("a") and calibrage.get("b")
                           and calibrage.get("distance_m")):
         calibrage = None
-    if not emprises and not calibrage:
+    if not segments and not calibrage:
         return None
-    return {"emprises": emprises, "calibrage": calibrage}
+    return {"segments": segments, "calibrage": calibrage}
 
 
-MAGENTA = (255, 0, 200)   # couleur d'emprise : absente des scènes de parking
+MAGENTA = (255, 0, 200)   # couleur des repères : absente des scènes de parking
 JAUNE = (255, 200, 0)     # repère d'échelle
 
 
 def photo_emprise(projet: dict) -> Path | None:
-    """Copie de la photo active avec l'emprise au sol tracée en MAGENTA.
+    """Copie de la photo active avec l'axe de chaque ombrière tracé en MAGENTA.
 
-    Contours seuls, AUCUN texte ni numéro (tout ce qui est écrit sur une
-    image jointe finit par déteindre sur le rendu — constaté 17/07/2026).
-    Le calibrage est un simple segment jaune ; sa valeur va dans le prompt.
+    Un trait épais début→fin par ombrière (avec un gros point à chaque bout),
+    AUCUN texte ni numéro (tout ce qui est écrit sur une image jointe déteint
+    sur le rendu — constaté 17/07/2026). Calibrage = segment jaune.
     """
     from PIL import ImageDraw
 
@@ -387,13 +387,14 @@ def photo_emprise(projet: dict) -> Path | None:
     image = Image.open(photo).convert("RGB")
     dr = ImageDraw.Draw(image)
     l, h = image.size
-    ep = max(4, round(min(l, h) / 220))
+    ep = max(5, round(min(l, h) / 200))
 
-    for emprise in guides["emprises"]:
-        pts = [(x * l, y * h) for x, y in emprise]
-        dr.line(pts + [pts[0]], fill=MAGENTA, width=ep)
-        for px, py in pts:
-            r = ep * 1.8
+    for seg in guides["segments"]:
+        a = (seg[0][0] * l, seg[0][1] * h)
+        b = (seg[1][0] * l, seg[1][1] * h)
+        dr.line([a, b], fill=MAGENTA, width=ep)
+        for px, py in (a, b):
+            r = ep * 2.0
             dr.ellipse([px - r, py - r, px + r, py + r], fill=MAGENTA)
 
     cal = guides["calibrage"]
@@ -531,15 +532,15 @@ def aerienne_emprise(projet: dict) -> Path | None:
 
 
 def resume_guides(guides: dict) -> str:
-    """Résumé texte des guides pour le prompt."""
+    """Résumé texte des repères pour l'UI."""
     bouts = []
-    n = len(guides["emprises"])
+    n = len(guides["segments"])
     if n:
-        bouts.append(f"{n} emprise{'s' if n > 1 else ''} tracée{'s' if n > 1 else ''}")
+        bouts.append(f"{n} ombrière{'s' if n > 1 else ''} tracée{'s' if n > 1 else ''}")
     cal = guides["calibrage"]
     if cal:
         lib = f" ({cal['libelle']})" if cal.get("libelle") else ""
-        bouts.append(f"repère d'échelle {cal['distance_m']:g} m{lib}".replace(".", ","))
+        bouts.append(f"échelle {cal['distance_m']:g} m{lib}".replace(".", ","))
     return " · ".join(bouts)
 
 
@@ -585,22 +586,47 @@ def _extraire_image(reponse: dict) -> bytes:
     raise InsertionError("Aucune image renvoyée par le modèle (réponse vide).")
 
 
-def _appel_gemini(parts: list[dict]) -> bytes:
+_RATIOS_SUPPORTES = {   # aspect ratios acceptés par Nano Banana -> valeur
+    1 / 1: "1:1", 3 / 2: "3:2", 2 / 3: "2:3", 3 / 4: "3:4", 4 / 3: "4:3",
+    4 / 5: "4:5", 5 / 4: "5:4", 9 / 16: "9:16", 16 / 9: "16:9", 21 / 9: "21:9",
+}
+
+
+def _ratio_photo(chemin: Path) -> str | None:
+    """Aspect ratio Nano Banana le plus proche de la photo (garde le cadrage)."""
+    try:
+        with Image.open(chemin) as im:
+            r = im.width / im.height
+    except OSError:
+        return None
+    return min(_RATIOS_SUPPORTES.items(), key=lambda kv: abs(kv[0] - r))[1]
+
+
+def _appel_gemini(parts: list[dict], aspect_ratio: str | None = None) -> bytes:
     """generateContent, sans outil (le grounding Google Search a été retiré
-    le 17/07/2026 : source d'aléa, la structure vient de la coupe jointe)."""
+    le 17/07/2026 : source d'aléa, la structure vient de la coupe jointe).
+
+    `aspect_ratio` force le cadrage de sortie (imageConfig) ; repli automatique
+    sans lui si l'API le refuse (HTTP 400), pour ne jamais bloquer la génération.
+    """
     cle = os.environ.get("GEMINI_API_KEY")
     if not cle:
         raise InsertionError("Clé GEMINI_API_KEY absente (fichier .env CLAUDE).")
     url = f"{GEMINI_BASE}/models/{_modele()}:generateContent"
+    gen_config: dict = {"responseModalities": ["TEXT", "IMAGE"]}
+    if aspect_ratio:
+        gen_config["imageConfig"] = {"aspectRatio": aspect_ratio}
     corps: dict = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+        "generationConfig": gen_config,
     }
     try:
         with httpx.Client(timeout=180.0) as client:
             resp = client.post(url, headers={"x-goog-api-key": cle}, json=corps)
     except httpx.HTTPError as exc:
         raise InsertionError(f"Appel Gemini impossible ({exc.__class__.__name__}).") from exc
+    if resp.status_code == 400 and aspect_ratio:
+        return _appel_gemini(parts, aspect_ratio=None)  # modèle sans imageConfig
     if resp.status_code == 429:
         raise InsertionError("Quota Gemini atteint (ou facturation à vérifier) : réessayez dans un instant.")
     if resp.status_code in (401, 403):
@@ -716,47 +742,43 @@ def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
 
 
 def _preparer_requete(projet: dict, affinage: str = "") -> dict:
-    """Assemble le lot d'images v4 + le prompt auto (sans appeler Gemini).
+    """Assemble le lot d'images v5 + le prompt auto (sans appeler Gemini).
 
-    Lot fabriqué pour la tâche, une image = un rôle :
-      1. photo du site (la cible à éditer)
-      2. photo + emprise MAGENTA (si tracée)
-      3. vue aérienne (crop de l'ortho du plan) + emprise + flèche de pente
-      4. coupe DP3 du BE
-    Le plan brut n'est PLUS joint (cartouche et habillage parasites).
-    Renvoie {chemins, roles, prompt}. Lève InsertionError si pas de photo.
+    Méthode officielle Nano Banana : lot MINIMAL, rôles décrits en langage
+    naturel (jamais numérotés). Deux images seulement :
+      - base à éditer = la photo, annotée des axes magenta si tracés
+      - référence structure = la coupe DP3 du BE (repli catalogue)
+    La vue aérienne et le plan brut ne sont plus envoyés (source de confusion) ;
+    l'implantation vient des axes que Florent trace sur la photo.
+    Renvoie {chemins, roles, prompt, base_propre}. Lève InsertionError sans photo.
     """
-    photo = image_kit(projet, "photo")
-    if not photo:
+    base_propre = image_kit(projet, "photo")
+    if not base_propre:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
 
-    roles: list[str] = ["photo"]
-    chemins: list[Path] = [photo]
-
-    # 2. la photo annotée de l'emprise (magenta) + échelle (jaune)
+    # base à éditer : la photo annotée des axes si tracés, sinon la photo nue
     guides = guides_actifs(projet)
+    base = base_propre
     if guides:
         annotee = photo_emprise(projet)
         if annotee:
-            roles.append("photo_emprise")
-            chemins.append(annotee)
+            base = annotee
         else:
             guides = None
 
-    # 3. la vue aérienne annotée (emprise + flèche) + cotes réelles du plan
-    plan_infos = None
-    aerienne = aerienne_emprise(projet)
-    if aerienne:
-        roles.append("aerienne")
-        chemins.append(aerienne)
-        analyse, _ = _analyse_plan(projet)
-        if analyse:
-            plan_infos = {
-                "dims_m": [(z["longueur_m"], z["largeur_m"])
-                           for z in analyse["rangees"] if "longueur_m" in z],
-            }
+    roles = ["photo"]
+    chemins: list[Path] = [base]
 
-    # 4. la coupe DP3 du BE (repli catalogue si pas encore déposée)
+    # cotes réelles du plan (texte du prompt seulement, aucune image envoyée)
+    plan_infos = None
+    analyse, _ = _analyse_plan(projet)
+    if analyse:
+        dims = [(z["longueur_m"], z["largeur_m"])
+                for z in analyse["rangees"] if "longueur_m" in z]
+        if dims:
+            plan_infos = {"dims_m": dims}
+
+    # référence structure : la coupe DP3 du BE (repli catalogue)
     coupe_be = False
     coupe = image_kit(projet, "coupe_be")
     if coupe:
@@ -770,7 +792,8 @@ def _preparer_requete(projet: dict, affinage: str = "") -> dict:
     idx = {role: i + 1 for i, role in enumerate(roles)}
     prompt = construire_prompt(projet, affinage=affinage, plan_infos=plan_infos,
                                guides=guides, idx=idx, coupe_be=coupe_be)
-    return {"chemins": chemins, "roles": roles, "prompt": prompt}
+    return {"chemins": chemins, "roles": roles, "prompt": prompt,
+            "base_propre": base_propre}
 
 
 def apercu_prompt(projet: dict) -> str:
@@ -784,23 +807,22 @@ def apercu_prompt(projet: dict) -> str:
 def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -> dict:
     """Génère UNE insertion via Gemini (Nano Banana Pro).
 
-    Pipeline v3 (17/07/2026) : photo + PLAN DE MASSE BRUT (le prompt en
-    explique les conventions) + guides tracés (s'il y en a) + coupe DP3 du BE
-    (sinon coupe catalogue nettoyée) -> génération -> décadrage + recollage de
-    la scène. `prompt_override` : prompt édité à la main (l'auto est ignoré,
-    les images restent les mêmes). Renvoie {fichier, date, etiquette, modele, prompt}.
+    Pipeline v5 (17/07/2026, méthode officielle Nano Banana) : photo annotée
+    des axes maganta + coupe DP3 -> génération au ratio de la photo -> décadrage
+    + recollage de la scène (contre la photo PROPRE). `prompt_override` : prompt
+    édité à la main. Renvoie {fichier, date, etiquette, modele, prompt}.
     """
     if not api_configuree():
         raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
     req = _preparer_requete(projet, affinage=affinage)
-    photo = req["chemins"][0]
+    propre = req["base_propre"]   # photo NUE (le recollage se fait contre elle)
     prompt = prompt_override.strip() if prompt_override and prompt_override.strip() else req["prompt"]
     parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in req["chemins"]]
 
-    image = _appel_gemini(parts)
-    image = decadrer(photo, image)
+    image = _appel_gemini(parts, aspect_ratio=_ratio_photo(propre))
+    image = decadrer(propre, image)
     if os.environ.get("GVDP_PRESERVER_SCENE", "1") != "0":
-        image = preserver_scene(photo, image)
+        image = preserver_scene(propre, image)
     dossier = config.assets_dir(projet["id"]) / "insertion"
     dossier.mkdir(parents=True, exist_ok=True)
     nom = f"insertion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"

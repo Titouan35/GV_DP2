@@ -1096,19 +1096,11 @@ function renderInsertionAtelier(s) {
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="hd"><span class="ti-title">2 · Caler l'ombrière</span>
-        <span class="hint">l'emprise magenta est la contrainte de placement envoyée à Gemini</span></div>
+      <div class="hd"><span class="ti-title">2 · Tracer les ombrières sur la photo</span>
+        <span class="hint" id="ins-guides-etat"></span></div>
       <div class="bd">
-        <div class="calage-grid">
-          <div>
-            <div class="calage-titre">Vue aérienne (du plan) <span class="hint" id="aer-etat"></span></div>
-            <div id="aer-body"><p class="sub">Chargement…</p></div>
-          </div>
-          <div>
-            <div class="calage-titre">Sur la photo <span class="hint" id="ins-guides-etat"></span></div>
-            <div id="ins-guides-body"></div>
-          </div>
-        </div>
+        <p class="sub" style="margin:0 0 10px">Pour chaque ombrière, clique son point de <b>début</b> puis son point de <b>fin</b> (son axe au sol). Plusieurs possibles. C'est ce tracé qui dit à Gemini où et combien.</p>
+        <div id="ins-guides-body"></div>
       </div>
     </div>
 
@@ -1324,7 +1316,7 @@ function dessinerAerienne() {
   }
 }
 
-// ---- guides d'implantation tracés sur la photo active (envoyés à Gemini) ----
+// ---- repères tracés sur la photo active : 1 segment = 1 ombrière ----
 const guidesUI = { img: null, mode: null, pts: [], scale: 1 };
 
 function guidesPhotoActive() {
@@ -1333,7 +1325,7 @@ function guidesPhotoActive() {
   const data = (ins.guides || {})[ins.photo] || {};
   return {
     photo: ins.photo,
-    emprises: (data.emprises || []).map((e) => e.map((p) => [...p])),
+    segments: (data.segments || []).map((s) => s.map((p) => [...p])),
     calibrage: data.calibrage ? JSON.parse(JSON.stringify(data.calibrage)) : null,
   };
 }
@@ -1344,7 +1336,7 @@ function sauverGuides(ctx) {
   guidesSaveTimer = setTimeout(() => {
     api(`/api/projets/${state.projet.id}/insertion/guides`, {
       method: "PUT",
-      body: JSON.stringify({ photo: ctx.photo, emprises: ctx.emprises, calibrage: ctx.calibrage }),
+      body: JSON.stringify({ photo: ctx.photo, segments: ctx.segments, calibrage: ctx.calibrage }),
     }).then((d) => { state.projet = d.projet; majEtatGuides(); rafraichirPayloadEtPrompt(); }).catch(() => {});
   }, 500);
 }
@@ -1354,9 +1346,9 @@ function majEtatGuides() {
   if (!el) return;
   const ctx = guidesPhotoActive();
   const bouts = [];
-  if (ctx?.emprises?.length) bouts.push(`${ctx.emprises.length} emprise${ctx.emprises.length > 1 ? "s" : ""}`);
+  if (ctx?.segments?.length) bouts.push(`${ctx.segments.length} ombrière${ctx.segments.length > 1 ? "s" : ""}`);
   if (ctx?.calibrage) bouts.push(`échelle ${ctx.calibrage.distance_m} m`);
-  el.textContent = bouts.length ? `(${bouts.join(" · ")})` : "(aucun guide — Gemini placera seul)";
+  el.textContent = bouts.length ? `(${bouts.join(" · ")})` : "(rien tracé — Gemini placera seul)";
 }
 
 function renderGuides() {
@@ -1368,15 +1360,15 @@ function renderGuides() {
     body.innerHTML = `<p class="sub" style="padding:10px 14px">Choisis d'abord une photo du site.</p>`;
     return;
   }
-  guidesUI.mode = null;
+  guidesUI.mode = "omb";  // mode par défaut : tracer les ombrières
   guidesUI.pts = [];
   body.innerHTML = `
     <div class="mesure-tools">
-      <button class="btn" data-gmode="emprise">+ Emprise (4 coins au sol)</button>
+      <button class="btn primary" data-gmode="omb">+ Ombrière (début → fin)</button>
       <button class="btn" data-gmode="cal">Échelle (2 points)</button>
-      <input class="input" id="g-dist" type="number" step="0.1" placeholder="m" style="max-width:74px"
+      <input class="input" id="g-dist" type="number" step="0.1" placeholder="m" style="max-width:64px"
         value="${ctx.calibrage?.distance_m ?? "2.5"}" />
-      <input class="input" id="g-lib" placeholder="repère (ex. : largeur d'une place)" style="max-width:230px"
+      <input class="input" id="g-lib" placeholder="repère (ex. : largeur d'une place)" style="max-width:210px"
         value="${esc(ctx.calibrage?.libelle || "largeur d'une place")}" />
       <span style="flex:1"></span>
       <button class="btn" id="g-annuler">Annuler</button>
@@ -1404,17 +1396,17 @@ function renderGuides() {
     majStatutGuides();
   }));
   canvas.addEventListener("click", (e) => {
-    if (!guidesUI.mode) { toast("Choisis d'abord Emprise ou Échelle.", ""); return; }
+    if (!guidesUI.mode) return;
     const r = canvas.getBoundingClientRect();
     guidesUI.pts.push([
       Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
       Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
     ]);
-    if (guidesUI.mode === "emprise" && guidesUI.pts.length === 4) {
-      ctx.emprises.push(guidesUI.pts);
+    if (guidesUI.mode === "omb" && guidesUI.pts.length === 2) {
+      ctx.segments.push(guidesUI.pts);
       guidesUI.pts = [];
       sauverGuides(ctx);
-      toast("Emprise ajoutée.", "ok");
+      toast("Ombrière tracée. Trace la suivante ou passe à l'échelle.", "ok");
     } else if (guidesUI.mode === "cal" && guidesUI.pts.length === 2) {
       const dist = parseFloat(($("#g-dist").value || "").replace(",", "."));
       if (!(dist > 0)) { toast("Renseigne la distance réelle (m).", "err"); guidesUI.pts = []; return; }
@@ -1429,12 +1421,12 @@ function renderGuides() {
   });
   $("#g-annuler").addEventListener("click", () => {
     if (guidesUI.pts.length) guidesUI.pts.pop();
-    else if (ctx.emprises.length) { ctx.emprises.pop(); sauverGuides(ctx); }
-    else if (ctx.calibrage) { ctx.calibrage = null; sauverGuides(ctx); }
+    else if (guidesUI.mode === "cal" && ctx.calibrage) { ctx.calibrage = null; sauverGuides(ctx); }
+    else if (ctx.segments.length) { ctx.segments.pop(); sauverGuides(ctx); }
     dessinerGuides(ctx); majStatutGuides();
   });
   $("#g-effacer").addEventListener("click", () => {
-    ctx.emprises = []; ctx.calibrage = null; guidesUI.pts = [];
+    ctx.segments = []; ctx.calibrage = null; guidesUI.pts = [];
     sauverGuides(ctx); dessinerGuides(ctx); majStatutGuides();
   });
   ["#g-dist", "#g-lib"].forEach((s) => $(s).addEventListener("input", () => {
@@ -1446,6 +1438,17 @@ function renderGuides() {
   }));
 }
 
+function fleche(dr, a, b) {
+  dr.beginPath(); dr.moveTo(a[0], a[1]); dr.lineTo(b[0], b[1]); dr.stroke();
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+  const t = 11;
+  dr.beginPath(); dr.moveTo(b[0], b[1]);
+  dr.lineTo(b[0] - t * Math.cos(ang - 0.5), b[1] - t * Math.sin(ang - 0.5));
+  dr.moveTo(b[0], b[1]);
+  dr.lineTo(b[0] - t * Math.cos(ang + 0.5), b[1] - t * Math.sin(ang + 0.5));
+  dr.stroke();
+}
+
 function dessinerGuides(ctx) {
   const canvas = $("#g-canvas");
   if (!canvas || !guidesUI.img) return;
@@ -1453,36 +1456,38 @@ function dessinerGuides(ctx) {
   dr.clearRect(0, 0, canvas.width, canvas.height);
   dr.drawImage(guidesUI.img, 0, 0, canvas.width, canvas.height);
   const X = (p) => p[0] * canvas.width, Y = (p) => p[1] * canvas.height;
-  for (const emprise of ctx.emprises) {
-    dr.beginPath();
-    emprise.forEach((p, i) => (i ? dr.lineTo(X(p), Y(p)) : dr.moveTo(X(p), Y(p))));
-    dr.closePath();
-    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 3; dr.stroke();
-    for (const p of emprise) {
-      dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fillStyle = "#FF00C8"; dr.fill();
-    }
-  }
+  ctx.segments.forEach((seg, i) => {
+    const a = [X(seg[0]), Y(seg[0])], b = [X(seg[1]), Y(seg[1])];
+    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4; dr.fillStyle = "#FF00C8";
+    fleche(dr, a, b);
+    dr.beginPath(); dr.arc(a[0], a[1], 6, 0, 7); dr.fill();
+    dr.font = "bold 14px sans-serif"; dr.fillText(String(i + 1), a[0] + 8, a[1] - 8);
+  });
   if (ctx.calibrage) {
     const { a, b } = ctx.calibrage;
-    dr.strokeStyle = "#FFC800"; dr.lineWidth = 3;
+    dr.strokeStyle = "#FFC800"; dr.lineWidth = 4;
     dr.beginPath(); dr.moveTo(X(a), Y(a)); dr.lineTo(X(b), Y(b)); dr.stroke();
     for (const p of [a, b]) {
-      dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fillStyle = "#FFC800"; dr.fill();
+      dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fillStyle = "#FFC800"; dr.fill();
     }
   }
   dr.fillStyle = "#002455";
-  for (const p of guidesUI.pts) { dr.beginPath(); dr.arc(X(p), Y(p), 5, 0, 7); dr.fill(); }
+  for (const p of guidesUI.pts) { dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fill(); }
 }
 
 function majStatutGuides() {
   const el = $("#g-statut");
   if (!el) return;
-  const restant = guidesUI.mode === "emprise" ? 4 - guidesUI.pts.length
-    : guidesUI.mode === "cal" ? 2 - guidesUI.pts.length : 0;
-  const consigne = { emprise: `clique les 4 coins de l'emprise AU SOL (${restant} restant${restant > 1 ? "s" : ""})`,
-                     cal: `clique les 2 extrémités d'une distance connue (${restant} restant${restant > 1 ? "s" : ""})` }[guidesUI.mode];
-  el.innerHTML = consigne ? `<span class="hint">${consigne}</span>`
-    : `<span class="hint">Vert = emprise des rangées · jaune = repère d'échelle. Envoyés à Gemini comme contrainte de placement.</span>`;
+  if (guidesUI.mode === "omb") {
+    el.innerHTML = guidesUI.pts.length === 1
+      ? `<span class="hint">clique le point de FIN de l'ombrière</span>`
+      : `<span class="hint">clique le point de DÉBUT d'une ombrière (tu peux en tracer plusieurs)</span>`;
+  } else if (guidesUI.mode === "cal") {
+    const restant = 2 - guidesUI.pts.length;
+    el.innerHTML = `<span class="hint">clique les 2 extrémités d'une distance connue (${restant} restant${restant > 1 ? "s" : ""})</span>`;
+  } else {
+    el.innerHTML = `<span class="hint">Trait magenta = axe de chaque ombrière · jaune = échelle. C'est la contrainte de placement envoyée à Gemini.</span>`;
+  }
 }
 
 // sélecteur de photos du site (multi) : active = base de génération
@@ -1533,7 +1538,6 @@ async function renderPhotosInsertion(sel = "#ins-photos") {
   }));
   if (sel === "#ins-photos") {  // étape 4 : tout ce qui dépend de la photo active
     renderGuides();
-    renderAerienne();
     renderAlertePhoto();
     rafraichirPayloadEtPrompt();
   }

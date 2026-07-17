@@ -19,47 +19,49 @@ def test_apercu_expose_cout_et_modele():
     assert a["images_global"] >= 0
 
 
-def test_prompt_v4_emplacement_double_vue():
-    """Prompt v4 : photo + emprise magenta + aérienne + coupe BE, ultra-cadré."""
-    projet = {"ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5,
-                           "pente_deg": 6}}
-    guides = {"emprises": [[[0.1, 0.2], [0.3, 0.2], [0.3, 0.4], [0.1, 0.4]]],
+def test_prompt_v5_methode_google():
+    """Prompt v5 : verbe fort, images décrites sans numéro, formulation positive."""
+    projet = {"ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5}}
+    guides = {"segments": [[[0.2, 0.5], [0.7, 0.55]], [[0.15, 0.65], [0.5, 0.68]]],
               "calibrage": {"a": [0.0, 0.0], "b": [0.1, 0.0],
                             "distance_m": 2.5, "libelle": "largeur d'une place"}}
     prompt = insertion_ia.construire_prompt(
-        projet, plan_infos={"dims_m": [(18.8, 8.1)]}, guides=guides,
-        idx={"photo": 1, "photo_emprise": 2, "aerienne": 3, "coupe": 4},
-        coupe_be=True)
+        projet, plan_infos={"dims_m": [(18.8, 8.1), (13.1, 4.9)]}, guides=guides,
+        idx={"photo": 1, "coupe": 2}, coupe_be=True)
+    # verbe fort + nombre exact d'ombrières
+    assert prompt.startswith("Insère 2 ombrières")
+    # placement par les axes magenta, sans numéroter les images
+    assert "trait magenta" in prompt and "chaque trait magenta" in prompt
+    assert "IMAGE 1" not in prompt and "IMAGE 2" not in prompt
+    assert "trait jaune mesure 2,5 m" in prompt and "largeur d'une place" in prompt
+    assert "18,8 m x 8,1 m ; 13,1 m x 4,9 m" in prompt
+    # structure décrite par son rôle (coupe BE), pas numérotée
+    assert "coupe technique du projet" in prompt and "bureau d'études" in prompt
+    assert "2,5 m de haut au point bas" in prompt
+    # formulation POSITIVE : keep-explicit, pas d'interdits en rafale
+    assert "rigoureusement identique" in prompt
+    assert "grand-angle" in prompt and "lignes de fuite" in prompt
+    assert "ne peins" not in prompt and "aucune couleur" not in prompt
+    assert "photographie plein cadre" in prompt
+
+
+def test_prompt_v5_une_ombriere_et_sans_calage():
+    projet = {"insertion": {"photo": "p", "photos": ["p"],
+              "guides": {"p": {"segments": [[[0.2, 0.5], [0.7, 0.55]]], "calibrage": None}}}}
+    guides = insertion_ia.guides_actifs(projet)
+    prompt = insertion_ia.construire_prompt(projet, guides=guides, idx={"photo": 1})
     assert prompt.startswith("Insère une ombrière")
-    assert "IMAGE 2" in prompt and "MAGENTA" in prompt
-    assert "segment JAUNE mesure 2,5 m" in prompt and "largeur d'une place" in prompt
-    assert "IMAGE 3 = vue aérienne" in prompt and "DESCENTE" in prompt
-    assert "18,8 m x 8,1 m" in prompt
-    assert "repères de travail" in prompt
-    assert "arbres" in prompt and "retire-les" in prompt
-    assert "IMAGE 4 = la coupe technique du projet" in prompt
-    assert "bureau d'études" in prompt
-    assert "2,5 m au point bas" in prompt and "Pente 6°" in prompt
-    assert "PERSPECTIVE" in prompt and "points de fuite" in prompt
-    assert "poteaux strictement verticaux" in prompt
-    assert "RENDU" in prompt and "bitume reste nu" in prompt
-    # plus de légende du plan brut (il n'est plus joint)
-    assert "PLAN DE MASSE" not in prompt and "cartouche" not in prompt
+    assert "le long du trait magenta" in prompt
+    # sans repère : placement libre
+    p2 = insertion_ia.construire_prompt({}, idx={"photo": 1})
+    assert "zone de stationnement la plus dégagée" in p2
 
 
-def test_prompt_v4_sans_calage():
-    """Sans emprise ni aérienne : placement libre mais cadré."""
-    prompt = insertion_ia.construire_prompt({}, idx={"photo": 1})
-    assert "zone de stationnement la plus cohérente" in prompt
-    assert "PERSPECTIVE" in prompt and "RENDU" in prompt
-
-
-def test_prompt_v4_consignes_et_affinage():
+def test_prompt_v5_consignes_et_affinage():
     projet = {"insertion": {"consignes": "garder le mât d'éclairage"}}
     prompt = insertion_ia.construire_prompt(projet, affinage="assombris les modules")
     assert "garder le mât d'éclairage." in prompt
     assert "assombris les modules." in prompt
-    assert "bandes bleues" not in prompt
 
 
 def test_prompt_projet_vide_ne_plante_pas():
