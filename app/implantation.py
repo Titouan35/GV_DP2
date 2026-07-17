@@ -250,14 +250,18 @@ def analyser_plan(chemin_pdf: Path) -> dict | None:
     }
 
 
-def resume(analyse: dict) -> str:
-    """Résumé texte de l'implantation, injecté dans le prompt Gemini."""
+def resume(analyse: dict, schema_joint: bool = True) -> str:
+    """Résumé texte de l'implantation, injecté dans le prompt Gemini.
+
+    `schema_joint=False` : ne pas référencer la flèche du schéma (il n'est
+    pas envoyé quand des guides photo existent).
+    """
     n = len(analyse["rangees"])
     bouts = [f"{n} rangée{'s' if n > 1 else ''}"]
     for z in analyse["rangees"]:
         if "longueur_m" in z:
             bouts.append(f"{z['longueur_m']:g} m x {z['largeur_m']:g} m".replace(".", ","))
-    if analyse["pente_haut_px"] and analyse["pente_bas_px"]:
+    if schema_joint and analyse["pente_haut_px"] and analyse["pente_bas_px"]:
         bouts.append("sens de pente fléché sur le schéma")
     return " · ".join(bouts)
 

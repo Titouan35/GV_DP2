@@ -1110,6 +1110,9 @@ function renderInsertionAtelier(s) {
           <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:14px">Générer l'insertion</button>
           <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
           <div class="hint" id="ins-depense" style="margin-top:2px;text-align:center">${esc(texteDepense(s.images_projet || 0, s.images_global || 0, s.cout_image_eur))}</div>
+          <details class="foldable" style="margin-top:10px"><summary>Dernier prompt envoyé</summary>
+            <pre class="prompt-pre" id="ins-prompt">${esc(ins.prompt || "Aucune génération pour l'instant.")}</pre>
+          </details>
         </div>
       </div>
 
@@ -1381,6 +1384,8 @@ async function genererInsertionAPI() {
       method: "POST", body: JSON.stringify({}),
     });
     state.projet = data.projet;
+    const pre = $("#ins-prompt");
+    if (pre && state.projet.insertion?.prompt) pre.textContent = state.projet.insertion.prompt;
     if (prog) prog.textContent = "Image générée — regarde la galerie ci-contre.";
     const dep = $("#ins-depense");
     if (dep && data.images_projet != null) {

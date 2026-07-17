@@ -130,6 +130,9 @@ def test_prompt_guides_prioritaires(tmp_path, monkeypatch):
     # l'implantation du plan passe en info texte quand les guides existent
     assert "Pour information, le plan de masse officiel" in prompt
     assert "SCHÉMA D'IMPLANTATION JOINT FAIT FOI" not in prompt
+    # avec des emprises tracées, elles seules bornent l'étendue
+    assert "celle des emprises vertes tracées" in prompt
+    assert "fléché sur le schéma" not in prompt  # le schéma n'est pas joint
     # le format de sortie interdit bandeaux et légendes (contamination schéma)
     assert "AUCUN bandeau" in prompt and "MÊME cadrage" in prompt
 

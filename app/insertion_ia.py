@@ -198,13 +198,15 @@ def construire_prompt(projet: dict, affinage: str = "",
             ]))
             modules = ("Couverture de modules photovoltaïques full black (noirs, finition "
                        f"MATE, aucun reflet) de {det}, sous-face claire.")
+        implantation_source = ("les emprises vertes tracées sur la photo" if guides
+                               else "le schéma d'implantation")
         b3 = (
             "L'OBJET — Ombrière de parking type « {fam} », {forme}. "
             "Profil : {prof} de profondeur couverte, pente {pente}, hauteur ≈ {hh} au "
             "point haut et ≈ {hb} au point bas. Le linéaire et le nombre de rangées "
-            "suivent le schéma d'implantation. Structure en acier galvanisé gris clair, "
-            "sans aucun marquage de couleur ; poteaux caisson, arbalétrier effilé et "
-            "bracon. {modules} {coupe}"
+            "suivent " + implantation_source + ". Structure en acier galvanisé gris "
+            "clair, sans aucun marquage de couleur ; poteaux caisson, arbalétrier "
+            "effilé et bracon. {modules} {coupe}"
         ).format(
             fam=libelle_coupe(p.get("famille")),
             forme=forme,
@@ -223,10 +225,16 @@ def construire_prompt(projet: dict, affinage: str = "",
             "mats). Renseigne le type d'ombrière à l'étape 3 pour un profil précis."
         )
 
-    # -- bloc 4 : échelle
+    # -- bloc 4 : échelle (avec des emprises tracées, elles seules dimensionnent
+    # l'ombrière : citer un nombre de places pousserait le modèle à déborder)
     nb_places = omb.get("nb_places")
     b4_lignes = []
-    if nb_places:
+    if guides and guides.get("emprises"):
+        b4_lignes.append(
+            "ÉCHELLE — Une place de stationnement = 2,50 m de large. L'étendue de "
+            "l'ombrière est celle des emprises vertes tracées, ni plus, ni moins."
+        )
+    elif nb_places:
         b4_lignes.append(
             f"ÉCHELLE — L'ombrière couvre environ {nb_places:g} places de "
             "stationnement (une place = 2,50 m de large)."
@@ -654,7 +662,7 @@ def generer_image(projet: dict, affinage: str = "") -> dict:
         from . import implantation as mod_implantation
         analyse = mod_implantation.analyser_plan(source) if source.suffix.lower() == ".pdf" else None
         if analyse:
-            implantation_resume = mod_implantation.resume(analyse)
+            implantation_resume = mod_implantation.resume(analyse, schema_joint=not guides)
     if not guides:
         schema = image_kit(projet, "schema")
         if schema:
