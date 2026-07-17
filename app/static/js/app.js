@@ -1082,18 +1082,25 @@ function renderInsertionAtelier(s) {
               <input class="input" id="ins-scale-dist" type="number" step="0.1" placeholder="m" value="${ins.echelle_distance_m ?? ""}" />
             </div>
           </div>
-          <div class="field"><label>Consignes libres (facultatif)</label>
+          <div class="field"><label>Prompt complémentaire (facultatif)</label>
             <textarea class="input notice-ta" id="ins-consignes" rows="3"
               placeholder="Ex. : deux rangées face à face, garder le mât d'éclairage visible, vue depuis l'entrée">${esc(ins.consignes || "")}</textarea></div>
           <div class="note" style="margin-top:4px">Type d'ombrière (étape 3) : <b>${esc(resumeOmbriere())}</b></div>
+          ${s.api_configuree ? `
+          <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:14px">Générer l'insertion</button>
+          <div class="hint" style="margin-top:6px;text-align:center">Gemini ${esc(s.api_modele)} · photo + plan de masse + coupe envoyés · ≈ 0,04 €/image</div>
+          <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
+          <button class="btn" id="ins-generer" style="width:100%;margin-top:10px">Backup : générer le prompt (ChatGPT)</button>
+          ` : `
           <button class="btn primary" id="ins-generer" style="width:100%;margin-top:14px">Générer le prompt</button>
+          `}
         </div>
       </div>
 
       <div class="card">
-        <div class="hd"><span class="ti-title">2 · Prompt & kit à joindre</span></div>
+        <div class="hd"><span class="ti-title">2 · Prompt & kit à joindre <span class="hint">(mode backup ChatGPT)</span></span></div>
         <div class="bd" id="ins-sortie">
-          <div class="placeholder" style="padding:22px"><b>Le prompt apparaîtra ici</b>Clique « Générer le prompt » : il est copié dans le presse-papier et le kit d'images s'affiche.</div>
+          <div class="placeholder" style="padding:22px"><b>${s.api_configuree ? "Mode API actif : utilise « Générer l'insertion » à gauche" : "Le prompt apparaîtra ici"}</b>${s.api_configuree ? "Ce panneau sert de secours : « générer le prompt » copie le texte et affiche le kit pour ChatGPT." : "Clique « Générer le prompt » : il est copié dans le presse-papier et le kit d'images s'affiche."}</div>
         </div>
       </div>
     </div>
@@ -1145,6 +1152,7 @@ function renderInsertionAtelier(s) {
   });
 
   $("#ins-generer").addEventListener("click", () => genererPrompt().catch(() => {}));
+  $("#ins-generer-api")?.addEventListener("click", () => genererInsertionAPI().catch(() => {}));
 
   // zone de dépôt
   const drop = $("#ins-drop");
@@ -1167,6 +1175,27 @@ function renderInsertionAtelier(s) {
   // si un prompt a déjà été généré, on le réaffiche
   if (ins.prompt) renderSortiePrompt(ins.prompt, s.mode_emploi);
   renderGalerie();
+}
+
+// génération directe via l'API Gemini (Nano Banana) — 1 image par clic
+async function genererInsertionAPI() {
+  const ins = state.projet.insertion || {};
+  if (!ins.photo) { toast("Ajoute d'abord une photo du site (ou reprends une pièce BE).", "err"); return; }
+  const btn = $("#ins-generer-api");
+  const prog = $("#ins-progress");
+  if (btn) btn.disabled = true;
+  if (prog) prog.textContent = "Génération en cours (10 à 30 s)…";
+  try {
+    const data = await api(`/api/projets/${state.projet.id}/insertion/generer`, {
+      method: "POST", body: JSON.stringify({}),
+    });
+    state.projet = data.projet;
+    if (prog) prog.textContent = "Image générée — regarde la galerie ci-dessous.";
+    toast("Insertion générée.", "ok");
+    renderGalerie();
+    const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
+  } catch { if (prog) prog.textContent = ""; }
+  finally { if (btn) btn.disabled = false; }
 }
 
 // réutiliser une photo déjà importée dans les Pièces BE (DP7/DP8/DP6)

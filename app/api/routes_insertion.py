@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 
 from .. import config, insertion_ia
 from ..fiche_emprise import generer_fiche
+from ..insertion_ia import InsertionError
 from .routes_projets import _charger, _sauver
 
 router = APIRouter(prefix="/api/projets", tags=["insertion"])
@@ -109,6 +110,28 @@ def enregistrer_consignes(projet_id: str, corps: dict = Body(...)):
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet}
+
+
+# ------------------------------------------------------------------ génération API (Gemini)
+
+@router.post("/{projet_id}/insertion/generer")
+def generer_insertion(projet_id: str, corps: dict = Body(default={})):
+    """Génère UNE insertion via l'API Gemini (Nano Banana). ~10-30 s, synchrone."""
+    projet = _charger(projet_id)
+    affinage = str(corps.get("affinage", "") or "")
+    if affinage:
+        projet.insertion.affinage = affinage[:2000]
+    try:
+        image = insertion_ia.generer_image(projet.model_dump(), affinage=affinage)
+    except InsertionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    projet.insertion.images = [image, *projet.insertion.images]
+    if not projet.insertion.retenue:
+        projet.insertion.retenue = image["fichier"]
+    projet.insertion.prompt = image.get("prompt")
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet, "image": image}
 
 
 # ------------------------------------------------------------------ prompt + kit

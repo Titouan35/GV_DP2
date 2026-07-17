@@ -17,12 +17,26 @@ ne servent JAMAIS de pièce DP6 (fournie par le BE).
 """
 from __future__ import annotations
 
+import base64
+import os
+from datetime import datetime
 from pathlib import Path
 
+import httpx
 import pypdfium2 as pdfium
 
 from . import config
 from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
+
+# --- mode API direct (optionnel) : Gemini image « Nano Banana » ---
+# Activé automatiquement quand GEMINI_API_KEY est présente (.env CLAUDE ou env
+# système). Le générateur de prompt reste disponible en secours (sans clé).
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+GEMINI_MODELE_DEFAUT = "gemini-3.1-flash-lite-image"  # Nano Banana 2 Lite
+
+
+class InsertionError(Exception):
+    """Erreur du mode API (clé, réseau, quota/facturation, sécurité)."""
 
 # ------------------------------------------------------------------ descriptif
 
@@ -42,6 +56,15 @@ RAPPELS = [
 ]
 
 
+def api_configuree() -> bool:
+    """Vrai si une clé Gemini est présente (le mode API direct s'active)."""
+    return bool(os.environ.get("GEMINI_API_KEY"))
+
+
+def _modele() -> str:
+    return os.environ.get("GVDP_GEMINI_MODEL", GEMINI_MODELE_DEFAUT)
+
+
 def apercu() -> dict:
     """Descriptif générique du module (indépendant d'un projet)."""
     return {
@@ -50,6 +73,8 @@ def apercu() -> dict:
         "cible": "ChatGPT (GPT image)",
         "mode_emploi": MODE_EMPLOI,
         "rappels": RAPPELS,
+        "api_configuree": api_configuree(),
+        "api_modele": _modele(),
     }
 
 
@@ -64,11 +89,13 @@ def _fmt(v, suffixe="", defaut="—"):
     return f"{v}{suffixe}"
 
 
-def construire_prompt(projet: dict, affinage: str = "") -> str:
+def construire_prompt(projet: dict, affinage: str = "", api: bool = False) -> str:
     """Assemble le prompt ultra-détaillé (6 blocs) depuis les inputs du projet.
 
     Déterministe : mêmes inputs → même prompt. Rédigé en français, adressé à
-    ChatGPT en éditeur photo. Tolère les champs manquants (valeurs génériques).
+    un éditeur photo (ChatGPT ou Gemini). Tolère les champs manquants.
+    En mode API (Gemini), ajoute la consigne d'inspiration par recherche
+    d'images réelles (grounding Google Search).
     """
     omb = projet.get("ombriere") or {}
     ins = projet.get("insertion") or {}
@@ -186,6 +213,13 @@ def construire_prompt(projet: dict, affinage: str = "") -> str:
         "visibles. Conserve le grain, la netteté, l'exposition et la balance des "
         "couleurs de la photo source : le montage doit sembler pris au même instant."
     )
+    if api:
+        b5 += (
+            " Pour le réalisme de la structure et des matériaux, inspire-toi de "
+            "photos réelles d'ombrières photovoltaïques de parkings de supermarchés "
+            "français (recherche d'images : « ombrière photovoltaïque parking "
+            "supermarché France »)."
+        )
 
     # -- bloc 6 : consignes libres + contraintes négatives
     libres = (ins.get("consignes") or "").strip()
@@ -314,4 +348,96 @@ def etat(projet: dict) -> dict:
         "coupe": _coupe_source(projet) is not None,
         "type_ombriere": bool(omb.get("famille")),
         "prete": photo,  # la photo suffit à générer un prompt exploitable
+    }
+
+
+# ------------------------------------------------------------------ mode API (Gemini)
+
+_MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+          ".webp": "image/webp"}
+
+
+def _part_image(chemin: Path) -> dict:
+    mime = _MIMES.get(chemin.suffix.lower(), "image/jpeg")
+    return {"inline_data": {"mime_type": mime,
+                            "data": base64.b64encode(chemin.read_bytes()).decode()}}
+
+
+def _extraire_image(reponse: dict) -> bytes:
+    """Récupère la première image d'une réponse generateContent."""
+    for cand in reponse.get("candidates", []):
+        for part in (cand.get("content") or {}).get("parts", []):
+            inline = part.get("inlineData") or part.get("inline_data")
+            if inline and inline.get("data"):
+                return base64.b64decode(inline["data"])
+    # pas d'image : souvent un blocage sécurité, on remonte le texte explicatif
+    for cand in reponse.get("candidates", []):
+        for part in (cand.get("content") or {}).get("parts", []):
+            if part.get("text"):
+                raise InsertionError(f"Aucune image renvoyée : {part['text'][:300]}")
+    raise InsertionError("Aucune image renvoyée par le modèle (réponse vide).")
+
+
+def _appel_gemini(parts: list[dict], recherche: bool = True) -> bytes:
+    """generateContent avec grounding Google Search (repli sans outil si refusé)."""
+    cle = os.environ.get("GEMINI_API_KEY")
+    if not cle:
+        raise InsertionError("Clé GEMINI_API_KEY absente (fichier .env CLAUDE).")
+    url = f"{GEMINI_BASE}/models/{_modele()}:generateContent"
+    corps: dict = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+    }
+    if recherche:
+        corps["tools"] = [{"google_search": {}}]  # inspiration images réelles
+    try:
+        with httpx.Client(timeout=180.0) as client:
+            resp = client.post(url, headers={"x-goog-api-key": cle}, json=corps)
+    except httpx.HTTPError as exc:
+        raise InsertionError(f"Appel Gemini impossible ({exc.__class__.__name__}).") from exc
+    if resp.status_code == 400 and recherche:
+        # le modèle (ex. Lite) ne supporte pas le grounding : on réessaie sans
+        return _appel_gemini(parts, recherche=False)
+    if resp.status_code == 429:
+        raise InsertionError("Quota Gemini atteint (ou facturation à vérifier) : réessayez dans un instant.")
+    if resp.status_code in (401, 403):
+        raise InsertionError("Clé Gemini refusée : vérifiez GEMINI_API_KEY et la facturation du projet Google.")
+    if resp.status_code == 404:
+        raise InsertionError(f"Modèle « {_modele()} » introuvable : ajustez GVDP_GEMINI_MODEL dans le .env.")
+    if resp.status_code != 200:
+        raise InsertionError(f"Gemini a répondu HTTP {resp.status_code} : {resp.text[:300]}")
+    return _extraire_image(resp.json())
+
+
+def generer_image(projet: dict, affinage: str = "") -> dict:
+    """Génère UNE insertion via Gemini (photo + plan + coupe + prompt complet).
+
+    Renvoie le dict image {fichier, date, etiquette, modele, prompt} à ajouter
+    à la galerie du projet. Lève InsertionError avec un message actionnable.
+    """
+    if not api_configuree():
+        raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
+    photo = image_kit(projet, "photo")
+    if not photo:
+        raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
+
+    prompt = construire_prompt(projet, affinage=affinage, api=True)
+    parts: list[dict] = [{"text": prompt}, _part_image(photo)]
+    for role in ("plan", "coupe"):
+        chemin = image_kit(projet, role)
+        if chemin:
+            parts.append(_part_image(chemin))
+
+    image = _appel_gemini(parts)
+    dossier = config.assets_dir(projet["id"]) / "insertion"
+    dossier.mkdir(parents=True, exist_ok=True)
+    nom = f"insertion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+    (dossier / nom).write_bytes(image)
+    rel = str((dossier / nom).relative_to(config.PROJETS_DIR)).replace("\\", "/")
+    return {
+        "fichier": rel,
+        "date": datetime.now().isoformat(timespec="seconds"),
+        "etiquette": "visuel IA — usage commercial",
+        "modele": _modele(),
+        "prompt": prompt,
     }
