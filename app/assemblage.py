@@ -244,15 +244,16 @@ def _pdf_en_images(chemin_pdf: Path, assets: Path, prefixe: str,
                    max_pages: int = 3) -> list[Path]:
     """Rend les premières pages d'un PDF uploadé en JPEG (150 dpi)."""
     sorties = []
-    doc = pdfium.PdfDocument(str(chemin_pdf))
-    try:
-        for i in range(min(len(doc), max_pages)):
-            image = doc[i].render(scale=150 / 72).to_pil()
-            chemin = assets / f"{prefixe}_p{i + 1}.jpg"
-            image.convert("RGB").save(chemin, "JPEG", quality=88)
-            sorties.append(chemin)
-    finally:
-        doc.close()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin_pdf))
+        try:
+            for i in range(min(len(doc), max_pages)):
+                image = doc[i].render(scale=150 / 72).to_pil()
+                chemin = assets / f"{prefixe}_p{i + 1}.jpg"
+                image.convert("RGB").save(chemin, "JPEG", quality=88)
+                sorties.append(chemin)
+        finally:
+            doc.close()
     return sorties
 
 

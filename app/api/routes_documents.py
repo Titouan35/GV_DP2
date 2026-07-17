@@ -108,9 +108,10 @@ def apercu_document_image(projet_id: str, code: str):
         return FileResponse(chemin)
     import pypdfium2 as pdfium
     sortie = config.assets_dir(projet_id) / f"apercu_{code}.png"
-    pdf = pdfium.PdfDocument(str(chemin))
-    try:
-        pdf[0].render(scale=200 / 72).to_pil().save(sortie)
-    finally:
-        pdf.close()
+    with config.PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(str(chemin))
+        try:
+            pdf[0].render(scale=200 / 72).to_pil().save(sortie)
+        finally:
+            pdf.close()
     return FileResponse(sortie, media_type="image/png")

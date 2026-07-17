@@ -25,21 +25,24 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 
+from . import config
+
 
 def _texte_pdf(chemin: Path, max_pages: int = 3) -> str:
     """Texte brut des premières pages (couche texte vectorielle)."""
-    doc = pdfium.PdfDocument(str(chemin))
-    try:
-        morceaux = []
-        for i in range(min(len(doc), max_pages)):
-            page_texte = doc[i].get_textpage()
-            try:
-                morceaux.append(page_texte.get_text_bounded() or "")
-            finally:
-                page_texte.close()
-        return "\n".join(morceaux)
-    finally:
-        doc.close()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin))
+        try:
+            morceaux = []
+            for i in range(min(len(doc), max_pages)):
+                page_texte = doc[i].get_textpage()
+                try:
+                    morceaux.append(page_texte.get_text_bounded() or "")
+                finally:
+                    page_texte.close()
+            return "\n".join(morceaux)
+        finally:
+            doc.close()
 
 
 def _nombre(txt: str | None) -> float | None:

@@ -235,13 +235,14 @@ def _coupe_source(projet: dict) -> Path | None:
 
 def _pdf_premiere_page_png(chemin_pdf: Path, sortie: Path, dpi: int = 200) -> Path:
     """Rend la 1re page d'un PDF en PNG (cache) pour l'inclure au kit."""
-    doc = pdfium.PdfDocument(str(chemin_pdf))
-    try:
-        image = doc[0].render(scale=dpi / 72).to_pil()
-        sortie.parent.mkdir(parents=True, exist_ok=True)
-        image.save(sortie)
-    finally:
-        doc.close()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin_pdf))
+        try:
+            image = doc[0].render(scale=dpi / 72).to_pil()
+            sortie.parent.mkdir(parents=True, exist_ok=True)
+            image.save(sortie)
+        finally:
+            doc.close()
     return sortie
 
 
@@ -255,11 +256,12 @@ def _coupe_nettoyee(chemin_pdf: Path, sortie: Path, dpi: int = 200) -> Path:
     """
     if sortie.exists() and sortie.stat().st_mtime >= chemin_pdf.stat().st_mtime:
         return sortie
-    doc = pdfium.PdfDocument(str(chemin_pdf))
-    try:
-        image = doc[0].render(scale=dpi / 72).to_pil().convert("RGB")
-    finally:
-        doc.close()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin_pdf))
+        try:
+            image = doc[0].render(scale=dpi / 72).to_pil().convert("RGB")
+        finally:
+            doc.close()
     l, h = image.size
     image = image.crop((round(l * 0.015), round(h * 0.015),
                         round(l * 0.985), round(h * 0.93)))
@@ -285,11 +287,12 @@ def _coupe_be_nettoyee(chemin_pdf: Path, sortie: Path, dpi: int = 200) -> Path:
     """
     if sortie.exists() and sortie.stat().st_mtime >= chemin_pdf.stat().st_mtime:
         return sortie
-    doc = pdfium.PdfDocument(str(chemin_pdf))
-    try:
-        image = doc[0].render(scale=dpi / 72).to_pil().convert("RGB")
-    finally:
-        doc.close()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin_pdf))
+        try:
+            image = doc[0].render(scale=dpi / 72).to_pil().convert("RGB")
+        finally:
+            doc.close()
     l, h = image.size
     image = image.crop((round(l * 0.02), round(h * 0.02),
                         round(l * 0.98), round(h * 0.87)))
@@ -452,11 +455,12 @@ def aerienne_donnees(projet: dict) -> dict | None:
     assets = config.assets_dir(projet.get("id"))
     fond = assets / "aerienne_fond.png"
     if not (fond.exists() and fond.stat().st_mtime >= source.stat().st_mtime):
-        doc = pdfium.PdfDocument(str(source))
-        try:
-            image = doc[0].render(scale=150 / 72).to_pil().convert("RGB")
-        finally:
-            doc.close()
+        with config.PDFIUM_LOCK:
+            doc = pdfium.PdfDocument(str(source))
+            try:
+                image = doc[0].render(scale=150 / 72).to_pil().convert("RGB")
+            finally:
+                doc.close()
         assets.mkdir(parents=True, exist_ok=True)
         image.crop((x0, y0, x1, y1)).save(fond)
 

@@ -28,6 +28,7 @@ import numpy as np
 import pypdfium2 as pdfium
 from PIL import Image, ImageDraw
 
+from . import config
 from .lecture_plan import analyser_texte
 
 DPI = 150
@@ -43,16 +44,17 @@ ENCRE = (0, 36, 85)
 # ------------------------------------------------------------------ rendu
 
 def _rendre(chemin_pdf: Path) -> tuple[Image.Image, str]:
-    doc = pdfium.PdfDocument(str(chemin_pdf))
-    try:
-        image = doc[0].render(scale=DPI / 72).to_pil().convert("RGB")
-        page_texte = doc[0].get_textpage()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin_pdf))
         try:
-            texte = page_texte.get_text_bounded() or ""
+            image = doc[0].render(scale=DPI / 72).to_pil().convert("RGB")
+            page_texte = doc[0].get_textpage()
+            try:
+                texte = page_texte.get_text_bounded() or ""
+            finally:
+                page_texte.close()
         finally:
-            page_texte.close()
-    finally:
-        doc.close()
+            doc.close()
     return image, texte
 
 
@@ -167,28 +169,29 @@ def _vers_image(x: float, y: float, largeur_pt: float, hauteur_pt: float,
 
 def _positions_texte(chemin_pdf: Path, motif: str) -> list[tuple[float, float]]:
     """Centres (px rendu) des occurrences d'un texte sur la page 1."""
-    doc = pdfium.PdfDocument(str(chemin_pdf))
     positions = []
-    try:
-        page = doc[0]
-        largeur_pt, hauteur_pt = page.get_mediabox()[2], page.get_mediabox()[3]
-        rotation = page.get_rotation()
-        page_texte = page.get_textpage()
+    with config.PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(chemin_pdf))
         try:
-            chercheur = page_texte.search(motif, match_case=False)
-            while True:
-                trouve = chercheur.get_next()
-                if trouve is None:
-                    break
-                index, longueur = trouve
-                boites = [page_texte.get_charbox(i) for i in range(index, index + longueur)]
-                cx = (min(b[0] for b in boites) + max(b[2] for b in boites)) / 2
-                cy = (min(b[1] for b in boites) + max(b[3] for b in boites)) / 2
-                positions.append(_vers_image(cx, cy, largeur_pt, hauteur_pt, rotation))
+            page = doc[0]
+            largeur_pt, hauteur_pt = page.get_mediabox()[2], page.get_mediabox()[3]
+            rotation = page.get_rotation()
+            page_texte = page.get_textpage()
+            try:
+                chercheur = page_texte.search(motif, match_case=False)
+                while True:
+                    trouve = chercheur.get_next()
+                    if trouve is None:
+                        break
+                    index, longueur = trouve
+                    boites = [page_texte.get_charbox(i) for i in range(index, index + longueur)]
+                    cx = (min(b[0] for b in boites) + max(b[2] for b in boites)) / 2
+                    cy = (min(b[1] for b in boites) + max(b[3] for b in boites)) / 2
+                    positions.append(_vers_image(cx, cy, largeur_pt, hauteur_pt, rotation))
+            finally:
+                page_texte.close()
         finally:
-            page_texte.close()
-    finally:
-        doc.close()
+            doc.close()
     return positions
 
 

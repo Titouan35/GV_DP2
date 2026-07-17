@@ -7,9 +7,19 @@ PROJETS/ est gitignoré (données client, jamais versionnées).
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# pypdfium2/libpdfium n'est PAS thread-safe (pas de verrou interne côté lib).
+# FastAPI exécute les routes sync dans un threadpool : deux requêtes qui
+# ouvrent un PDF en même temps peuvent corrompre l'état global de la lib et
+# planter tout le process avec une "access violation" (constaté 17/07/2026,
+# route apercu-payload qui ouvre plan+coupe pendant qu'une autre requête
+# ouvrait aussi un PDF). Tout usage de pdfium.PdfDocument DOIT être protégé
+# par `with config.PDFIUM_LOCK:`.
+PDFIUM_LOCK = threading.Lock()
 
 
 def _env_candidates():
