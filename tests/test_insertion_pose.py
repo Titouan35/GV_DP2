@@ -150,8 +150,52 @@ def test_prompt_double_decrit_un_T_pas_un_Y(tmp_path, monkeypatch):
     p = insertion_ia.construire_prompt_pose(projet, pose=True)
     assert "DOUBLE" in p and "dessine un T" in p
     assert "UNE SEULE toiture" in p and "sans arête ni sommet au milieu" in p
-    assert "versants" not in p                       # la formulation fautive
+    # la formulation fautive est bannie ; « versants » ne subsiste que dans
+    # l'interdiction explicite (« Jamais deux versants opposés »)
+    assert "toiture à deux versants" not in p
+    assert "Jamais deux versants opposés" in p
     assert "10 m de profondeur" in p                 # cote du type Double
+
+
+def test_jamais_de_profil_en_Y(tmp_path, monkeypatch):
+    """Règle métier absolue : Greenvolt ne pose jamais d'ombrière en Y.
+
+    L'interdiction vaut pour TOUS les types, mono comme double, et doit être
+    portée par le prompt indépendamment du type tracé.
+    """
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    for famille in ("START PLAINE Bas", "START PLAINE Haut", "START PLAINE Double"):
+        projet, _ = _projet_photo(tmp_path / famille, famille=famille,
+                                  bord_avant=[[0.2, 0.6], [0.8, 0.6]])
+        p = insertion_ia.construire_prompt_pose(projet, pose=True)
+        assert "PLAN UNIQUE incliné" in p
+        assert "en V, en Y ou en papillon" in p
+        assert "UNE SEULE toiture" in p
+
+
+def test_coupe_be_prime_toujours(tmp_path, monkeypatch):
+    """La DP3 du BE fait foi même si des types différents sont tracés.
+
+    Règle métier (18/07/2026) : c'est la coupe du projet réel, celle qu'on
+    construit. Les coupes catalogue ne servent qu'à défaut.
+    """
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, famille="START PLAINE Bas", ombrieres=[
+        {"bord_avant": [[0.1, 0.6], [0.4, 0.6]], "famille": "START PLAINE Bas"},
+        {"bord_avant": [[0.6, 0.6], [0.9, 0.6]], "famille": "START PLAINE Double"},
+    ])
+    # sans DP3 : on retombe sur les coupes types, une par type tracé
+    assert len(insertion_ia._coupes_payload(projet)) == 2
+
+    # avec une DP3 fournie par le BE : elle prime, seule et pour tout le monde
+    uploads = config.PROJETS_DIR / "p.assets" / "uploads"
+    uploads.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (900, 600), (250, 250, 250)).save(uploads / "dp3.png")
+    projet["documents"] = {"dp3": {"fichier": "p.assets/uploads/dp3.png"}}
+    coupes = insertion_ia._coupes_payload(projet)
+    assert len(coupes) == 1 and coupes[0].name == "dp3.png"
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "elle prime sur tout le reste" in p
 
 
 def test_prompt_interdit_les_annotations(tmp_path, monkeypatch):

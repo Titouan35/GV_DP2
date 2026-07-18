@@ -793,31 +793,23 @@ def _reference_photo(projet: dict) -> Path | None:
 
 
 def _coupe_be_pertinente(projet: dict) -> Path | None:
-    """Coupe DP3 du BE, mais seulement si elle décrit bien ce qui est tracé.
+    """Coupe DP3 du bureau d'études : elle fait TOUJOURS foi quand elle existe.
 
-    Elle représente UN type (celui du projet). Dès qu'une ombrière tracée est
-    d'un autre type, l'envoyer comme référence géométrique fait foi contredirait
-    le texte (constaté le 18/07/2026 : coupe mono du BE + ombrière annoncée
-    double = profil incohérent rendu en V). Dans ce cas on bascule sur les
-    coupes types du catalogue, qui correspondent chacune à leur ombrière.
+    Règle métier (Florent, 18/07/2026) : la DP3 est la coupe du projet réel,
+    c'est elle qu'on construit. Elle prime donc sur les coupes types du
+    catalogue en toutes circonstances ; ces dernières ne servent que si le BE
+    n'a pas encore fourni de coupe.
     """
-    be = image_kit(projet, "coupe_be")
-    if not be:
-        return None
-    familles = _familles_tracees(projet)
-    projet_famille = (projet.get("ombriere") or {}).get("famille")
-    if familles and any(f != projet_famille for f in familles):
-        return None
-    return be
+    return image_kit(projet, "coupe_be")
 
 
 def _coupes_payload(projet: dict) -> list[Path]:
     """Coupes techniques à joindre (précision de la structure).
 
-    La coupe DP3 du bureau d'études prime quand elle décrit bien le ou les types
-    tracés (cf. _coupe_be_pertinente). Sinon, la coupe type du catalogue pour
-    chaque type distinct tracé (max 2). Toutes sont nettoyées de leur cartouche
-    avant envoi, le modèle recopiant volontiers la mise en page des documents.
+    La coupe DP3 du bureau d'études prime toujours quand elle existe. Sinon,
+    la coupe type du catalogue pour chaque type distinct tracé (max 2). Toutes
+    sont nettoyées de leur cartouche avant envoi, le modèle recopiant volontiers
+    la mise en page des documents joints.
     """
     be = _coupe_be_pertinente(projet)
     if be:
@@ -923,7 +915,7 @@ def _descriptif_ombriere(o: dict, projet: dict) -> str:
     else:
         cote = "du côté haut" if e["poteau"] == "haut" else "du côté bas"
         profil = (f"de type MONOPENTE : une seule file de poteaux {cote} du "
-                  "versant, portant une toiture inclinée d'un seul tenant")
+                  "versant, portant UNE SEULE toiture inclinée d'un seul tenant")
     return (f"{profil}. Hauteur libre {_fmt(g['h_bas'])} m au point bas et "
             f"{_fmt(g['h_haut'])} m au point haut, soit une pente douce "
             f"d'environ {_fmt(g['pente'])}°.")
@@ -984,6 +976,15 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
         blocs.append("STRUCTURE. Ombrière "
                      + _descriptif_ombriere(defaut, projet) + ".")
 
+    # règle métier absolue (Florent) : Greenvolt ne pose jamais d'ombrière en Y.
+    # Elle vaut pour TOUS les types, mono comme double.
+    blocs.append(
+        "TOITURE. Règle absolue, valable pour chaque ombrière : la toiture est un "
+        "PLAN UNIQUE incliné d'un seul tenant, d'un bord à l'autre. Jamais deux "
+        "versants opposés, jamais de faîtage ni d'arête au sommet, jamais de "
+        "profil en V, en Y ou en papillon. Vue de bout, on ne voit qu'une seule "
+        "ligne droite inclinée posée sur ses poteaux.")
+
     blocs.append(
         "MATERIAUX. Structure en acier galvanisé gris clair (poteaux caisson, "
         "poutres et arbalétriers), toiture de modules photovoltaïques NOIRS et "
@@ -995,8 +996,9 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
     coupes = _coupes_payload(projet)
     if coupes:
         if _coupe_be_pertinente(projet):
-            quoi = ("Le dessin technique joint est la coupe du projet, tracée par "
-                    "le bureau d'études")
+            quoi = ("Le dessin technique joint est LA coupe du projet, tracée par "
+                    "le bureau d'études : c'est la structure qui sera réellement "
+                    "construite, elle prime sur tout le reste")
         elif len(coupes) > 1:
             quoi = ("Les dessins techniques joints sont les coupes types, dans "
                     f"l'ordre : {' puis '.join(noms[:len(coupes)])}")
