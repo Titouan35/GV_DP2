@@ -1071,13 +1071,7 @@ async function chargerApercuPrompt(force = false) {
 function majEtatPrompt() {
   const el = $("#ins-prompt-etat");
   if (el) el.textContent = state.promptEdite
-    ? "prompt modifié — c'est cette version qui sera envoyée"
-    : "prompt automatique (issu du type, du bord avant tracé et des consignes)";
-}
-
-function texteDepense(imagesProjet, imagesGlobal, cout) {
-  const eur = (n) => (n * (cout || 0)).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
-  return `${imagesProjet} image${imagesProjet > 1 ? "s" : ""} (projet, ≈ ${eur(imagesProjet)}) · ${imagesGlobal} au total (≈ ${eur(imagesGlobal)})`;
+    ? "modifié" : "automatique";
 }
 
 // contrôle géométrique : verdict de recouvrement de l'emprise tracée
@@ -1092,15 +1086,8 @@ function badgeControle(controle) {
   const pct = Math.round((controle.couverture || 0) * 100);
   return `<span class="chip ${d.cls}" title="Part de l'emprise tracée réellement couverte par la structure générée">${d.txt} · ${pct}%</span>`;
 }
-function texteControle(controle) {
-  const d = CONTROLE_LIB[controle.verdict] || CONTROLE_LIB.partiel;
-  const pct = Math.round((controle.couverture || 0) * 100);
-  return `Contrôle d'emprise : ${d.txt.toLowerCase()} (${pct} %).`;
-}
-
 function renderInsertionAtelier(s) {
   const ins = state.projet.insertion || {};
-  state.coutImage = s.cout_image_eur || 0;
   const main = $("#main");
   main.querySelector("#ia-statut").outerHTML = `
     <div class="card">
@@ -1117,40 +1104,34 @@ function renderInsertionAtelier(s) {
       <div class="hd"><span class="ti-title">2 · Type &amp; placement</span>
         <span class="hint" id="ins-pose-etat"></span></div>
       <div class="bd">
-        <div class="hint" style="margin-bottom:6px">Type par défaut des nouvelles ombrières (modifiable ensuite ligne par ligne) :</div>
         <div class="type-select" id="ins-type"></div>
-        <p class="sub" style="margin:14px 0 10px">Trace le <b>bord avant</b> de chaque ombrière : <b>clique-glisse</b> de gauche à droite, posé au sol. Un geste par ombrière, autant que tu veux. Hauteurs et pente viennent du type ; les cotes sont lues sur le plan de masse.</p>
-        <div id="ins-pose-body"></div>
+        <div id="ins-pose-body" style="margin-top:14px"></div>
       </div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="hd"><span class="ti-title">3 · Générer</span>
-        <span class="hint">Ombrière : ${esc(resumeOmbriere())}</span></div>
+      <div class="hd"><span class="ti-title">3 · Générer</span></div>
       <div class="bd">
-        <div class="calage-titre">Images envoyées à Gemini</div>
-        <div class="payload-strip" id="ins-payload"><p class="sub">Chargement…</p></div>
-        <div class="field" style="margin-top:12px"><label>Consignes complémentaires (facultatif)</label>
+        <div class="payload-strip" id="ins-payload"></div>
+        <div class="field" style="margin-top:12px"><label>Consignes complémentaires</label>
           <textarea class="input notice-ta" id="ins-consignes" rows="2"
             placeholder="Ex. : garder le mât d'éclairage">${esc(ins.consignes || "")}</textarea></div>
-        <details class="foldable" id="ins-prompt-fold" style="margin-top:10px"><summary>Prompt envoyé <span class="hint">(modifiable)</span></summary>
+        <details class="foldable" id="ins-prompt-fold" style="margin-top:10px"><summary>Prompt</summary>
           <div class="bd">
             <textarea class="input prompt-ta" id="ins-prompt" rows="12" spellcheck="false"></textarea>
             <div class="actionsrow" style="margin-top:8px">
-              <button class="btn" id="ins-prompt-auto" title="Reconstruire le prompt depuis les données du projet">↺ Prompt auto</button>
+              <button class="btn" id="ins-prompt-auto">↺ Prompt auto</button>
               <span class="hint" id="ins-prompt-etat"></span>
             </div>
           </div>
         </details>
         <button class="btn primary" id="ins-generer-api" style="width:100%;margin-top:12px">Générer l'insertion</button>
         <div id="ins-progress" class="sub" style="margin-top:6px;text-align:center;min-height:18px"></div>
-        <div class="hint" id="ins-depense" style="margin-top:2px;text-align:center">${esc(texteDepense(s.images_projet || 0, s.images_global || 0, s.cout_image_eur))}</div>
       </div>
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="hd"><span class="ti-title">Insertions générées</span>
-        <span class="hint">cochées = incluses au dossier DP</span></div>
+      <div class="hd"><span class="ti-title">Insertions générées</span></div>
       <div class="bd">
         <div class="gallery" id="ins-galerie"></div>
         <div class="actionsrow" style="margin-top:12px">
@@ -1212,16 +1193,9 @@ async function renderPayload() {
     img.addEventListener("click", () => ouvrirLightbox(img.dataset.zoom)));
 }
 
-// ---- alerte si la photo active est une pièce BE réutilisée ----
 function renderAlertePhoto() {
   const box = $("#ins-alerte-photo");
-  if (!box) return;
-  const photo = state.projet.insertion?.photo || "";
-  const piece = (photo.match(/\/uploads\/(dp[678])\./) || [])[1];
-  box.innerHTML = piece
-    ? `<div class="note warn" style="margin-bottom:10px">La photo active provient de la pièce ${piece.toUpperCase()}.
-       Une photo dédiée du site (bien cadrée, zone dégagée) donne de meilleurs résultats.</div>`
-    : "";
+  if (box) box.innerHTML = "";
 }
 
 // ---- vue aérienne : emprise auto extraite du plan, coins ajustables ----
@@ -1423,7 +1397,7 @@ async function renderPose() {
 
   body.innerHTML = `
     <div class="mesure-tools">
-      <span class="hint">Un <b>cliqué-glissé</b> = une ombrière. Recommence pour en ajouter d'autres.</span>
+      <span class="hint">Un cliqué-glissé = une ombrière</span>
       <span style="flex:1"></span>
       <button class="btn" id="p-annuler">Annuler la dernière</button>
       <button class="btn" id="p-effacer">Tout effacer</button>
@@ -1507,8 +1481,7 @@ function renderTableauOmbrieres() {
       <label>L <input class="input mini-m" type="number" step="0.1" data-champ="longueur_m" data-i="${i}" value="${o.longueur_m ?? ""}" /> m</label>
       <label>prof. <input class="input mini-m" type="number" step="0.1" data-champ="profondeur_m" data-i="${i}" value="${o.profondeur_m ?? ""}" /> m</label>
       <button class="btn btn-sm" data-suppr-omb="${i}" title="Retirer cette ombrière">✕</button>
-    </div>`).join("") + `</div>
-    <p class="hint" style="padding:0 16px 12px">Cotes pré-remplies depuis le plan de masse quand il est lu ; ajuste-les si besoin.</p>`;
+    </div>`).join("") + `</div>`;
 
   box.querySelectorAll("[data-champ]").forEach((el) => el.addEventListener("change", () => {
     const o = poseUI.ombrieres[+el.dataset.i];
@@ -1575,17 +1548,16 @@ async function renderPhotosInsertion(sel = "#ins-photos") {
   catch { return; }
   let html = "";
   if (data.photos.length) {
-    html += `<div class="hint" style="margin-bottom:6px">Photo de génération (clique pour choisir) :</div>
-      <div class="photo-choices">${data.photos.map((p) => `
+    html += `<div class="photo-choices">${data.photos.map((p) => `
         <div class="photo-choice ${p.chemin === data.active ? "actif" : ""}" data-active="${esc(p.chemin)}">
           <img src="${esc(p.url)}&t=${Date.now()}" alt="photo site" />
           <button class="photo-suppr" data-suppr="${esc(p.chemin)}" title="Retirer">✕</button>
         </div>`).join("")}</div>`;
   } else {
-    html += `<div class="placeholder" style="padding:18px"><b>Aucune photo du site</b>Ajoute-les ici ou à l'étape Pièces du BE.</div>`;
+    html += `<div class="placeholder" style="padding:18px"><b>Aucune photo du site</b></div>`;
   }
   if (data.reutilisables.length) {
-    html += `<div class="hint" style="margin:12px 0 6px">Ou reprends une photo des Pièces BE :</div>
+    html += `<div class="hint" style="margin:12px 0 6px">Pièces BE</div>
       <div class="photo-choices">${data.reutilisables.map((p) => `
         <button class="photo-choice petite" data-piece="${esc(p.code)}" title="${esc(p.libelle)}">
           <img src="${esc(p.url)}?t=${Date.now()}" alt="${esc(p.libelle)}" />
@@ -1646,15 +1618,7 @@ async function genererInsertionAPI() {
     });
     state.projet = data.projet;
     const ctrl = data.image?.controle;
-    const essais = data.image?.essais || 1;
-    const relance = essais > 1 ? " (relancé 1 fois pour un meilleur placement)" : "";
-    if (prog) prog.innerHTML = ctrl
-      ? `Image générée. ${texteControle(ctrl)}${relance}`
-      : "Image générée — regarde la galerie ci-contre.";
-    const dep = $("#ins-depense");
-    if (dep && data.images_projet != null) {
-      dep.textContent = texteDepense(data.images_projet, data.images_global || 0, state.coutImage || 0);
-    }
+    if (prog) prog.textContent = "";
     if (ctrl && ctrl.verdict === "faible") {
       toast("Placement raté (ombrière hors emprise) : régénère.", "err");
     } else if (ctrl && ctrl.verdict === "partiel") {

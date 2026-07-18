@@ -60,21 +60,30 @@ def apercu_payload(projet_id: str):
         # OSError = fichier cache (photo repérée) momentanément verrouillé par
         # OneDrive : l'aperçu ne doit jamais planter, il se recharge au clic.
         return {"images": [], "prompt": ""}
+    from ..catalogue import libelle_coupe
+
+    # quand plusieurs coupes ou références partent (un type distinct chacune),
+    # on nomme le type dans la vignette : sans ça, deux miniatures portent le
+    # même libellé et se lisent comme un doublon.
+    familles = insertion_ia._familles_tracees(projet.model_dump())
+    compte = {"coupe": 0, "reference": 0}
+    total = {r: req["roles"].count(r) for r in ("coupe", "reference")}
+
     images = []
-    n_ref = 0
     for i, (role, chemin) in enumerate(zip(req["roles"], req["chemins"]), 1):
+        rang = compte.get(role, 0)
         if role == "reference":
             # les références vivent hors de PROJETS_DIR (app/gabarits) : route dédiée
-            url = f"/api/projets/{projet_id}/insertion/reference?i={n_ref}"
-            n_ref += 1
+            url = f"/api/projets/{projet_id}/insertion/reference?i={rang}"
         else:
             rel = str(Path(chemin).resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
             url = f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}"
-        images.append({
-            "role": role,
-            "titre": f"{i} · {TITRES_PAYLOAD.get(role, role)}",
-            "url": url,
-        })
+        titre = TITRES_PAYLOAD.get(role, role)
+        if role in compte:
+            if total[role] > 1 and rang < len(familles):
+                titre = f"{titre.split(' (')[0]} · {libelle_coupe(familles[rang])}"
+            compte[role] = rang + 1
+        images.append({"role": role, "titre": f"{i} · {titre}", "url": url})
     return {"images": images, "prompt": req["prompt"]}
 
 
