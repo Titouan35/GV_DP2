@@ -44,9 +44,9 @@ def apercu_prompt(projet_id: str):
 
 
 TITRES_PAYLOAD = {
-    "photo": "Photo avec l'ombrière posée (à habiller)",
-    "coupe": "Coupe technique (structure)",
-    "plan": "Plan de masse (implantation)",
+    "photo": "Photo repérée (bords avant + fuite)",
+    "coupe": "Coupe technique (profil exact)",
+    "reference": "Ombrière de référence (réalisme)",
 }
 
 
@@ -55,18 +55,37 @@ def apercu_payload(projet_id: str):
     """Le lot d'images EXACT qui partira à Gemini (miniatures UI) + le prompt."""
     projet = _charger(projet_id)
     try:
-        req = insertion_ia._preparer_requete(projet.model_dump())
-    except InsertionError:
+        req = insertion_ia._preparer_requete_pose(projet.model_dump())
+    except (InsertionError, OSError):
+        # OSError = fichier cache (photo repérée) momentanément verrouillé par
+        # OneDrive : l'aperçu ne doit jamais planter, il se recharge au clic.
         return {"images": [], "prompt": ""}
     images = []
+    n_ref = 0
     for i, (role, chemin) in enumerate(zip(req["roles"], req["chemins"]), 1):
-        rel = str(Path(chemin).resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
+        if role == "reference":
+            # les références vivent hors de PROJETS_DIR (app/gabarits) : route dédiée
+            url = f"/api/projets/{projet_id}/insertion/reference?i={n_ref}"
+            n_ref += 1
+        else:
+            rel = str(Path(chemin).resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
+            url = f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}"
         images.append({
             "role": role,
             "titre": f"{i} · {TITRES_PAYLOAD.get(role, role)}",
-            "url": f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}",
+            "url": url,
         })
     return {"images": images, "prompt": req["prompt"]}
+
+
+@router.get("/{projet_id}/insertion/reference")
+def servir_reference(projet_id: str, i: int = 0):
+    """Photo de référence d'ombrière (bundlée) — une par type distinct tracé."""
+    projet = _charger(projet_id)
+    refs = insertion_ia._reference_photos(projet.model_dump())
+    if not refs:
+        raise HTTPException(status_code=404, detail="Référence introuvable.")
+    return FileResponse(refs[min(max(0, i), len(refs) - 1)])
 
 
 # ------------------------------------------------------------------ vue aérienne
@@ -254,8 +273,9 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
     if not projet.insertion.retenue:
         projet.insertion.retenue = image["fichier"]
     projet.insertion.prompt = image.get("prompt")
-    projet.insertion.nb_images_generees += 1
-    images_global = insertion_ia.incrementer_compteur_global()
+    essais = int(image.get("essais", 1))   # coût réel (relance auto incluse)
+    projet.insertion.nb_images_generees += essais
+    images_global = insertion_ia.incrementer_compteur_global(essais)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet, "image": image,
@@ -263,7 +283,95 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
             "images_global": images_global}
 
 
-# ------------------------------------------------------------------ guides photo
+# ------------------------------------------------------------------ type d'ombrière
+
+@router.put("/{projet_id}/insertion/type")
+def choisir_type(projet_id: str, corps: dict = Body(...)):
+    """Type d'ombrière pour l'insertion (Mono Bas / Mono Haut / Double).
+
+    Met à jour ombriere.famille et, si les hauteurs ne sont pas déjà saisies,
+    les initialise depuis le catalogue (modifiables à l'étape Caractéristiques).
+    """
+    from ..catalogue import CATALOGUE
+
+    projet = _charger(projet_id)
+    famille = corps.get("famille")
+    if famille not in CATALOGUE:
+        raise HTTPException(status_code=400, detail="Type inconnu.")
+    projet.ombriere.famille = famille
+    entree = CATALOGUE[famille]
+    if projet.ombriere.garde_au_sol_m is None:
+        projet.ombriere.garde_au_sol_m = entree["h_bas_m"]
+    if projet.ombriere.hauteur_hors_tout_m is None:
+        projet.ombriere.hauteur_hors_tout_m = entree["h_haut_m"]
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
+# ------------------------------------------------------------------ pose (un geste)
+
+@router.put("/{projet_id}/insertion/pose")
+def sauver_pose(projet_id: str, corps: dict = Body(...)):
+    """Ombrières tracées sur une photo (un cliqué-glissé = un bord avant).
+
+    Corps : {photo, ombrieres: [{bord_avant: [[x,y],[x,y]], famille?,
+    longueur_m?, profondeur_m?}]} — coordonnées 0-1, gauche->droite.
+    Les cotes absentes sont pré-remplies depuis le plan de masse (par ordre des
+    rangées lues), le type absent retombe sur celui du projet. Liste vide =
+    efface les tracés de cette photo.
+    """
+    from ..catalogue import CATALOGUE
+
+    projet = _charger(projet_id)
+    photo = corps.get("photo")
+    if photo not in (projet.insertion.photos or []):
+        raise HTTPException(status_code=400, detail="Photo inconnue.")
+
+    def _point(p):
+        try:
+            x, y = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError):
+            raise HTTPException(status_code=400, detail="Point de pose invalide.")
+        return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
+
+    def _cote(v):
+        try:
+            return round(float(v), 1) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    dims = insertion_ia.plan_dims(projet.model_dump())   # cotes lues sur le plan
+    defaut = projet.ombriere.famille or "START PLAINE Bas"
+    ombrieres = []
+    for i, o in enumerate(corps.get("ombrieres") or []):
+        ba = o.get("bord_avant")
+        if not (ba and len(ba) == 2):
+            continue
+        famille = o.get("famille") if o.get("famille") in CATALOGUE else defaut
+        L = _cote(o.get("longueur_m"))
+        prof = _cote(o.get("profondeur_m"))
+        if L is None and i < len(dims):
+            L = round(dims[i][0], 1)
+        if prof is None and i < len(dims):
+            prof = round(dims[i][1], 1)
+        if prof is None:
+            prof = CATALOGUE[famille]["profondeur_m"]
+        ombrieres.append({
+            "bord_avant": [_point(ba[0]), _point(ba[1])],
+            "famille": famille, "longueur_m": L, "profondeur_m": prof,
+        })
+
+    if ombrieres:
+        projet.insertion.poses[photo] = {"ombrieres": ombrieres}
+    else:
+        projet.insertion.poses.pop(photo, None)
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet}
+
+
+# ------------------------------------------------------------------ guides photo (legacy)
 
 @router.get("/{projet_id}/insertion/plan-dims")
 def plan_dims(projet_id: str):

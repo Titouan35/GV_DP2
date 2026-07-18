@@ -187,6 +187,93 @@ def test_scaffold_sans_cote_utilise_largeur(tmp_path, monkeypatch):
     assert insertion_ia.scaffold_photo(projet) is not None
 
 
+def test_scaffold_toit_texture_panneaux(tmp_path, monkeypatch):
+    """Le toit n'est plus un aplat : modules PV sombres + trame de cellules
+    (deux nuances sombres distinctes présentes)."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    dossier = tmp_path / "p.assets" / "insertion" / "photos"
+    dossier.mkdir(parents=True)
+    Image.new("RGB", (1600, 1000), (150, 160, 170)).save(dossier / "site.jpg")
+    rel = "p.assets/insertion/photos/site.jpg"
+    projet = {"id": "p", "ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5},
+              "insertion": {"photo": rel, "photos": [rel],
+                "guides": {rel: {"ombrieres": [
+                    {"longueur": [[0.2, 0.6], [0.8, 0.63]], "largeur": [[0.5, 0.62], [0.47, 0.42]],
+                     "longueur_m": 20.0, "largeur_m": 10.0}]}}}}
+    p = insertion_ia.scaffold_photo(projet)
+    arr = np.asarray(Image.open(p).convert("RGB")).reshape(-1, 3)
+    # pixels du module (quasi noir) et pixels de la trame (gris un peu plus clair)
+    panneau = (arr[:, 0] < 36) & (arr[:, 1] < 40) & (arr[:, 2] < 46)
+    trame = (arr[:, 0] >= 36) & (arr[:, 0] < 60) & (arr[:, 2] < 70) & \
+            (abs(arr[:, 0].astype(int) - arr[:, 2]) < 22)
+    assert panneau.sum() > 2000          # champ de modules
+    assert trame.sum() > 200             # liserés de cellules visibles
+
+
+def _projet_controle(tmp_path):
+    """Projet avec une ombrière tracée + photo propre texturée, pour le contrôle.
+
+    La photo porte du bruit (comme une vraie photo de site) : l'alignement
+    d'exposition du contrôle suppose un écart-type non nul.
+    """
+    dossier = tmp_path / "p.assets" / "insertion" / "photos"
+    dossier.mkdir(parents=True)
+    rng = np.random.default_rng(11)
+    fond = rng.integers(120, 200, (900, 1200, 3), dtype=np.uint8)
+    Image.fromarray(fond).save(dossier / "site.png")
+    rel = "p.assets/insertion/photos/site.png"
+    projet = {"id": "p", "ombriere": {"garde_au_sol_m": 2.5, "hauteur_hors_tout_m": 3.5},
+              "insertion": {"photo": rel, "photos": [rel],
+                "guides": {rel: {"ombrieres": [
+                    {"longueur": [[0.2, 0.6], [0.8, 0.6]], "largeur": [[0.5, 0.6], [0.5, 0.42]],
+                     "longueur_m": 20.0, "largeur_m": 10.0}]}}}}
+    return projet, config.PROJETS_DIR / rel
+
+
+def test_controle_couverture_bon_placement(tmp_path, monkeypatch):
+    """Une structure qui couvre toute l'emprise tracée -> verdict ok."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, clean = _projet_controle(tmp_path)
+    scaffold = insertion_ia.scaffold_photo(projet)   # couvre le toit tracé
+    ctrl = insertion_ia.controle_couverture(projet, clean, _png(Image.open(scaffold)))
+    assert ctrl and ctrl["verdict"] == "ok"
+    assert ctrl["couverture"] > 0.82 and ctrl["n_ombrieres"] == 1
+
+
+def test_controle_couverture_placement_partiel(tmp_path, monkeypatch):
+    """Une structure qui ne couvre que la moitié de l'emprise -> pas ok."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    from PIL import ImageDraw
+    projet, clean = _projet_controle(tmp_path)
+    W, H = Image.open(clean).size
+    g = next(insertion_ia._geometrie_ombrieres(projet, W, H))
+    quad = [g["av0"], g["av1"], g["ar1"], g["ar0"]]
+
+    def bilin(u, v):
+        av = (quad[0][0] + (quad[1][0] - quad[0][0]) * u, quad[0][1] + (quad[1][1] - quad[0][1]) * u)
+        ar = (quad[3][0] + (quad[2][0] - quad[3][0]) * u, quad[3][1] + (quad[2][1] - quad[3][1]) * u)
+        return (av[0] + (ar[0] - av[0]) * v, av[1] + (ar[1] - av[1]) * v)
+
+    im = Image.open(clean).convert("RGB")
+    ImageDraw.Draw(im).polygon([bilin(0, 0), bilin(0.5, 0), bilin(0.5, 1), bilin(0, 1)],
+                               fill=(20, 22, 26))
+    ctrl = insertion_ia.controle_couverture(projet, clean, _png(im))
+    assert ctrl and ctrl["verdict"] in ("partiel", "faible")
+    assert ctrl["couverture"] < 0.7
+
+
+def test_controle_couverture_sans_guides(tmp_path, monkeypatch):
+    """Mode libre (aucun tracé) : rien à vérifier -> None."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    dossier = tmp_path / "p.assets" / "insertion" / "photos"
+    dossier.mkdir(parents=True)
+    Image.new("RGB", (400, 300), (150, 150, 150)).save(dossier / "s.jpg")
+    rel = "p.assets/insertion/photos/s.jpg"
+    projet = {"id": "p", "insertion": {"photo": rel, "photos": [rel]}}
+    clean = config.PROJETS_DIR / rel
+    assert insertion_ia.controle_couverture(projet, clean, _png(Image.open(clean))) is None
+
+
 def test_ratio_photo_supporte(tmp_path):
     """Le ratio de sortie est le plus proche supporté par Nano Banana."""
     p = tmp_path / "photo.jpg"

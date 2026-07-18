@@ -30,6 +30,11 @@ def libelle_coupe(famille: str | None) -> str:
 
 
 # profondeur = dimension couverte dans le sens de la pente (une place ~5 m)
+# reference_photo = photo réelle d'un type d'ombrière semblable, bundlée dans
+# app/gabarits/references/, envoyée à Gemini comme cible de structure/perspective
+# (les matériaux — modules full black, acier galvanisé — sont imposés par le
+# prompt, ce qui neutralise les panneaux bleus des photos libres). Remplaçable
+# par de vraies photos d'installations GV en gardant le même nom de fichier.
 CATALOGUE: dict[str, dict] = {
     "START PLAINE Bas": {
         "poteau": "haut",          # côté du poteau par rapport à la pente
@@ -39,6 +44,7 @@ CATALOGUE: dict[str, dict] = {
         "h_bas_m": 3.06,           # hauteur au point bas
         "pente_deg": 5.0,
         "coupe_pdf": "11 - BIBLIOTHEQUE START_1.5 (Fichier pour sortir plans de coupe commerciaux)-PLAINE - Bas - Court.pdf",
+        "reference_photo": "ombriere_mono_galva.jpg",
     },
     "START PLAINE Haut": {
         "poteau": "bas",
@@ -48,6 +54,7 @@ CATALOGUE: dict[str, dict] = {
         "h_bas_m": 3.51,
         "pente_deg": 5.0,
         "coupe_pdf": "11 - BIBLIOTHEQUE START_1.5 (Fichier pour sortir plans de coupe commerciaux)-PLAINE - Haut - Court.pdf",
+        "reference_photo": "ombriere_mono_galva.jpg",
     },
     "START PLAINE Double": {
         "poteau": "central",
@@ -57,6 +64,7 @@ CATALOGUE: dict[str, dict] = {
         "h_bas_m": 2.99,
         "pente_deg": 5.0,
         "coupe_pdf": "11 - BIBLIOTHEQUE START_1.5 (Fichier pour sortir plans de coupe commerciaux)-PLAINE - Double - Court.pdf",
+        "reference_photo": "ombriere_double_galva.jpg",
     },
 }
 

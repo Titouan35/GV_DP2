@@ -1072,12 +1072,30 @@ function majEtatPrompt() {
   const el = $("#ins-prompt-etat");
   if (el) el.textContent = state.promptEdite
     ? "prompt modifié — c'est cette version qui sera envoyée"
-    : "prompt automatique (issu du plan, de la coupe et des saisies)";
+    : "prompt automatique (issu du type, du bord avant tracé et des consignes)";
 }
 
 function texteDepense(imagesProjet, imagesGlobal, cout) {
   const eur = (n) => (n * (cout || 0)).toLocaleString("fr-FR", { style: "currency", currency: "EUR" });
   return `${imagesProjet} image${imagesProjet > 1 ? "s" : ""} (projet, ≈ ${eur(imagesProjet)}) · ${imagesGlobal} au total (≈ ${eur(imagesGlobal)})`;
+}
+
+// contrôle géométrique : verdict de recouvrement de l'emprise tracée
+const CONTROLE_LIB = {
+  ok: { cls: "ok", txt: "Emprise bien couverte" },
+  partiel: { cls: "warn", txt: "Ombrière raccourcie / partielle" },
+  faible: { cls: "err", txt: "Placement hors emprise" },
+};
+function badgeControle(controle) {
+  if (!controle || !controle.verdict) return "";
+  const d = CONTROLE_LIB[controle.verdict] || CONTROLE_LIB.partiel;
+  const pct = Math.round((controle.couverture || 0) * 100);
+  return `<span class="chip ${d.cls}" title="Part de l'emprise tracée réellement couverte par la structure générée">${d.txt} · ${pct}%</span>`;
+}
+function texteControle(controle) {
+  const d = CONTROLE_LIB[controle.verdict] || CONTROLE_LIB.partiel;
+  const pct = Math.round((controle.couverture || 0) * 100);
+  return `Contrôle d'emprise : ${d.txt.toLowerCase()} (${pct} %).`;
 }
 
 function renderInsertionAtelier(s) {
@@ -1096,11 +1114,13 @@ function renderInsertionAtelier(s) {
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="hd"><span class="ti-title">2 · Tracer les ombrières sur la photo</span>
-        <span class="hint" id="ins-guides-etat"></span></div>
+      <div class="hd"><span class="ti-title">2 · Type &amp; placement</span>
+        <span class="hint" id="ins-pose-etat"></span></div>
       <div class="bd">
-        <p class="sub" style="margin:0 0 10px">Pour chaque ombrière, clique son point de <b>début</b> puis son point de <b>fin</b> (son axe au sol). Plusieurs possibles. C'est ce tracé qui dit à Gemini où et combien.</p>
-        <div id="ins-guides-body"></div>
+        <div class="hint" style="margin-bottom:6px">Type par défaut des nouvelles ombrières (modifiable ensuite ligne par ligne) :</div>
+        <div class="type-select" id="ins-type"></div>
+        <p class="sub" style="margin:14px 0 10px">Trace le <b>bord avant</b> de chaque ombrière : <b>clique-glisse</b> de gauche à droite, posé au sol. Un geste par ombrière, autant que tu veux. Hauteurs et pente viennent du type ; les cotes sont lues sur le plan de masse.</p>
+        <div id="ins-pose-body"></div>
       </div>
     </div>
 
@@ -1158,6 +1178,7 @@ function renderInsertionAtelier(s) {
   $("#ins-generer-api").addEventListener("click", () => genererInsertionAPI().catch(() => {}));
   $("#ins-fiche").addEventListener("click", () => genererFiche().catch(() => {}));
 
+  renderTypeSelector();
   renderPhotosInsertion();
   renderGalerie();
 }
@@ -1318,133 +1339,220 @@ function dessinerAerienne() {
 
 // ---- repères : 1 ombrière = trait de LONGUEUR + trait de LARGEUR (pente) ----
 // tracé en 4 clics : longueur début, longueur fin, largeur bas-de-pente, largeur haut-de-pente
-const guidesUI = { img: null, pts: [], scale: 1, planDims: [] };
+// ---- Type d'ombrière (Mono Bas / Mono Haut / Double) ----
+const TYPES_OMBRIERE = [
+  { famille: "START PLAINE Bas", libelle: "Mono Bas", desc: "poteau côté haut" },
+  { famille: "START PLAINE Haut", libelle: "Mono Haut", desc: "poteau côté bas" },
+  { famille: "START PLAINE Double", libelle: "Double", desc: "poteau central, profil en T" },
+];
 
-function guidesPhotoActive() {
+function renderTypeSelector() {
+  const box = $("#ins-type");
+  if (!box) return;
+  const cur = state.projet.ombriere?.famille || "START PLAINE Bas";
+  box.innerHTML = TYPES_OMBRIERE.map((t) => `
+    <button class="type-chip ${t.famille === cur ? "actif" : ""}" data-type="${esc(t.famille)}">
+      <b>${esc(t.libelle)}</b><span>${esc(t.desc)}</span>
+    </button>`).join("");
+  box.querySelectorAll("[data-type]").forEach((b) => b.addEventListener("click", async () => {
+    if (b.dataset.type === (state.projet.ombriere?.famille || "")) return;
+    const d = await api(`/api/projets/${state.projet.id}/insertion/type`, {
+      method: "PUT", body: JSON.stringify({ famille: b.dataset.type }),
+    });
+    state.projet = d.projet;
+    renderTypeSelector();
+    rafraichirPayloadEtPrompt();
+  }));
+}
+
+// ---- Placement « un geste » : un cliqué-glissé = une ombrière ----
+const poseUI = { img: null, dragging: false, a: null, b: null, ombrieres: [], planDims: [] };
+
+function posePhoto() {
+  return (state.projet.insertion || {}).photo || null;
+}
+
+function poseOmbrieres() {
   const ins = state.projet.insertion || {};
-  if (!ins.photo) return null;
-  const data = (ins.guides || {})[ins.photo] || {};
-  return {
-    photo: ins.photo,
-    ombrieres: (data.ombrieres || []).map((o) => ({
-      longueur: o.longueur.map((p) => [...p]),
-      largeur: o.largeur.map((p) => [...p]),
-      longueur_m: o.longueur_m, largeur_m: o.largeur_m,
-    })),
-  };
+  const p = (ins.poses || {})[ins.photo] || {};
+  if (Array.isArray(p.ombrieres)) return p.ombrieres.map((o) => ({ ...o }));
+  if (p.bord_avant) return [{ bord_avant: p.bord_avant }];   // ancien format
+  return [];
 }
 
-let guidesSaveTimer = null;
-function sauverGuides(ctx) {
-  clearTimeout(guidesSaveTimer);
-  guidesSaveTimer = setTimeout(() => {
-    api(`/api/projets/${state.projet.id}/insertion/guides`, {
-      method: "PUT",
-      body: JSON.stringify({ photo: ctx.photo, ombrieres: ctx.ombrieres }),
-    }).then((d) => { state.projet = d.projet; majEtatGuides(); renderCotes(ctx); rafraichirPayloadEtPrompt(); }).catch(() => {});
-  }, 500);
-}
-
-function majEtatGuides() {
-  const el = $("#ins-guides-etat");
+function majEtatPose() {
+  const el = $("#ins-pose-etat");
   if (!el) return;
-  const ctx = guidesPhotoActive();
-  const n = ctx?.ombrieres?.length || 0;
-  el.textContent = n ? `(${n} ombrière${n > 1 ? "s" : ""})` : "(rien tracé — Gemini placera seul)";
+  const n = poseUI.ombrieres.length;
+  el.textContent = n
+    ? `(${n} ombrière${n > 1 ? "s" : ""} tracée${n > 1 ? "s" : ""})`
+    : "(rien tracé — Gemini placera seul)";
 }
 
-async function renderGuides() {
-  const body = $("#ins-guides-body");
+function sauverPose() {
+  const photo = posePhoto();
+  if (!photo) return;
+  api(`/api/projets/${state.projet.id}/insertion/pose`, {
+    method: "PUT", body: JSON.stringify({ photo, ombrieres: poseUI.ombrieres }),
+  }).then((d) => {
+    state.projet = d.projet;
+    poseUI.ombrieres = poseOmbrieres();      // récupère cotes pré-remplies + tri
+    majEtatPose();
+    renderTableauOmbrieres();
+    dessinerPose();
+    rafraichirPayloadEtPrompt();
+  }).catch(() => {});
+}
+
+async function renderPose() {
+  const body = $("#ins-pose-body");
   if (!body) return;
-  majEtatGuides();
-  const ctx = guidesPhotoActive();
-  if (!ctx) {
+  const photo = posePhoto();
+  if (!photo) {
+    poseUI.ombrieres = [];
+    majEtatPose();
     body.innerHTML = `<p class="sub" style="padding:10px 14px">Choisis d'abord une photo du site.</p>`;
     return;
   }
-  try { guidesUI.planDims = (await api(`/api/projets/${state.projet.id}/insertion/plan-dims`)).dims_m || []; }
-  catch { guidesUI.planDims = []; }
-  guidesUI.pts = [];
+  poseUI.ombrieres = poseOmbrieres();
+  poseUI.dragging = false;
+  poseUI.a = poseUI.b = null;
+  majEtatPose();
+  try { poseUI.planDims = (await api(`/api/projets/${state.projet.id}/insertion/plan-dims`)).dims_m || []; }
+  catch { poseUI.planDims = []; }
+
   body.innerHTML = `
     <div class="mesure-tools">
-      <span class="hint">Par ombrière : clique <b>longueur</b> (2 pts) puis <b>largeur</b> du <b>bas</b> vers le <b>haut de pente</b> (2 pts).</span>
+      <span class="hint">Un <b>cliqué-glissé</b> = une ombrière. Recommence pour en ajouter d'autres.</span>
       <span style="flex:1"></span>
-      <button class="btn" id="g-annuler">Annuler</button>
-      <button class="btn" id="g-effacer">Tout effacer</button>
+      <button class="btn" id="p-annuler">Annuler la dernière</button>
+      <button class="btn" id="p-effacer">Tout effacer</button>
     </div>
-    <div class="mesure-status" id="g-statut"></div>
-    <div class="mesure-canvas-wrap"><canvas id="g-canvas"></canvas></div>
-    <div id="g-cotes"></div>`;
+    <div class="mesure-canvas-wrap"><canvas id="p-canvas"></canvas></div>
+    <div id="p-tableau"></div>`;
 
-  const canvas = $("#g-canvas");
+  const canvas = $("#p-canvas");
   const img = new Image();
   img.onload = () => {
-    guidesUI.scale = Math.min(1, 760 / img.naturalWidth);
-    canvas.width = Math.round(img.naturalWidth * guidesUI.scale);
-    canvas.height = Math.round(img.naturalHeight * guidesUI.scale);
-    guidesUI.img = img;
-    dessinerGuides(ctx);
-    majStatutGuides();
+    const scale = Math.min(1, 760 / img.naturalWidth);
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    poseUI.img = img;
+    dessinerPose();
   };
-  img.src = urlInsertion(ctx.photo);
+  img.src = urlInsertion(photo);
 
-  canvas.addEventListener("click", (e) => {
+  const pt = (e) => {
     const r = canvas.getBoundingClientRect();
-    guidesUI.pts.push([
+    return [
       Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)),
       Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
-    ]);
-    if (guidesUI.pts.length === 4) {
-      const i = ctx.ombrieres.length;
-      const dim = guidesUI.planDims[i] || {};
-      ctx.ombrieres.push({
-        longueur: [guidesUI.pts[0], guidesUI.pts[1]],
-        largeur: [guidesUI.pts[2], guidesUI.pts[3]],
-        longueur_m: dim.longueur_m ?? null, largeur_m: dim.largeur_m ?? null,
-      });
-      guidesUI.pts = [];
-      sauverGuides(ctx);
-      toast("Ombrière tracée. Trace la suivante ou génère.", "ok");
-    }
-    dessinerGuides(ctx);
-    majStatutGuides();
+    ];
+  };
+  canvas.addEventListener("pointerdown", (e) => {
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* pointeur non capturable */ }
+    poseUI.dragging = true;
+    poseUI.a = pt(e); poseUI.b = pt(e);
+    dessinerPose();
   });
-  $("#g-annuler").addEventListener("click", () => {
-    if (guidesUI.pts.length) guidesUI.pts.pop();
-    else if (ctx.ombrieres.length) { ctx.ombrieres.pop(); sauverGuides(ctx); }
-    dessinerGuides(ctx); majStatutGuides();
+  canvas.addEventListener("pointermove", (e) => {
+    if (!poseUI.dragging) return;
+    poseUI.b = pt(e);
+    dessinerPose();
   });
-  $("#g-effacer").addEventListener("click", () => {
-    ctx.ombrieres = []; guidesUI.pts = [];
-    sauverGuides(ctx); dessinerGuides(ctx); majStatutGuides();
+  canvas.addEventListener("pointerup", (e) => {
+    if (!poseUI.dragging) return;
+    poseUI.dragging = false;
+    const debut = poseUI.a, fin = pt(e);
+    poseUI.a = poseUI.b = null;
+    if (!debut) { dessinerPose(); return; }
+    const dx = (fin[0] - debut[0]) * canvas.width;
+    const dy = (fin[1] - debut[1]) * canvas.height;
+    if (Math.hypot(dx, dy) < 20) { dessinerPose(); return; }   // simple clic : ignoré
+    // on stocke toujours gauche -> droite (le sens de fuite est le perpendiculaire haut)
+    let [a, b] = [debut, fin];
+    if (b[0] < a[0]) [a, b] = [b, a];
+    poseUI.ombrieres.push({
+      bord_avant: [a, b],
+      famille: state.projet.ombriere?.famille || "START PLAINE Bas",
+      longueur_m: null, profondeur_m: null,      // pré-remplies par le serveur
+    });
+    sauverPose();
+    toast("Ombrière tracée.", "ok");
   });
-  renderCotes(ctx);
+
+  $("#p-annuler").addEventListener("click", () => {
+    if (!poseUI.ombrieres.length) return;
+    poseUI.ombrieres.pop();
+    sauverPose();
+  });
+  $("#p-effacer").addEventListener("click", () => {
+    poseUI.ombrieres = [];
+    sauverPose();
+  });
+  renderTableauOmbrieres();
 }
 
-// tableau des cotes réelles par ombrière (pré-remplies du plan, éditables)
-function renderCotes(ctx) {
-  const box = $("#g-cotes");
+// tableau : par ombrière, son type et ses cotes (auto du plan, modifiables)
+function renderTableauOmbrieres() {
+  const box = $("#p-tableau");
   if (!box) return;
-  if (!ctx.ombrieres.length) { box.innerHTML = ""; return; }
-  box.innerHTML = `<div class="cotes-grid">` + ctx.ombrieres.map((o, i) => `
+  if (!poseUI.ombrieres.length) { box.innerHTML = ""; return; }
+  const opts = (sel) => TYPES_OMBRIERE.map((t) =>
+    `<option value="${esc(t.famille)}" ${t.famille === sel ? "selected" : ""}>${esc(t.libelle)}</option>`).join("");
+  box.innerHTML = `<div class="cotes-grid">` + poseUI.ombrieres.map((o, i) => `
     <div class="cote-row">
       <b>Ombrière ${i + 1}</b>
-      <label>L <input class="input mini-m" type="number" step="0.1" data-cote="longueur_m" data-i="${i}" value="${o.longueur_m ?? ""}" /> m</label>
-      <label>l <input class="input mini-m" type="number" step="0.1" data-cote="largeur_m" data-i="${i}" value="${o.largeur_m ?? ""}" /> m</label>
-      <button class="btn btn-sm" data-inverser-pente="${i}" title="Inverse le sens de la pente (bas/haut) sans retracer">⇅ inverser pente</button>
-    </div>`).join("") + `</div>`;
-  box.querySelectorAll("[data-cote]").forEach((inp) => inp.addEventListener("input", () => {
-    const v = parseFloat((inp.value || "").replace(",", "."));
-    ctx.ombrieres[+inp.dataset.i][inp.dataset.cote] = v > 0 ? v : null;
-    sauverGuides(ctx);
+      <select class="input mini-select" data-champ="famille" data-i="${i}">${opts(o.famille)}</select>
+      <label>L <input class="input mini-m" type="number" step="0.1" data-champ="longueur_m" data-i="${i}" value="${o.longueur_m ?? ""}" /> m</label>
+      <label>prof. <input class="input mini-m" type="number" step="0.1" data-champ="profondeur_m" data-i="${i}" value="${o.profondeur_m ?? ""}" /> m</label>
+      <button class="btn btn-sm" data-suppr-omb="${i}" title="Retirer cette ombrière">✕</button>
+    </div>`).join("") + `</div>
+    <p class="hint" style="padding:0 16px 12px">Cotes pré-remplies depuis le plan de masse quand il est lu ; ajuste-les si besoin.</p>`;
+
+  box.querySelectorAll("[data-champ]").forEach((el) => el.addEventListener("change", () => {
+    const o = poseUI.ombrieres[+el.dataset.i];
+    if (el.dataset.champ === "famille") o.famille = el.value;
+    else {
+      const v = parseFloat((el.value || "").replace(",", "."));
+      o[el.dataset.champ] = v > 0 ? v : null;
+    }
+    sauverPose();
   }));
-  box.querySelectorAll("[data-inverser-pente]").forEach((btn) => btn.addEventListener("click", () => {
-    const o = ctx.ombrieres[+btn.dataset.inverserPente];
-    o.largeur = [o.largeur[1], o.largeur[0]];
-    sauverGuides(ctx);
-    dessinerGuides(ctx);
-    toast("Sens de pente inversé.", "ok");
+  box.querySelectorAll("[data-suppr-omb]").forEach((b) => b.addEventListener("click", () => {
+    poseUI.ombrieres.splice(+b.dataset.supprOmb, 1);
+    sauverPose();
   }));
+}
+
+function dessinerPose() {
+  const canvas = $("#p-canvas");
+  if (!canvas || !poseUI.img) return;
+  const dr = canvas.getContext("2d");
+  dr.clearRect(0, 0, canvas.width, canvas.height);
+  dr.drawImage(poseUI.img, 0, 0, canvas.width, canvas.height);
+
+  const trace = (a, b, avecNum, num) => {
+    const A = [a[0] * canvas.width, a[1] * canvas.height];
+    const B = [b[0] * canvas.width, b[1] * canvas.height];
+    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4;
+    dr.beginPath(); dr.moveTo(A[0], A[1]); dr.lineTo(B[0], B[1]); dr.stroke();
+    dr.fillStyle = "#FF00C8";
+    for (const p of [A, B]) { dr.beginPath(); dr.arc(p[0], p[1], 5, 0, 7); dr.fill(); }
+    const mx = (A[0] + B[0]) / 2, my = (A[1] + B[1]) / 2;
+    let px = -(B[1] - A[1]), py = B[0] - A[0];
+    const n = Math.hypot(px, py) || 1; px /= n; py /= n;
+    if (py > 0) { px = -px; py = -py; }
+    const L = 0.10 * Math.min(canvas.width, canvas.height);
+    traitFleche(dr, [mx, my], [mx + px * L, my + py * L], "#00C8FF");
+    if (avecNum) {
+      dr.fillStyle = "#002455"; dr.font = "bold 15px sans-serif";
+      dr.fillText(String(num), A[0] + 8, A[1] - 8);
+    }
+  };
+
+  poseUI.ombrieres.forEach((o, i) => trace(o.bord_avant[0], o.bord_avant[1], true, i + 1));
+  if (poseUI.dragging && poseUI.a && poseUI.b) trace(poseUI.a, poseUI.b, false);
 }
 
 function traitFleche(dr, a, b, coul) {
@@ -1456,45 +1564,6 @@ function traitFleche(dr, a, b, coul) {
   dr.moveTo(b[0], b[1]);
   dr.lineTo(b[0] - 12 * Math.cos(ang + 0.5), b[1] - 12 * Math.sin(ang + 0.5));
   dr.stroke();
-}
-
-function dessinerGuides(ctx) {
-  const canvas = $("#g-canvas");
-  if (!canvas || !guidesUI.img) return;
-  const dr = canvas.getContext("2d");
-  dr.clearRect(0, 0, canvas.width, canvas.height);
-  dr.drawImage(guidesUI.img, 0, 0, canvas.width, canvas.height);
-  const X = (p) => p[0] * canvas.width, Y = (p) => p[1] * canvas.height;
-  ctx.ombrieres.forEach((o, i) => {
-    const la = [X(o.longueur[0]), Y(o.longueur[0])], lb = [X(o.longueur[1]), Y(o.longueur[1])];
-    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4;
-    dr.beginPath(); dr.moveTo(la[0], la[1]); dr.lineTo(lb[0], lb[1]); dr.stroke();
-    dr.fillStyle = "#FF00C8";
-    for (const p of [la, lb]) { dr.beginPath(); dr.arc(p[0], p[1], 5, 0, 7); dr.fill(); }
-    traitFleche(dr, [X(o.largeur[0]), Y(o.largeur[0])], [X(o.largeur[1]), Y(o.largeur[1])], "#00C8FF");
-    dr.fillStyle = "#002455"; dr.font = "bold 14px sans-serif";
-    dr.fillText(String(i + 1), la[0] + 8, la[1] - 8);
-  });
-  // points en cours
-  const cols = ["#FF00C8", "#FF00C8", "#00C8FF", "#00C8FF"];
-  guidesUI.pts.forEach((p, k) => {
-    dr.fillStyle = cols[k]; dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fill();
-  });
-  if (guidesUI.pts.length === 1) {
-    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 3;
-  }
-}
-
-function majStatutGuides() {
-  const el = $("#g-statut");
-  if (!el) return;
-  const etapes = [
-    "clique le DÉBUT de la longueur (bord avant)",
-    "clique la FIN de la longueur",
-    "clique le BAS de pente (bord avant, côté profondeur)",
-    "clique le HAUT de pente (fond)",
-  ];
-  el.innerHTML = `<span class="hint">${etapes[guidesUI.pts.length]}</span>`;
 }
 
 // sélecteur de photos du site (multi) : active = base de génération
@@ -1544,7 +1613,7 @@ async function renderPhotosInsertion(sel = "#ins-photos") {
     state.projet = d.projet; toast("Photo reprise des pièces BE.", "ok"); renderPhotosInsertion(sel);
   }));
   if (sel === "#ins-photos") {  // étape 4 : tout ce qui dépend de la photo active
-    renderGuides();
+    renderPose();
     renderAlertePhoto();
     rafraichirPayloadEtPrompt();
   }
@@ -1576,12 +1645,23 @@ async function genererInsertionAPI() {
       method: "POST", body: JSON.stringify(promptEdite ? { prompt: promptEdite } : {}),
     });
     state.projet = data.projet;
-    if (prog) prog.textContent = "Image générée — regarde la galerie ci-contre.";
+    const ctrl = data.image?.controle;
+    const essais = data.image?.essais || 1;
+    const relance = essais > 1 ? " (relancé 1 fois pour un meilleur placement)" : "";
+    if (prog) prog.innerHTML = ctrl
+      ? `Image générée. ${texteControle(ctrl)}${relance}`
+      : "Image générée — regarde la galerie ci-contre.";
     const dep = $("#ins-depense");
     if (dep && data.images_projet != null) {
       dep.textContent = texteDepense(data.images_projet, data.images_global || 0, state.coutImage || 0);
     }
-    toast("Insertion générée.", "ok");
+    if (ctrl && ctrl.verdict === "faible") {
+      toast("Placement raté (ombrière hors emprise) : régénère.", "err");
+    } else if (ctrl && ctrl.verdict === "partiel") {
+      toast("Ombrière partiellement placée : à vérifier ou régénérer.", "warn");
+    } else {
+      toast("Insertion générée.", "ok");
+    }
     renderGalerie();
     const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
   } catch { if (prog) prog.textContent = ""; }
@@ -1607,6 +1687,7 @@ function renderGalerie() {
     div.innerHTML = `
       <img class="planche-img zoomable" src="${urlInsertion(v.fichier)}" alt="Insertion IA" title="Cliquer pour agrandir" />
       <div class="bd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        ${badgeControle(v.controle)}
         <label class="chip ${incluse ? "ok" : ""}" style="cursor:pointer" title="Inclure cette insertion au dossier DP exporté">
           <input type="checkbox" data-dossier="${esc(v.fichier)}" ${incluse ? "checked" : ""} style="margin-right:5px" />Dossier DP
         </label>

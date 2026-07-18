@@ -25,7 +25,7 @@ import pypdfium2 as pdfium
 from PIL import Image
 
 from . import config
-from .catalogue import CATALOGUE, parametres_effectifs
+from .catalogue import CATALOGUE, libelle_coupe, parametres_effectifs
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 GEMINI_MODELE_DEFAUT = "gemini-3-pro-image"  # Nano Banana Pro (placement + rendu)
@@ -65,11 +65,11 @@ def compteur_global() -> int:
         return 0
 
 
-def incrementer_compteur_global() -> int:
-    n = compteur_global() + 1
+def incrementer_compteur_global(n: int = 1) -> int:
+    total = compteur_global() + max(1, int(n))
     config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
-    _compteur_chemin().write_text(json.dumps({"images": n}), encoding="utf-8")
-    return n
+    _compteur_chemin().write_text(json.dumps({"images": total}), encoding="utf-8")
+    return total
 
 
 def apercu() -> dict:
@@ -433,34 +433,37 @@ def photo_emprise(projet: dict) -> Path | None:
 # à partir des 2 traits tracés (longueur + largeur), et Gemini ne fait plus que
 # l'habillage photoréaliste. Échelle = longueur px / longueur réelle du plan ;
 # sens de pente = sens du trait de largeur (bas -> haut de rampant).
-GRIS_TOIT = (70, 72, 78)
-GRIS_POTEAU = (188, 192, 198)
-GRIS_POTEAU_OMBRE = (150, 154, 160)
+#
+# 17/07/2026 (soir) : le toit n'est plus un aplat gris mais une TEXTURE de
+# modules PV sombres (grille de cellules en perspective) + fascia et poteaux
+# galvanisés. Un scaffold qui ressemble déjà à l'ombrière finie réduit la
+# latitude de Gemini : il n'a plus à « inventer » une ombrière (d'où les
+# redimensionnements constatés), seulement à rendre celle-ci photoréaliste.
+GRIS_PANNEAU = (24, 26, 32)         # module PV (quasi noir, mat)
+GRIS_CELLULE = (46, 50, 58)         # liseré entre cellules / modules
+GRIS_POTEAU = (188, 192, 198)       # acier galvanisé clair
+GRIS_FASCIA = (150, 154, 160)       # panne/fascia sous le bord avant
+COUL_TRAIT_TOIT = (14, 15, 18, 255)
 
 
-def scaffold_photo(projet: dict) -> Path | None:
-    """Photo avec l'ombrière posée en VOLUME gris, depuis les 2 traits tracés.
+def _geometrie_ombrieres(projet: dict, W: int, H: int):
+    """Génère la géométrie 3D de chaque ombrière tracée, en pixels image.
 
-    longueur = bord avant (bas de rampant), largeur = profondeur tracée du bas
-    vers le haut de rampant. Le footprint est le parallélogramme (avant + vecteur
-    largeur) ; la toiture monte de h_bas (avant) à h_haut (fond) ; poteaux
-    verticaux. Placement EXACT (c'est le tracé de l'utilisateur). None sans tracé.
+    Source unique pour le dessin du scaffold ET le contrôle géométrique
+    post-génération. Pour chaque ombrière tracée renvoie un dict :
+      a, b       : pieds du bord avant (bas de rampant), file gauche->droite
+      vx, vy     : vecteur profondeur (bas -> haut de rampant)
+      scale      : px/m (longueur du trait / longueur réelle, repli largeur)
+      h_bas,h_haut : hauteurs (m) au bord avant et au fond
+      av0,av1,ar0,ar1 : coins du toit (avant-G, avant-D, fond-G, fond-D)
+      L_m        : longueur réelle (m) si connue
     """
-    from PIL import ImageDraw
-
     guides = guides_actifs(projet)
-    photo = image_kit(projet, "photo")
-    if not guides or not guides["ombrieres"] or not photo:
-        return None
-
-    image = Image.open(photo).convert("RGB")
-    W, H = image.size
+    if not guides or not guides.get("ombrieres"):
+        return
     omb = projet.get("ombriere") or {}
     h_bas = omb.get("garde_au_sol_m") or 2.5
     h_haut = omb.get("hauteur_hors_tout_m") or 3.5
-
-    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    dr = ImageDraw.Draw(overlay)
 
     for o in guides["ombrieres"]:
         a = (o["longueur"][0][0] * W, o["longueur"][0][1] * H)
@@ -477,17 +480,82 @@ def scaffold_photo(projet: dict) -> Path | None:
             l_m = o.get("largeur_m") or 8.0
             scale = larg_px / l_m if l_m else long_px / 18.0
         vx, vy = d[0] - c[0], d[1] - c[1]          # vecteur profondeur (bas->haut)
-
         a_far, b_far = (a[0] + vx, a[1] + vy), (b[0] + vx, b[1] + vy)
 
         def haut(pt, hm):
             return (pt[0], pt[1] - hm * scale)
 
-        av0, av1 = haut(a, h_bas), haut(b, h_bas)          # avant (bas de rampant)
-        ar0, ar1 = haut(a_far, h_haut), haut(b_far, h_haut)  # fond (haut de rampant)
+        yield {
+            "a": a, "b": b, "vx": vx, "vy": vy, "scale": scale,
+            "h_bas": h_bas, "h_haut": h_haut, "L_m": L_m,
+            "av0": haut(a, h_bas), "av1": haut(b, h_bas),         # avant (bas)
+            "ar0": haut(a_far, h_haut), "ar1": haut(b_far, h_haut),  # fond (haut)
+        }
+
+
+def _toit_panneaux(dr, av0, av1, ar1, ar0, scale, L_m):
+    """Dessine le toit en modules PV : fond sombre + grille de cellules.
+
+    Le toit est le quad (avant-G, avant-D, fond-D, fond-G). On subdivise en
+    perspective par interpolation bilinéaire : colonnes le long du bord (u),
+    rangées en profondeur (v). Colonnes ~ une file de modules par place de
+    parking (2,3 m), rangées ~ modules de 1,7 m. Ça se lit comme des panneaux.
+    """
+    dr.polygon([av0, av1, ar1, ar0], fill=GRIS_PANNEAU + (255,),
+               outline=COUL_TRAIT_TOIT)
+
+    def bilin(u, v):
+        av = (av0[0] + (av1[0] - av0[0]) * u, av0[1] + (av1[1] - av0[1]) * u)
+        ar = (ar0[0] + (ar1[0] - ar0[0]) * u, ar0[1] + (ar1[1] - ar0[1]) * u)
+        return (av[0] + (ar[0] - av[0]) * v, av[1] + (ar[1] - av[1]) * v)
+
+    largeur_m = (L_m or (math.hypot(av1[0] - av0[0], av1[1] - av0[1]) / scale)) or 12.0
+    prof_px = math.hypot(ar0[0] - av0[0], ar0[1] - av0[1])
+    prof_m = prof_px / scale if scale else 8.0
+    ncol = max(4, min(40, round(largeur_m / 2.3)))
+    nrow = max(2, min(20, round(prof_m / 1.7)))
+    ep = max(1, round(scale * 0.03))
+
+    for i in range(1, ncol):
+        u = i / ncol
+        dr.line([bilin(u, 0.0), bilin(u, 1.0)], fill=GRIS_CELLULE + (255,), width=ep)
+    for j in range(1, nrow):
+        v = j / nrow
+        dr.line([bilin(0.0, v), bilin(1.0, v)], fill=GRIS_CELLULE + (255,), width=ep)
+
+
+def scaffold_photo(projet: dict) -> Path | None:
+    """Photo avec l'ombrière posée en VOLUME, depuis les 2 traits tracés.
+
+    longueur = bord avant (bas de rampant), largeur = profondeur tracée du bas
+    vers le haut de rampant. Le footprint est le parallélogramme (avant + vecteur
+    largeur) ; la toiture monte de h_bas (avant) à h_haut (fond) ; poteaux
+    verticaux. Toit texturé en modules PV (voir _toit_panneaux). Placement EXACT
+    (c'est le tracé de l'utilisateur). None sans tracé.
+    """
+    from PIL import ImageDraw
+
+    photo = image_kit(projet, "photo")
+    geoms = list(_geometrie_ombrieres(projet, *Image.open(photo).size)) if photo else []
+    if not photo or not geoms:
+        return None
+
+    image = Image.open(photo).convert("RGB")
+    W, H = image.size
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(overlay)
+
+    for g in geoms:
+        a, b = g["a"], g["b"]
+        vx, vy, scale = g["vx"], g["vy"], g["scale"]
+        h_bas, h_haut = g["h_bas"], g["h_haut"]
+        av0, av1, ar0, ar1 = g["av0"], g["av1"], g["ar0"], g["ar1"]
+
+        def haut(pt, hm):
+            return (pt[0], pt[1] - hm * scale)
 
         # poteaux : file avant + file fond, environ tous les 6 m
-        nb = max(1, int(round((L_m or long_px / scale) / 6)))
+        nb = max(1, int(round((g["L_m"] or math.hypot(b[0] - a[0], b[1] - a[1]) / scale) / 6)))
         for k in range(nb + 1):
             t = k / nb
             pied_av = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
@@ -501,9 +569,8 @@ def scaffold_photo(projet: dict) -> Path | None:
 
         ep = max(5, 0.35 * scale)
         dr.polygon([av0, av1, (av1[0], av1[1] + ep), (av0[0], av0[1] + ep)],
-                   fill=GRIS_POTEAU_OMBRE + (255,))
-        dr.polygon([av0, av1, ar1, ar0], fill=GRIS_TOIT + (255,),
-                   outline=(30, 32, 36, 255))
+                   fill=GRIS_FASCIA + (255,))
+        _toit_panneaux(dr, av0, av1, ar1, ar0, scale, g["L_m"])
 
     image = Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
     sortie = config.assets_dir(projet.get("id")) / "scaffold.png"
@@ -646,6 +713,517 @@ def plan_dims(projet: dict) -> list[tuple[float, float]]:
             for z in analyse["rangees"] if "longueur_m" in z]
 
 
+# ================================================================== FLUX « UN GESTE »
+# (refonte 17/07/2026 soir) : la seule saisie de placement est UN cliqué-glissé
+# du bord AVANT de l'ombrière sur la photo. La profondeur, les hauteurs, la pente
+# et le côté du poteau viennent du TYPE (ombriere.famille, catalogue). Gemini
+# reçoit : la photo repérée + une PHOTO DE RÉFÉRENCE réelle du type + un prompt
+# court. Plus de plan de masse, de coupe technique ni de traçage multi-lignes.
+
+def poses_actives(projet: dict) -> list[dict] | None:
+    """Ombrières tracées sur la photo active, triées de GAUCHE à DROITE.
+
+    Chaque entrée : {bord_avant, famille, longueur_m, profondeur_m}. Le type est
+    propre à chaque ombrière (repli : celui du projet, puis catalogue) ; les cotes
+    sont pré-remplies depuis le plan de masse côté UI et restent modifiables.
+    L'ordre gauche->droite sert à décrire les ombrières dans le prompt : aucun
+    numéro n'est écrit sur l'image, ce qui déteindrait sur le rendu.
+    Compatible avec l'ancien format mono ({"bord_avant": [...]}).
+    """
+    ins = projet.get("insertion") or {}
+    photo = ins.get("photo")
+    if not photo:
+        return None
+    brut = (ins.get("poses") or {}).get(photo) or {}
+    liste = brut.get("ombrieres")
+    if liste is None and brut.get("bord_avant"):
+        liste = [{"bord_avant": brut["bord_avant"]}]      # ancien format
+    defaut = (projet.get("ombriere") or {}).get("famille") or "START PLAINE Bas"
+
+    ombrieres = []
+    for o in (liste or []):
+        ba = o.get("bord_avant")
+        if not (ba and len(ba) == 2
+                and all(isinstance(p, (list, tuple)) and len(p) == 2 for p in ba)):
+            continue
+        famille = o.get("famille") if o.get("famille") in CATALOGUE else defaut
+        entree = CATALOGUE.get(famille, CATALOGUE["START PLAINE Bas"])
+        ombrieres.append({
+            "bord_avant": [list(ba[0]), list(ba[1])],
+            "famille": famille,
+            "longueur_m": o.get("longueur_m"),
+            "profondeur_m": o.get("profondeur_m") or entree["profondeur_m"],
+        })
+    if not ombrieres:
+        return None
+    ombrieres.sort(key=lambda o: (o["bord_avant"][0][0] + o["bord_avant"][1][0]) / 2)
+    return ombrieres
+
+
+def _familles_tracees(projet: dict) -> list[str]:
+    """Types distincts présents sur la photo, dans l'ordre d'apparition."""
+    vues, ordre = set(), []
+    for o in (poses_actives(projet) or []):
+        if o["famille"] not in vues:
+            vues.add(o["famille"])
+            ordre.append(o["famille"])
+    if not ordre:
+        ordre = [(projet.get("ombriere") or {}).get("famille") or "START PLAINE Bas"]
+    return ordre
+
+
+def _reference_photos(projet: dict) -> list[Path]:
+    """Photos de référence réelles, une par type distinct tracé (max 2)."""
+    chemins = []
+    for famille in _familles_tracees(projet)[:2]:
+        entree = CATALOGUE.get(famille) or CATALOGUE["START PLAINE Bas"]
+        nom = entree.get("reference_photo")
+        if not nom:
+            continue
+        chemin = config.REFERENCES_DIR / nom
+        if chemin.exists() and chemin not in chemins:
+            chemins.append(chemin)
+    return chemins
+
+
+def _reference_photo(projet: dict) -> Path | None:
+    """Première photo de référence (compat : route /insertion/reference)."""
+    refs = _reference_photos(projet)
+    return refs[0] if refs else None
+
+
+def _coupe_be_pertinente(projet: dict) -> Path | None:
+    """Coupe DP3 du BE, mais seulement si elle décrit bien ce qui est tracé.
+
+    Elle représente UN type (celui du projet). Dès qu'une ombrière tracée est
+    d'un autre type, l'envoyer comme référence géométrique fait foi contredirait
+    le texte (constaté le 18/07/2026 : coupe mono du BE + ombrière annoncée
+    double = profil incohérent rendu en V). Dans ce cas on bascule sur les
+    coupes types du catalogue, qui correspondent chacune à leur ombrière.
+    """
+    be = image_kit(projet, "coupe_be")
+    if not be:
+        return None
+    familles = _familles_tracees(projet)
+    projet_famille = (projet.get("ombriere") or {}).get("famille")
+    if familles and any(f != projet_famille for f in familles):
+        return None
+    return be
+
+
+def _coupes_payload(projet: dict) -> list[Path]:
+    """Coupes techniques à joindre (précision de la structure).
+
+    La coupe DP3 du bureau d'études prime quand elle décrit bien le ou les types
+    tracés (cf. _coupe_be_pertinente). Sinon, la coupe type du catalogue pour
+    chaque type distinct tracé (max 2). Toutes sont nettoyées de leur cartouche
+    avant envoi, le modèle recopiant volontiers la mise en page des documents.
+    """
+    be = _coupe_be_pertinente(projet)
+    if be:
+        return [be]
+    chemins = []
+    for famille in _familles_tracees(projet)[:2]:
+        entree = CATALOGUE.get(famille)
+        if not entree:
+            continue
+        source = config.COUPES_DIR / entree["coupe_pdf"]
+        if not source.exists():
+            continue
+        sortie = config.assets_dir(projet.get("id")) / f"kit_coupe_{famille.replace(' ', '_')}.png"
+        try:
+            chemins.append(_coupe_nettoyee(source, sortie))
+        except OSError:
+            continue
+    return chemins
+
+
+def _fuite(a, b):
+    """Direction perpendiculaire au bord avant, vers le HAUT de l'image (fuyante)."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    n = math.hypot(dx, dy) or 1.0
+    px, py = -dy / n, dx / n
+    if py > 0:                       # on garde la perpendiculaire qui monte
+        px, py = -px, -py
+    return px, py
+
+
+def _points_bord(o: dict, W: int, H: int):
+    """Extrémités pixel du bord avant d'une ombrière tracée."""
+    return ((o["bord_avant"][0][0] * W, o["bord_avant"][0][1] * H),
+            (o["bord_avant"][1][0] * W, o["bord_avant"][1][1] * H))
+
+
+def photo_reperee(projet: dict) -> Path | None:
+    """Photo active avec CHAQUE bord avant (MAGENTA) + sa flèche de fuite (CYAN)."""
+    from PIL import ImageDraw
+
+    ombrieres = poses_actives(projet)
+    photo = image_kit(projet, "photo")
+    if not ombrieres or not photo:
+        return None
+    image = Image.open(photo).convert("RGB")
+    W, H = image.size
+    dr = ImageDraw.Draw(image)
+    # repère MINIMAL : un simple trait fin par bord avant. Ni pastille, ni
+    # numéro, ni flèche de fuite (18/07/2026 : la flèche cyan était redessinée
+    # en grand par le modèle par-dessus les toitures, hors de la bande
+    # d'effacement — le sens de fuite est donc porté par le texte du prompt).
+    ep = max(3, round(min(W, H) / 320))
+    for o in ombrieres:
+        a, b = _points_bord(o, W, H)
+        dr.line([a, b], fill=MAGENTA, width=ep)
+    sortie = config.assets_dir(projet.get("id")) / "photo_reperee.png"
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    image.save(sortie)
+    return sortie
+
+
+def _geometrie_ombriere(o: dict, projet: dict) -> dict:
+    """Hauteurs et pente EFFECTIVES d'une ombrière tracée.
+
+    Les hauteurs viennent du type de CETTE ombrière ; les valeurs saisies au
+    niveau projet (étape Caractéristiques) ne s'appliquent qu'aux ombrières du
+    même type, sinon on collerait les hauteurs d'une mono à une double.
+    La pente est ensuite DÉDUITE des hauteurs et de la profondeur réelles : la
+    pente du catalogue, annoncée telle quelle, contredisait les cotes lues sur
+    le plan (ex. 1 m de dénivelé sur 4,3 m = 13°, pas 5°).
+    """
+    famille = o["famille"]
+    entree = CATALOGUE.get(famille, CATALOGUE["START PLAINE Bas"])
+    omb = projet.get("ombriere") or {}
+    meme_type = omb.get("famille") == famille
+    h_bas = (omb.get("garde_au_sol_m") if meme_type else None) or entree["h_bas_m"]
+    h_haut = (omb.get("hauteur_hors_tout_m") if meme_type else None) or entree["h_haut_m"]
+    prof = o.get("profondeur_m") or entree["profondeur_m"]
+    pente = entree["pente_deg"]
+    if prof and prof > 0 and h_haut > h_bas:
+        pente = round(math.degrees(math.atan((h_haut - h_bas) / prof)), 1)
+    return {"h_bas": h_bas, "h_haut": h_haut, "prof": prof, "pente": pente,
+            "entree": entree}
+
+
+def _descriptif_ombriere(o: dict, projet: dict) -> str:
+    """Phrase décrivant la structure d'une ombrière (profil, poteaux, hauteurs).
+
+    Le profil DOUBLE est décrit sans jamais parler de « deux versants » :
+    constaté le 18/07/2026, cette formulation faisait dessiner une arête au
+    milieu (profil en Y ou en V inversé) alors que la coupe Solstyce est un T,
+    c'est-à-dire UNE seule toiture inclinée d'un seul tenant sur poteau central.
+    """
+    g = _geometrie_ombriere(o, projet)
+    e = g["entree"]
+    if e["double"]:
+        profil = ("de type DOUBLE : une file de poteaux centraux uniques portant "
+                  "UNE SEULE toiture inclinée d'un seul tenant, qui déborde en "
+                  "porte-à-faux de part et d'autre du poteau. En coupe, "
+                  "l'ensemble dessine un T. La pente descend de façon continue et "
+                  "régulière d'un bord à l'autre : la toiture reste un plan "
+                  "unique, sans arête ni sommet au milieu")
+    else:
+        cote = "du côté haut" if e["poteau"] == "haut" else "du côté bas"
+        profil = (f"de type MONOPENTE : une seule file de poteaux {cote} du "
+                  "versant, portant une toiture inclinée d'un seul tenant")
+    return (f"{profil}. Hauteur libre {_fmt(g['h_bas'])} m au point bas et "
+            f"{_fmt(g['h_haut'])} m au point haut, soit une pente douce "
+            f"d'environ {_fmt(g['pente'])}°.")
+
+
+def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) -> str:
+    """Prompt Gemini du flux « un geste », une ou plusieurs ombrières."""
+    ins = projet.get("insertion") or {}
+    ombrieres = poses_actives(projet) or []
+    n = len(ombrieres)
+    pluriel = n > 1
+
+    tete = ("Insère "
+            + (f"{n} ombrières photovoltaïques de parking" if pluriel
+               else "une ombrière photovoltaïque de parking")
+            + " dans cette photographie, de façon photoréaliste, comme si "
+            + ("elles avaient" if pluriel else "elle avait") + " toujours été là.")
+    blocs = [tete]
+
+    if pose and ombrieres:
+        blocs.append(
+            f"PLACEMENT. L'image à éditer porte {n} trait"
+            f"{'s' if pluriel else ''} magenta, et tu dois construire "
+            f"EXACTEMENT {n} ombrière{'s' if pluriel else ''} : une par trait, "
+            "ni plus, ni moins, et aucune ailleurs dans l'image. Chaque trait "
+            "magenta est le bord AVANT d'une ombrière, posé au sol, du côté le "
+            "plus proche du spectateur : la base des poteaux avant repose "
+            "précisément sur ce trait, sur toute sa longueur, et la toiture "
+            "s'éloigne du spectateur vers le fond de l'image. Ne déplace, "
+            "n'allonge ni ne raccourcis aucun trait. Les traits magenta sont de "
+            "simples GUIDES de tracé : ils ne doivent pas apparaître dans l'image "
+            "finale, remplace-les par le sol et la structure. N'ajoute aucune "
+            "flèche, aucun trait de couleur, aucun symbole ni aucun texte.")
+        # cotes réelles, ombrière par ombrière, dans l'ordre gauche -> droite
+        details = []
+        for i, o in enumerate(ombrieres, 1):
+            rang = (f"Ombrière {i} (le {i}{'er' if i == 1 else 'e'} trait en "
+                    "partant de la gauche)") if pluriel else "L'ombrière"
+            cotes = []
+            if o.get("longueur_m"):
+                cotes.append(f"{_fmt(o['longueur_m'])} m de long")
+            if o.get("profondeur_m"):
+                cotes.append(f"{_fmt(o['profondeur_m'])} m de profondeur")
+            mesure = (" mesure " + " sur ".join(cotes)) if cotes else ""
+            details.append(f"{rang}{mesure}. Elle est "
+                           f"{_descriptif_ombriere(o, projet)}")
+        # NB : ne jamais titrer ce bloc « COTES » — constaté le 18/07/2026, le
+        # modèle traçait alors de vraies lignes de cote chiffrées sur la photo.
+        blocs.append(
+            "PROPORTIONS (ces mesures servent uniquement à dimensionner les "
+            "volumes ; elles ne doivent jamais apparaître dans l'image). "
+            + " ".join(details))
+    else:
+        defaut = {"famille": (projet.get("ombriere") or {}).get("famille")
+                  or "START PLAINE Bas"}
+        blocs.append("PLACEMENT. Implante l'ombrière sur la zone de stationnement "
+                     "la plus dégagée et cohérente de la photo.")
+        blocs.append("STRUCTURE. Ombrière "
+                     + _descriptif_ombriere(defaut, projet) + ".")
+
+    blocs.append(
+        "MATERIAUX. Structure en acier galvanisé gris clair (poteaux caisson, "
+        "poutres et arbalétriers), toiture de modules photovoltaïques NOIRS et "
+        "mats (full black) alignés en trame régulière, sous-face claire.")
+
+    familles = _familles_tracees(projet)[:2]
+    noms = [libelle_coupe(f) for f in familles]
+
+    coupes = _coupes_payload(projet)
+    if coupes:
+        if _coupe_be_pertinente(projet):
+            quoi = ("Le dessin technique joint est la coupe du projet, tracée par "
+                    "le bureau d'études")
+        elif len(coupes) > 1:
+            quoi = ("Les dessins techniques joints sont les coupes types, dans "
+                    f"l'ordre : {' puis '.join(noms[:len(coupes)])}")
+        else:
+            quoi = f"Le dessin technique joint est la coupe type {noms[0]}"
+        foi = "Elles font foi" if len(coupes) > 1 else "Elle fait foi"
+        blocs.append(
+            f"COUPE. {quoi}. {foi} pour la géométrie : silhouette vue de bout, "
+            "position des poteaux sous la toiture, inclinaison, porte-à-faux et "
+            "proportions. Respecte ce profil exactement. Ne recopie dans l'image "
+            "ni trait de cote, ni cartouche, ni texte de ces dessins.")
+
+    refs = _reference_photos(projet)
+    if refs:
+        if len(refs) > 1:
+            quoi = ("Les photographies jointes montrent de vraies ombrières, dans "
+                    f"l'ordre : {' puis '.join(noms[:len(refs)])}")
+        else:
+            quoi = "La photographie jointe montre une vraie ombrière de ce genre"
+        blocs.append(
+            f"REFERENCE. {quoi}. Elles servent uniquement de repère de réalisme : "
+            "aspect de l'acier galvanisé, finesse des profilés, façon dont la "
+            "lumière accroche la structure. N'en recopie NI le fond, NI les "
+            "voitures, NI le ciel, NI la couleur des panneaux (garde des modules "
+            "noirs), et si leur silhouette diffère de la coupe, c'est la COUPE qui "
+            "l'emporte.")
+
+    sous_quoi = "chaque ombrière" if pluriel else "l'ombrière"
+    blocs.append(
+        "INTEGRATION. Garde le reste de la scène rigoureusement identique : les "
+        "voitures, le revêtement du sol et ses marquages, les bordures, les arbres, "
+        "les bâtiments et le ciel restent exactement à leur place. Reproduis la "
+        f"lumière du jour et la direction des ombres de la photo ; pose sous "
+        f"{sous_quoi} une ombre portée douce, orientée comme celles déjà visibles "
+        "dans la scène. Les poteaux sont verticaux et posés sur le bitume.")
+
+    # dernier bloc = celui qui pèse le plus : on y remet l'interdiction
+    # d'annotation, le modèle ayant tendance à dessiner les mesures reçues.
+    rendu = ["RENDU. Le résultat est une photographie plein cadre, au même cadrage "
+             "que l'originale, telle qu'on la prendrait sur place : aucun texte, "
+             "aucun chiffre, aucune cote ni ligne de mesure, aucune flèche, aucun "
+             "repère de couleur, aucun logo ni filigrane."]
+    libres = (ins.get("consignes") or "").strip()
+    corr = (affinage or ins.get("affinage") or "").strip()
+    if libres:
+        rendu.append(libres if libres.endswith((".", "!", "?")) else libres + ".")
+    if corr:
+        rendu.append(corr if corr.endswith((".", "!", "?")) else corr + ".")
+    blocs.append(" ".join(rendu))
+    return "\n\n".join(blocs)
+
+
+def _bande_marqueur(projet: dict, taille: tuple[int, int]) -> np.ndarray | None:
+    """Masque de la géométrie du repère (bord avant + flèche), dilaté, à `taille`.
+
+    On connaît EXACTEMENT où le repère a été dessiné : on limite l'effacement à
+    cette bande, pour ne jamais toucher le reste de la scène (enseignes rouges…).
+    """
+    from PIL import Image, ImageDraw
+
+    ombrieres = poses_actives(projet)
+    if not ombrieres:
+        return None
+    W, H = taille
+    ep = max(10, round(min(W, H) / 90))
+    lg = 0.12 * min(W, H)
+    img = Image.new("L", (W, H), 0)
+    dr = ImageDraw.Draw(img)
+    for o in ombrieres:
+        a, b = _points_bord(o, W, H)
+        dr.line([a, b], fill=255, width=ep)
+        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+        fx, fy = _fuite(a, b)
+        dr.line([(mx, my), (mx + fx * lg, my + fy * lg)], fill=255, width=ep)
+    return np.asarray(img) > 0
+
+
+def effacer_marqueur(projet: dict, photo_propre: Path, image_generee: bytes) -> bytes:
+    """Retire les pixels résiduels du repère (magenta/cyan) laissés par Gemini.
+
+    Le repère de pose est dessiné SUR la photo envoyée ; le modèle le conserve
+    souvent. On efface uniquement dans la BANDE géométrique connue du repère
+    (jamais ailleurs), aux pixels de teinte magenta/cyan, et on les remplit avec
+    une version FLOUTÉE du rendu lui-même : le contenu local (ombre, structure)
+    est préservé, sans cicatrice claire d'un recollage de la photo ensoleillée.
+    """
+    import io
+
+    from PIL import Image, ImageFilter
+
+    try:
+        gen = Image.open(io.BytesIO(image_generee)).convert("RGB")
+    except OSError:
+        return image_generee
+    bande = _bande_marqueur(projet, gen.size)
+    if bande is None:
+        return image_generee
+    arr = np.asarray(gen).astype(np.int16)
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    magenta = (r - g > 12) & (b - g > 8) & (r > 80)          # trait + bords roses pâles
+    cyan = (g - r > 45) & (b - r > 45) & (r < 130) & (g > 140)  # flèche
+    marque = bande & (magenta | cyan)
+    if not marque.any():
+        return image_generee
+    masque = Image.fromarray((marque * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(9))
+    m = np.asarray(masque) > 0
+
+    # comblement par convolution normalisée : chaque pixel du repère est remplacé
+    # par la moyenne des pixels VALIDES (hors repère) de son voisinage. Le repère
+    # est donc exclu de ses propres sources (un simple flou, lui, resterait rose
+    # car le trait est plus large que le rayon). Fenêtre carrée via image intégrale.
+    def _boxsum(a: np.ndarray, r: int) -> np.ndarray:
+        H, W = a.shape
+        ii = np.zeros((H + 1, W + 1), dtype=np.float64)
+        ii[1:, 1:] = np.cumsum(np.cumsum(a, axis=0), axis=1)
+        y0 = np.clip(np.arange(H) - r, 0, H)
+        y1 = np.clip(np.arange(H) + r + 1, 0, H)
+        x0 = np.clip(np.arange(W) - r, 0, W)
+        x1 = np.clip(np.arange(W) + r + 1, 0, W)
+        return (ii[np.ix_(y1, x1)] - ii[np.ix_(y0, x1)]
+                - ii[np.ix_(y1, x0)] + ii[np.ix_(y0, x0)])
+
+    rayon = max(20, round(min(gen.size) / 55))   # > largeur du trait
+    valide = (~m).astype(np.float64)
+    den = _boxsum(valide, rayon) + 1e-6
+    g32 = np.asarray(gen).astype(np.float64)
+    out = np.asarray(gen).astype(np.float64).copy()
+    for c in range(3):
+        comble = _boxsum(g32[..., c] * valide, rayon) / den
+        canal = out[..., c]
+        canal[m] = comble[m]
+        out[..., c] = canal
+    tampon = io.BytesIO()
+    Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(tampon, "PNG")
+    return tampon.getvalue()
+
+
+def _preparer_requete_pose(projet: dict, affinage: str = "") -> dict:
+    """Lot du flux « un geste » : [photo repérée, coupe(s), référence(s)] + prompt.
+
+    La coupe (DP3 du BE si fournie, sinon catalogue) donne le profil exact ; la
+    photo de référence donne le réalisme. Les deux sont réduites à l'envoi.
+    """
+    base_propre = image_kit(projet, "photo")
+    if not base_propre:
+        raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
+    ombrieres = poses_actives(projet)
+    reperee = photo_reperee(projet) if ombrieres else None
+    base, mode = (reperee, "pose") if reperee else (base_propre, "libre")
+
+    chemins: list[Path] = [base]
+    roles = ["photo"]
+    for coupe in _coupes_payload(projet):
+        chemins.append(coupe)
+        roles.append("coupe")
+    for ref in _reference_photos(projet):
+        chemins.append(ref)
+        roles.append("reference")
+
+    prompt = construire_prompt_pose(projet, affinage=affinage, pose=bool(ombrieres))
+    return {"chemins": chemins, "roles": roles, "prompt": prompt,
+            "base_propre": base_propre, "mode": mode}
+
+
+def _bandes_pose(projet: dict, W: int, H: int) -> list[list[tuple[float, float]]]:
+    """Emprises approximatives des toits : un quad par ombrière, extrudé vers la
+    fuite. La profondeur en px est estimée depuis la longueur du trait et les
+    cotes réelles quand elles sont connues (sinon ratio nominal). Sert au
+    contrôle de présence, pas à une mesure exacte."""
+    bandes = []
+    for o in (poses_actives(projet) or []):
+        a, b = _points_bord(o, W, H)
+        long_px = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
+        prof = o.get("profondeur_m") or 5.0
+        L = o.get("longueur_m")
+        # avec les 2 cotes réelles, le ratio est exact ; sinon largeur nominale 12 m
+        ratio = min(1.4, max(0.25, prof / (L if L and L > 0 else 12.0)))
+        fx, fy = _fuite(a, b)
+        dp = long_px * ratio
+        bandes.append([a, b, (b[0] + fx * dp, b[1] + fy * dp),
+                       (a[0] + fx * dp, a[1] + fy * dp)])
+    return bandes
+
+
+def controle_pose(projet: dict, photo_propre: Path, image_generee: bytes) -> dict | None:
+    """Contrôle de présence pour le flux « un geste » : l'ombrière a-t-elle bien
+    été construite sur/derrière le bord avant tracé ? Mesure la part de la bande
+    d'emprise approximative réellement modifiée par Gemini. Verdict indicatif
+    (placement non garanti au pixel dans ce mode)."""
+    import io
+
+    from PIL import Image, ImageDraw, ImageFilter
+
+    try:
+        orig = Image.open(photo_propre).convert("RGB")
+        gen = Image.open(io.BytesIO(image_generee)).convert("RGB")
+    except OSError:
+        return None
+    W0, H0 = orig.size
+    bandes = _bandes_pose(projet, W0, H0)
+    if not bandes:
+        return None
+    ech = min(1.0, 1000 / max(W0, H0))
+    W, H = max(1, round(W0 * ech)), max(1, round(H0 * ech))
+
+    masque = Image.new("L", (W, H), 0)
+    dessin = ImageDraw.Draw(masque)
+    for bande in bandes:
+        dessin.polygon([(x * ech, y * ech) for x, y in bande], fill=255)
+    attendu = np.asarray(masque) > 0
+    aire = int(attendu.sum())
+    if aire == 0:
+        return None
+
+    gen = gen.resize((W, H), Image.LANCZOS)
+    orig_s = orig.resize((W, H), Image.LANCZOS)
+    o = np.asarray(orig_s.convert("L"), dtype=np.float32)
+    g = np.asarray(gen.convert("L"), dtype=np.float32)
+    g = (g - g.mean()) / (g.std() or 1.0) * (o.std() or 1.0) + o.mean()
+    diff = Image.fromarray(np.clip(np.abs(g - o), 0, 255).astype(np.uint8))
+    modifie = np.asarray(diff.filter(ImageFilter.GaussianBlur(3))) > 16
+
+    couverture = int((attendu & modifie).sum()) / aire
+    verdict = "ok" if couverture >= 0.55 else "partiel" if couverture >= 0.30 else "faible"
+    return {"couverture": round(couverture, 3), "verdict": verdict}
+
+
 # ------------------------------------------------------------------ état projet
 
 def etat(projet: dict) -> dict:
@@ -667,7 +1245,25 @@ _MIMES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
           ".webp": "image/webp"}
 
 
-def _part_image(chemin: Path) -> dict:
+def _part_image(chemin: Path, max_px: int | None = None) -> dict:
+    """Encode une image pour Gemini. `max_px` la réduit (JPEG) au besoin :
+    utile pour la photo de référence, simple repère de structure, inutile à
+    envoyer en pleine résolution (payload et latence en moins, qualité égale —
+    le format de sortie vient de la photo à éditer, pas de la référence)."""
+    if max_px:
+        try:
+            with Image.open(chemin) as im:
+                if max(im.size) > max_px:
+                    ech = max_px / max(im.size)
+                    petite = im.convert("RGB").resize(
+                        (round(im.width * ech), round(im.height * ech)), Image.LANCZOS)
+                    import io
+                    buf = io.BytesIO()
+                    petite.save(buf, "JPEG", quality=85)
+                    return {"inline_data": {"mime_type": "image/jpeg",
+                                            "data": base64.b64encode(buf.getvalue()).decode()}}
+        except OSError:
+            pass
     mime = _MIMES.get(chemin.suffix.lower(), "image/jpeg")
     return {"inline_data": {"mime_type": mime,
                             "data": base64.b64encode(chemin.read_bytes()).decode()}}
@@ -843,6 +1439,65 @@ def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
     return tampon.getvalue()
 
 
+def controle_couverture(projet: dict, photo_propre: Path, image_generee: bytes) -> dict | None:
+    """Vérifie que Gemini a bien construit l'ombrière SUR toute l'emprise tracée.
+
+    Panne constatée (17/07, Carrefour Anse) : le modèle raccourcit l'ombrière ou
+    laisse un trou entre deux structures, malgré le scaffold. On rasterise
+    l'emprise du toit attendue (les quads du scaffold) et on la compare à la zone
+    réellement modifiée par Gemini (diff contre la photo propre). Le taux de
+    recouvrement de l'emprise attendue donne un verdict :
+      >= 0,82  ok        (l'ombrière couvre bien le tracé)
+      >= 0,60  partiel   (structure raccourcie / trou partiel)
+      <  0,60  faible    (placement raté, à régénérer)
+    Renvoie None si aucun tracé exploitable (mode libre : rien à vérifier).
+    """
+    import io
+
+    from PIL import Image, ImageDraw, ImageFilter
+
+    try:
+        orig = Image.open(photo_propre).convert("RGB")
+        gen = Image.open(io.BytesIO(image_generee)).convert("RGB")
+    except OSError:
+        return None
+    W0, H0 = orig.size
+    geoms = list(_geometrie_ombrieres(projet, W0, H0))
+    if not geoms:
+        return None
+
+    # résolution de travail (bornée pour la vitesse)
+    ech = min(1.0, 1000 / max(W0, H0))
+    W, H = max(1, round(W0 * ech)), max(1, round(H0 * ech))
+
+    # emprise attendue = union des quads de toit
+    masque_img = Image.new("L", (W, H), 0)
+    dr = ImageDraw.Draw(masque_img)
+    for g in geoms:
+        quad = [g["av0"], g["av1"], g["ar1"], g["ar0"]]
+        dr.polygon([(x * ech, y * ech) for x, y in quad], fill=255)
+    attendu = np.asarray(masque_img) > 0
+    aire_attendue = int(attendu.sum())
+    if aire_attendue == 0:
+        return None
+
+    # zone réellement modifiée = diff (exposition alignée) gen vs photo propre
+    gen = gen.resize((W, H), Image.LANCZOS)
+    orig_s = orig.resize((W, H), Image.LANCZOS)
+    o = np.asarray(orig_s.convert("L"), dtype=np.float32)
+    g_arr = np.asarray(gen.convert("L"), dtype=np.float32)
+    g_arr = (g_arr - g_arr.mean()) / (g_arr.std() or 1.0) * (o.std() or 1.0) + o.mean()
+    diff = Image.fromarray(np.clip(np.abs(g_arr - o), 0, 255).astype(np.uint8))
+    diff = diff.filter(ImageFilter.GaussianBlur(3))
+    modifie = np.asarray(diff) > 16
+
+    inter = int((attendu & modifie).sum())
+    couverture = inter / aire_attendue
+    verdict = "ok" if couverture >= 0.82 else "partiel" if couverture >= 0.60 else "faible"
+    return {"couverture": round(couverture, 3), "verdict": verdict,
+            "n_ombrieres": len(geoms)}
+
+
 def _preparer_requete(projet: dict, affinage: str = "") -> dict:
     """Assemble le lot d'images v5 + le prompt auto (sans appeler Gemini).
 
@@ -912,28 +1567,55 @@ def _preparer_requete(projet: dict, affinage: str = "") -> dict:
 def apercu_prompt(projet: dict) -> str:
     """Prompt qui SERAIT envoyé, pour l'aperçu éditable (sans génération)."""
     try:
-        return _preparer_requete(projet)["prompt"]
+        return _preparer_requete_pose(projet)["prompt"]
     except InsertionError:
         return ""
 
 
 def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -> dict:
-    """Génère UNE insertion via Gemini (Nano Banana Pro).
+    """Génère UNE insertion via Gemini (Nano Banana Pro), flux « un geste ».
 
-    Pipeline v5 (17/07/2026, méthode officielle Nano Banana) : photo annotée
-    des axes maganta + coupe DP3 -> génération au ratio de la photo -> décadrage
-    + recollage de la scène (contre la photo PROPRE). `prompt_override` : prompt
-    édité à la main. Renvoie {fichier, date, etiquette, modele, prompt}.
+    Photo repérée (bord avant + flèche de fuite) + photo de référence réelle du
+    type -> génération au ratio de la photo -> décadrage + recollage de scène
+    (contre la photo PROPRE). `prompt_override` : prompt édité à la main.
+    Renvoie {fichier, date, etiquette, modele, prompt, controle}.
     """
     if not api_configuree():
         raise InsertionError("Mode API non configuré : clé GEMINI_API_KEY absente.")
-    req = _preparer_requete(projet, affinage=affinage)
+    req = _preparer_requete_pose(projet, affinage=affinage)
     propre = req["base_propre"]   # photo NUE (le recollage se fait contre elle)
     prompt = prompt_override.strip() if prompt_override and prompt_override.strip() else req["prompt"]
-    parts: list[dict] = [{"text": prompt}] + [_part_image(c) for c in req["chemins"]]
+    # la photo à éditer part en pleine résolution ; coupes et références, réduites
+    # (simples repères de géométrie et de style, inutiles en pleine définition).
+    parts: list[dict] = [{"text": prompt}]
+    for role, chemin in zip(req["roles"], req["chemins"]):
+        parts.append(_part_image(chemin, max_px=None if role == "photo" else 1280))
 
-    image = _appel_gemini(parts, aspect_ratio=_ratio_photo(propre))
-    image = decadrer(propre, image)
+    ratio = _ratio_photo(propre)
+    aspect_ratio = ratio
+
+    # Relance auto : si le contrôle de présence détecte un placement raté
+    # (verdict « faible »), on régénère une fois et on garde la MEILLEURE
+    # tentative. Ne coûte 2x que sur un échec ; sans pose (pas de contrôle),
+    # une seule tentative. Désactivable par GVDP_AUTO_RETRY=0.
+    retry = os.environ.get("GVDP_AUTO_RETRY", "1") != "0" and poses_actives(projet) is not None
+    essais_max = 2 if retry else 1
+    meilleur_img, meilleur_ctrl, essais = None, None, 0
+    for _ in range(essais_max):
+        essais += 1
+        img = _appel_gemini(parts, aspect_ratio=aspect_ratio)
+        img = decadrer(propre, img)
+        img = effacer_marqueur(projet, propre, img)   # retire le repère magenta/cyan résiduel
+        # contrôle de présence AVANT le recollage de scène (qui, en supprimant les
+        # zones inchangées, gonflerait artificiellement la couverture mesurée)
+        ctrl = controle_pose(projet, propre, img)
+        cov = (ctrl or {}).get("couverture", 0.0)
+        if meilleur_ctrl is None or cov > (meilleur_ctrl or {}).get("couverture", -1.0):
+            meilleur_img, meilleur_ctrl = img, ctrl
+        if not ctrl or ctrl.get("verdict") != "faible":
+            break                                     # assez bon : on s'arrête
+
+    image, controle = meilleur_img, meilleur_ctrl
     if os.environ.get("GVDP_PRESERVER_SCENE", "1") != "0":
         image = preserver_scene(propre, image)
     dossier = config.assets_dir(projet["id"]) / "insertion"
@@ -947,4 +1629,6 @@ def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -
         "etiquette": "visuel IA",
         "modele": _modele(),
         "prompt": prompt,
+        "controle": controle,
+        "essais": essais,   # nb d'appels Gemini réels (coût)
     }
