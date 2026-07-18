@@ -748,11 +748,16 @@ def poses_actives(projet: dict) -> list[dict] | None:
             continue
         famille = o.get("famille") if o.get("famille") in CATALOGUE else defaut
         entree = CATALOGUE.get(famille, CATALOGUE["START PLAINE Bas"])
+        # sens de la pente : où se trouve le POINT HAUT du rampant, vu du
+        # photographe. "fond" = la toiture monte en s'éloignant (défaut),
+        # "avant" = elle descend en s'éloignant.
+        pente_vers = o.get("pente_vers") if o.get("pente_vers") in ("fond", "avant") else "fond"
         ombrieres.append({
             "bord_avant": [list(ba[0]), list(ba[1])],
             "famille": famille,
             "longueur_m": o.get("longueur_m"),
             "profondeur_m": o.get("profondeur_m") or entree["profondeur_m"],
+            "pente_vers": pente_vers,
         })
     if not ombrieres:
         return None
@@ -905,6 +910,11 @@ def _descriptif_ombriere(o: dict, projet: dict) -> str:
     """
     g = _geometrie_ombriere(o, projet)
     e = g["entree"]
+    vers_fond = o.get("pente_vers", "fond") == "fond"
+    haut_ou = "au fond, loin du spectateur" if vers_fond else "devant, côté spectateur"
+    sens = ("la toiture monte en s'éloignant du spectateur" if vers_fond
+            else "la toiture descend en s'éloignant du spectateur")
+
     if e["double"]:
         profil = ("de type DOUBLE : une file de poteaux centraux uniques portant "
                   "UNE SEULE toiture inclinée d'un seul tenant, qui déborde en "
@@ -912,13 +922,22 @@ def _descriptif_ombriere(o: dict, projet: dict) -> str:
                   "l'ensemble dessine un T. La pente descend de façon continue et "
                   "régulière d'un bord à l'autre : la toiture reste un plan "
                   "unique, sans arête ni sommet au milieu")
+        poteaux = ""
     else:
         cote = "du côté haut" if e["poteau"] == "haut" else "du côté bas"
         profil = (f"de type MONOPENTE : une seule file de poteaux {cote} du "
                   "versant, portant UNE SEULE toiture inclinée d'un seul tenant")
+        # le côté du poteau se déduit du type ET du sens de la pente : cela
+        # fixe entièrement la silhouette vue du photographe.
+        poteau_fond = (e["poteau"] == "haut") == vers_fond
+        poteaux = (" Ses poteaux sont donc "
+                   + ("au fond, du côté éloigné du spectateur."
+                      if poteau_fond else "devant, du côté du spectateur."))
+
     return (f"{profil}. Hauteur libre {_fmt(g['h_bas'])} m au point bas et "
             f"{_fmt(g['h_haut'])} m au point haut, soit une pente douce "
-            f"d'environ {_fmt(g['pente'])}°.")
+            f"d'environ {_fmt(g['pente'])}°. SENS DE LA PENTE : son point haut "
+            f"est {haut_ou}, autrement dit {sens}.{poteaux}")
 
 
 def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) -> str:

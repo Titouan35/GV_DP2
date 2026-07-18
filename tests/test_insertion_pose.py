@@ -198,6 +198,68 @@ def test_coupe_be_prime_toujours(tmp_path, monkeypatch):
     assert "elle prime sur tout le reste" in p
 
 
+def test_sens_de_pente_par_defaut_et_inverse(tmp_path, monkeypatch):
+    """Le sens de la pente (côté du point haut) est explicite dans le prompt."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, bord_avant=[[0.2, 0.6], [0.8, 0.6]])
+    assert insertion_ia.poses_actives(projet)[0]["pente_vers"] == "fond"   # défaut
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "SENS DE LA PENTE" in p
+    assert "point haut est au fond" in p and "monte en s'éloignant" in p
+
+    rel = projet["insertion"]["photo"]
+    projet["insertion"]["poses"][rel]["ombrieres"][0]["pente_vers"] = "avant"
+    p2 = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "point haut est devant" in p2 and "descend en s'éloignant" in p2
+
+
+def test_cote_des_poteaux_deduit_du_type_et_du_sens(tmp_path, monkeypatch):
+    """Type + sens de pente fixent le côté des poteaux (silhouette complète).
+
+    Mono Bas = poteau côté HAUT : si le point haut est au fond, les poteaux
+    sont au fond ; si le point haut passe devant, ils passent devant.
+    Mono Haut = poteau côté BAS : le raisonnement s'inverse.
+    """
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    cas = [
+        ("START PLAINE Bas", "fond", "poteaux sont donc au fond"),
+        ("START PLAINE Bas", "avant", "poteaux sont donc devant"),
+        ("START PLAINE Haut", "fond", "poteaux sont donc devant"),
+        ("START PLAINE Haut", "avant", "poteaux sont donc au fond"),
+    ]
+    for i, (famille, sens, attendu) in enumerate(cas):
+        projet, _ = _projet_photo(tmp_path / f"c{i}", famille=famille, ombrieres=[
+            {"bord_avant": [[0.2, 0.6], [0.8, 0.6]], "famille": famille,
+             "pente_vers": sens},
+        ])
+        p = insertion_ia.construire_prompt_pose(projet, pose=True)
+        assert attendu in p, f"{famille} / {sens} : attendu « {attendu} »"
+
+
+def test_double_na_pas_de_cote_de_poteau(tmp_path, monkeypatch):
+    """Poteau central : pas de côté proche/lointain, mais le sens reste dit."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, famille="START PLAINE Double",
+                              bord_avant=[[0.2, 0.6], [0.8, 0.6]])
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "poteaux sont donc" not in p
+    assert "SENS DE LA PENTE" in p
+
+
+def test_route_pose_conserve_le_sens(client):
+    """Le sens choisi survit à l'aller-retour serveur ; valeur invalide -> défaut."""
+    pid = _creer_projet_avec_photo(client)
+    photo = client.get(f"/api/projets/{pid}/insertion/photos-disponibles").json()["active"]
+    r = client.put(f"/api/projets/{pid}/insertion/pose", json={"photo": photo, "ombrieres": [
+        {"bord_avant": [[0.2, 0.6], [0.5, 0.6]], "pente_vers": "avant"},
+        {"bord_avant": [[0.6, 0.6], [0.9, 0.6]], "pente_vers": "n'importe quoi"},
+    ]})
+    assert r.status_code == 200
+    posees = r.json()["projet"]["insertion"]["poses"][photo]["ombrieres"]
+    assert posees[0]["pente_vers"] == "avant"
+    assert posees[1]["pente_vers"] == "fond"
+
+
 def test_prompt_interdit_les_annotations(tmp_path, monkeypatch):
     """Les mesures sont données SANS jamais titrer « cotes ».
 

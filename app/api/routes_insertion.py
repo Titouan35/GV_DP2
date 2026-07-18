@@ -325,7 +325,9 @@ def sauver_pose(projet_id: str, corps: dict = Body(...)):
     """Ombrières tracées sur une photo (un cliqué-glissé = un bord avant).
 
     Corps : {photo, ombrieres: [{bord_avant: [[x,y],[x,y]], famille?,
-    longueur_m?, profondeur_m?}]} — coordonnées 0-1, gauche->droite.
+    longueur_m?, profondeur_m?, pente_vers?}]} — coordonnées 0-1,
+    gauche->droite. `pente_vers` : "fond" (la toiture monte en s'éloignant,
+    défaut) ou "avant" (elle descend en s'éloignant).
     Les cotes absentes sont pré-remplies depuis le plan de masse (par ordre des
     rangées lues), le type absent retombe sur celui du projet. Liste vide =
     efface les tracés de cette photo.
@@ -366,9 +368,12 @@ def sauver_pose(projet_id: str, corps: dict = Body(...)):
             prof = round(dims[i][1], 1)
         if prof is None:
             prof = CATALOGUE[famille]["profondeur_m"]
+        pente = o.get("pente_vers")
         ombrieres.append({
             "bord_avant": [_point(ba[0]), _point(ba[1])],
             "famille": famille, "longueur_m": L, "profondeur_m": prof,
+            # côté du point haut du rampant, vu du photographe
+            "pente_vers": pente if pente in ("fond", "avant") else "fond",
         })
 
     if ombrieres:

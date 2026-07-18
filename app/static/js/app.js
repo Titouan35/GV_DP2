@@ -1469,6 +1469,7 @@ async function renderPose() {
       bord_avant: [a, b],
       famille: state.projet.ombriere?.famille || "START PLAINE Bas",
       longueur_m: null, profondeur_m: null,      // pré-remplies par le serveur
+      pente_vers: "fond",                        // point haut au fond par défaut
     });
     sauverPose();
     toast("Ombrière tracée.", "ok");
@@ -1499,6 +1500,9 @@ function renderTableauOmbrieres() {
       <select class="input mini-select" data-champ="famille" data-i="${i}">${opts(o.famille)}</select>
       <label>L <input class="input mini-m" type="number" step="0.1" data-champ="longueur_m" data-i="${i}" value="${o.longueur_m ?? ""}" /> m</label>
       <label>prof. <input class="input mini-m" type="number" step="0.1" data-champ="profondeur_m" data-i="${i}" value="${o.profondeur_m ?? ""}" /> m</label>
+      <button class="btn btn-sm pente" data-pente="${i}"
+        title="Sens de la pente : de quel côté se trouve le point haut">${
+          (o.pente_vers || "fond") === "fond" ? "↗ haut au fond" : "↘ haut devant"}</button>
       <button class="btn btn-sm" data-suppr-omb="${i}" title="Retirer cette ombrière">✕</button>
     </div>`).join("") + `</div>`;
 
@@ -1509,6 +1513,11 @@ function renderTableauOmbrieres() {
       const v = parseFloat((el.value || "").replace(",", "."));
       o[el.dataset.champ] = v > 0 ? v : null;
     }
+    sauverPose();
+  }));
+  box.querySelectorAll("[data-pente]").forEach((b) => b.addEventListener("click", () => {
+    const o = poseUI.ombrieres[+b.dataset.pente];
+    o.pente_vers = (o.pente_vers || "fond") === "fond" ? "avant" : "fond";
     sauverPose();
   }));
   box.querySelectorAll("[data-suppr-omb]").forEach((b) => b.addEventListener("click", () => {
