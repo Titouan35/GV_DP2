@@ -369,6 +369,35 @@ def test_controle_pose_sans_pose(tmp_path, monkeypatch):
     assert insertion_ia.controle_pose(projet, clean, _png(Image.open(clean))) is None
 
 
+def test_effacer_marqueur_hors_bande_mais_epargne_les_rouges(tmp_path, monkeypatch):
+    """Le repère est effacé même loin du tracé, sans toucher au rouge de la scène.
+
+    Constaté sur Anse (18/07/2026) : le modèle redessine le trait déplacé et
+    allongé — 27 477 pixels roses sur 27 480 tombaient HORS de la bande. Le
+    discriminant retenu est l'équilibre R≈B du magenta (résidu mesuré
+    R149 G109 B148), qui exclut un rouge d'enseigne (R220 G30 B60).
+    """
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, clean = _projet_photo(tmp_path, bord_avant=[[0.2, 0.6], [0.3, 0.6]])
+    W, H = Image.open(clean).size
+    gen = Image.open(clean).convert("RGB")
+    dr = ImageDraw.Draw(gen)
+    # trait rose pâle très loin du tracé (comme le fait le modèle)
+    dr.line([(0.55 * W, 0.30 * H), (0.95 * W, 0.30 * H)], fill=(149, 109, 148), width=9)
+    # enseigne rouge de la scène, à préserver
+    dr.rectangle([0.05 * W, 0.05 * H, 0.25 * W, 0.15 * H], fill=(220, 30, 60))
+
+    out = insertion_ia.effacer_marqueur(projet, clean, _png(gen))
+    arr = np.asarray(Image.open(io.BytesIO(out)).convert("RGB")).astype(int)
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+
+    magenta = (r - g > 25) & (b - g > 25) & (abs(r - b) < 45) & (r > 90)
+    assert magenta.sum() == 0                      # repère efface, meme hors bande
+
+    rouge = arr[int(0.10 * H), int(0.15 * W)]
+    assert tuple(rouge) == (220, 30, 60)           # enseigne intacte
+
+
 def test_effacer_marqueur_retire_le_repere(tmp_path, monkeypatch):
     """Un trait magenta dans la bande du repère est effacé ; ailleurs, intact."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)

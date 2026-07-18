@@ -1117,9 +1117,23 @@ def effacer_marqueur(projet: dict, photo_propre: Path, image_generee: bytes) -> 
         return image_generee
     arr = np.asarray(gen).astype(np.int16)
     r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
-    magenta = (r - g > 12) & (b - g > 8) & (r > 80)          # trait + bords roses pâles
-    cyan = (g - r > 45) & (b - r > 45) & (r < 130) & (g > 140)  # flèche
-    marque = bande & (magenta | cyan)
+
+    # Deux niveaux (18/07/2026). Le modèle ne se contente pas de conserver le
+    # repère : il le REDESSINE déplacé et allongé, très au-delà du tracé
+    # d'origine (constaté sur Anse : 27 477 pixels roses sur 27 480 tombaient
+    # hors de la bande géométrique). Restreindre à la bande ne suffit donc pas.
+    #
+    # Le discriminant fiable n'est pas la saturation mais l'ÉQUILIBRE R≈B :
+    # le magenta a rouge et bleu au-dessus du vert et proches l'un de l'autre
+    # (résidu mesuré sur Anse : R149 G109 B148, b-g=38, |r-b|=1), alors qu'un
+    # rouge d'enseigne a le bleu très en dessous du rouge (R220 G30 B60,
+    # b-g=30, |r-b|=160) et le ciel un rouge bas. Ce test permet d'effacer le
+    # repère PARTOUT sans mordre sur la scène.
+    magenta = (r - g > 25) & (b - g > 25) & (abs(r - b) < 45) & (r > 90)
+    # bords très estompés et cyan résiduel : ambigus, donc bande seule
+    magenta_tres_pale = (r - g > 12) & (b - g > 8) & (r > 80)
+    cyan = (g - r > 45) & (b - r > 45) & (r < 130) & (g > 140)
+    marque = magenta | (bande & (magenta_tres_pale | cyan))
     if not marque.any():
         return image_generee
     masque = Image.fromarray((marque * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(9))

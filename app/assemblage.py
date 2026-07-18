@@ -424,12 +424,33 @@ def _insertions_selectionnees(projet: dict) -> list[Path]:
     return chemins
 
 
-def _slide_dp6(prs, projet, assets):
-    """Insertion paysagère avant / après.
+def _insertion_pour_apres(projet, assets):
+    """Ce qui illustre l'état projeté sur la planche avant/après.
 
-    L'état projeté est le photomontage DP6 du BE s'il est fourni (il prime) ;
-    sinon la première insertion IA sélectionnée, étiquetée visuel d'illustration.
+    Règle (Florent, 18/07/2026) : l'insertion IA retenue occupe l'après, pour
+    qu'elle apparaisse sur la planche de comparaison plutôt que sur une planche
+    isolée. Exception : un VRAI photomontage DP6 du bureau d'études garde la
+    priorité, car c'est la pièce réglementaire. On ne le considère comme réel
+    que s'il diffère de la photo « avant » : quand la DP6 déposée EST la photo
+    du site reprise pour l'insertion, l'avant et l'après montraient deux fois
+    la même image.
+    Renvoie (chemin_apres, est_une_insertion_ia).
     """
+    photo = (projet.get("insertion") or {}).get("photo")
+    doc6 = (projet.get("documents") or {}).get("dp6") or {}
+    dp6_est_la_photo = bool(doc6.get("fichier")) and doc6["fichier"] == photo
+
+    pages = _pages_document(projet, "dp6", assets)
+    ia = _insertions_selectionnees(projet)
+    if ia and (not pages or dp6_est_la_photo):
+        return ia[0], True
+    if pages:
+        return pages[0], False
+    return None, False
+
+
+def _slide_dp6(prs, projet, assets):
+    """Insertion paysagère avant / après (cf. _insertion_pour_apres)."""
     slide = _slide(prs)
     _entete(slide, "Insertion paysagère")
     demi = (ZONE[2] - 24) / 2
@@ -447,13 +468,11 @@ def _slide_dp6(prs, projet, assets):
                           "Photo du parking actuel (étape Insertion ou pièce DP7).", z_avant)
     _pastille(slide, z_avant[0] + 14, z_avant[1] + 14, "Avant", NAVY, BLANC)
 
-    # après : DP6 du BE prioritaire, sinon première insertion IA sélectionnée
-    pages = _pages_document(projet, "dp6", assets)
-    ia = _insertions_selectionnees(projet)
-    apres_ia = not pages and ia
-    if pages or apres_ia:
+    # après : insertion IA retenue en priorité, vrai photomontage DP6 sinon
+    apres, apres_ia = _insertion_pour_apres(projet, assets)
+    if apres:
         _rect(slide, *z_apres, fill=BLANC, ligne=GRIS_LIGNE, epaisseur=1)
-        _image_zone(slide, _optimiser(pages[0] if pages else ia[0], assets), z_apres)
+        _image_zone(slide, _optimiser(apres, assets), z_apres)
     else:
         _placeholder_zone(slide, "État projeté",
                           "Photomontage d'insertion fourni par le bureau d'études (pièce DP6, étape 2).",
@@ -536,12 +555,14 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
                          "l'implantation de l'ombrière, les places de stationnement, les "
                          "accès et le raccordement aux réseaux.", "Pièce DP2"))
 
-    # DP3 coupe : pièce du bureau d'études (upload étape 2)
+    # DP3 coupe : pièce du bureau d'études (upload étape 2).
+    # UNE seule planche, la 1re page : une coupe est un dessin unique, et les
+    # pages suivantes du PDF fourni sont en pratique d'autres pièces (constaté
+    # sur Anse, dont la page 2 rejouait le plan de masse — remarque Florent).
     titre_dp3 = "Coupe du terrain et de la construction"
     pages = _pages_document(projet, "dp3", assets)
     if pages:
-        for page in pages:
-            _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=page)
+        _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=pages[0])
     else:
         _slide_piece_image(
             prs, projet, assets, titre_dp3, "DP3",
@@ -552,11 +573,12 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     _slide_notice(prs, projet, assets)
     _slide_dp6(prs, projet, assets)
 
-    # insertions IA sélectionnées : planches « visuel d'illustration »
-    # (la 1re n'a sa propre planche que si un DP6 BE occupe déjà l'avant/après)
+    # insertions IA sélectionnées : planches « visuel d'illustration » pour
+    # celles qui ne sont PAS déjà montrées dans l'avant/après (sinon la planche
+    # isolée faisait doublon avec la comparaison — remarque Florent 18/07).
     ia = _insertions_selectionnees(projet)
-    dp6_be = bool(_pages_document(projet, "dp6", assets))
-    for chemin in (ia if dp6_be else ia[1:]):
+    deja, _ = _insertion_pour_apres(projet, assets)
+    for chemin in [c for c in ia if c != deja]:
         _slide_piece_image(prs, projet, assets, "Insertion paysagère", "Insertion",
                            image=chemin, pastille="Visuel d'illustration (IA)")
 
