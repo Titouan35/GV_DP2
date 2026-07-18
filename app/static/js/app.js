@@ -136,29 +136,33 @@ function renderChrome() {
     nav.appendChild(btn);
   }
 
-  // panneau complétude
+  // panneau complétude : anneau SVG + liste des pièces
   const ev = state.evaluation;
   const list = $("#pieces-list");
+  const arc = $("#ring-arc");
+  const CIRC = 2 * Math.PI * 30;      // r = 30 dans le SVG
   list.innerHTML = "";
   if (ev) {
     const c = ev.completude;
-    const pct = Math.round((c.pretes / c.total) * 100);
-    $("#ring").style.setProperty("--p", pct);
-    $("#ring-txt").textContent = `${c.pretes}/${c.total}`;
-    $("#prog-label").textContent = `${c.pretes} pièce${c.pretes > 1 ? "s" : ""} prête${c.pretes > 1 ? "s" : ""}`;
-    $("#prog-sub").textContent = "sur " + c.total + " attendues";
+    arc.setAttribute("stroke-dasharray", `${(c.pretes / c.total * CIRC).toFixed(1)} ${CIRC.toFixed(1)}`);
+    $("#ring-txt").textContent = c.pretes;
+    $("#ring-tot").textContent = `/${c.total}`;
+    $("#prog-label").textContent = "Pièces prêtes";
+    $("#prog-sub").textContent = `${c.pretes} sur ${c.total}`;
     for (const piece of c.pieces) {
+      const ok = piece.statut === "prete";
       const div = document.createElement("div");
-      div.className = "piece";
-      div.innerHTML = `<span class="st ${esc(piece.statut)}"></span>
-        <span class="nm">${esc(piece.titre)}<small>${esc(piece.detail)}</small></span>`;
+      div.className = "piece" + (ok ? " ok" : "");
+      div.innerHTML = `<span class="st ${esc(piece.statut)}">${ok ? "✓" : ""}</span>
+        <span class="nm">${esc(piece.titre)}</span>`;
       list.appendChild(div);
     }
   } else {
-    $("#ring").style.setProperty("--p", 0);
+    arc.setAttribute("stroke-dasharray", `0 ${CIRC.toFixed(1)}`);
     $("#ring-txt").textContent = "—";
+    $("#ring-tot").textContent = "";
     $("#prog-label").textContent = "Aucun projet ouvert";
-    $("#prog-sub").textContent = "Créez ou ouvrez un projet";
+    $("#prog-sub").textContent = "";
   }
 }
 
@@ -223,13 +227,15 @@ async function renderAccueil(main) {
     for (const pr of data.projets) {
       const c = pr.completude || { pretes: 0, total: 1 };
       const pct = Math.round((c.pretes / c.total) * 100);
+      const complet = c.pretes >= c.total;
+      const teinte = complet ? "var(--gv-green)" : "var(--gv-violet)";
       const div = document.createElement("div");
       div.className = "home-item";
       div.innerHTML = `
         <span class="t">${esc(pr.nom)}<small>modifié ${esc((pr.date_modification || "").slice(0, 10) || "—")}</small></span>
         <span class="home-comp">
-          <span class="home-bar"><i style="width:${pct}%"></i></span>
-          <small>${c.pretes}/${c.total} pièces</small>
+          <span class="home-comp-head">Complétude<b style="color:${teinte}">${c.pretes}/${c.total} pièces</b></span>
+          <span class="home-bar"><i style="width:${pct}%;background:${teinte}"></i></span>
         </span>
         <button class="iconbtn home-del" title="Supprimer le projet" aria-label="Supprimer le projet">✕</button>`;
       div.addEventListener("click", (e) => {
@@ -1320,13 +1326,26 @@ const TYPES_OMBRIERE = [
   { famille: "START PLAINE Double", libelle: "Double", desc: "poteau central, profil en T" },
 ];
 
+// schémas de profil (vus de bout) : rampant + poteau, à la manière de la coupe
+const GLYPHES_TYPE = {
+  "START PLAINE Bas": `<line x1="8" y1="10" x2="52" y2="16"/><line x1="48" y1="16" x2="48" y2="30"/>`,
+  "START PLAINE Haut": `<line x1="8" y1="16" x2="52" y2="10"/><line x1="12" y1="10" x2="12" y2="30"/>`,
+  "START PLAINE Double": `<line x1="8" y1="10" x2="52" y2="10"/><line x1="30" y1="10" x2="30" y2="30"/>`,
+};
+function glypheType(famille) {
+  return `<svg width="60" height="34" viewBox="0 0 60 34" fill="none" stroke="var(--gv-violet)"
+    stroke-width="2" stroke-linecap="round"><rect x="8" y="6" width="44" height="4" rx="1"
+    fill="#c7c0ff" stroke="none"/>${GLYPHES_TYPE[famille] || ""}</svg>`;
+}
+
 function renderTypeSelector() {
   const box = $("#ins-type");
   if (!box) return;
   const cur = state.projet.ombriere?.famille || "START PLAINE Bas";
   box.innerHTML = TYPES_OMBRIERE.map((t) => `
     <button class="type-chip ${t.famille === cur ? "actif" : ""}" data-type="${esc(t.famille)}">
-      <b>${esc(t.libelle)}</b><span>${esc(t.desc)}</span>
+      <span class="type-glyph">${glypheType(t.famille)}</span>
+      <b>${esc(t.libelle)}</b><span class="type-sub">${esc(t.desc)}</span>
     </button>`).join("");
   box.querySelectorAll("[data-type]").forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.type === (state.projet.ombriere?.famille || "")) return;
@@ -1647,18 +1666,20 @@ function renderGalerie() {
     const retenue = ins.retenue === v.fichier;
     const incluse = dansDossier.has(v.fichier);
     const div = document.createElement("div");
-    div.className = "card" + (retenue ? " retenue" : "");
+    div.className = "ins-vignette" + (retenue ? " retenue" : "");
     div.innerHTML = `
-      <img class="planche-img zoomable" src="${urlInsertion(v.fichier)}" alt="Insertion IA" title="Cliquer pour agrandir" />
-      <div class="bd" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <div class="ins-visuel">
+        <img class="zoomable" src="${urlInsertion(v.fichier)}" alt="Insertion IA" />
         ${badgeControle(v.controle)}
-        <label class="chip ${incluse ? "ok" : ""}" style="cursor:pointer" title="Inclure cette insertion au dossier DP exporté">
-          <input type="checkbox" data-dossier="${esc(v.fichier)}" ${incluse ? "checked" : ""} style="margin-right:5px" />Dossier DP
+        ${retenue ? `<span class="ins-retenue">Retenue</span>` : ""}
+      </div>
+      <div class="ins-actions">
+        <label class="ins-check" title="Inclure cette insertion au dossier DP exporté">
+          <input type="checkbox" data-dossier="${esc(v.fichier)}" ${incluse ? "checked" : ""} />Dossier DP
         </label>
-        <span style="flex:1"></span>
-        <a class="btn" href="/api/projets/${state.projet.id}/insertion/image.jpg?chemin=${encodeURIComponent(v.fichier)}" download>JPEG</a>
-        <button class="btn" data-suppr="${esc(v.fichier)}">Retirer</button>
-        <button class="btn ${retenue ? "primary" : "navy"}" data-retenue="${esc(v.fichier)}" title="Image de la fiche de validation d'emprise">${retenue ? "Retenue ✓" : "Retenir"}</button>
+        <a class="btn btn-sm" href="/api/projets/${state.projet.id}/insertion/image.jpg?chemin=${encodeURIComponent(v.fichier)}" download>JPEG</a>
+        <button class="btn btn-sm danger" data-suppr="${esc(v.fichier)}">Retirer</button>
+        <button class="btn btn-sm ${retenue ? "primary" : "navy"}" data-retenue="${esc(v.fichier)}">${retenue ? "Retenue" : "Retenir"}</button>
       </div>`;
     div.querySelector(".zoomable").addEventListener("click", () => ouvrirLightbox(urlInsertion(v.fichier)));
     box.appendChild(div);
