@@ -122,6 +122,7 @@ class Projet(BaseModel):
     statut: str = "brouillon"
     date_creation: Optional[str] = None
     date_modification: Optional[str] = None
+    modifie_par: Optional[str] = None  # auteur de la dernière sauvegarde (informatif)
     mo: MaitreOuvrage = Field(default_factory=MaitreOuvrage)
     localisation: Localisation = Field(default_factory=Localisation)
     ombriere: Ombriere = Field(default_factory=Ombriere)

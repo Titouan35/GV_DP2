@@ -51,16 +51,14 @@ def _champs_terrain(projet: dict) -> dict:
         "T2L_localite": loc.get("commune") or "",
         "T2C_code": loc.get("code_postal") or "",
     }
-    parcelles = (loc.get("parcelles") or [])[:3]
+    parcelles = (loc.get("parcelles") or [])[:3]  # le gabarit n'a que 3 lignes
     suffixes = ["", "P2", "P3"]
-    total = 0
     for parc, sfx in zip(parcelles, suffixes):
         champs[f"T2F{sfx}_prefixe"] = parc.get("com_abs") or "000"
         champs[f"T2S{sfx}_section"] = parc.get("section") or ""
         champs[f"T2N{sfx}_numero"] = parc.get("numero") or ""
         if parc.get("contenance_m2"):
             champs[f"T2T{sfx}_superficie"] = str(parc["contenance_m2"])
-            total += parc["contenance_m2"]
     return champs
 
 
@@ -69,12 +67,19 @@ def _champs_projet(projet: dict) -> dict:
     if not omb.get("famille") and not omb.get("puissance_kwc"):
         return {}
     p = parametres_effectifs(omb)
+    # les dimensions ne sont affirmées que si elles ont été SAISIES : les
+    # défauts fabriqués (4 travées x 5 m = 20 m) n'ont rien à faire dans un
+    # formulaire officiel (« aucune donnée inventée », plan §13)
+    dims = (f"{p['longueur_m']:g} m x {p['profondeur_m']:g} m, ".replace(".", ",")
+            if p["saisis"]["longueur"] else
+            f"{p['profondeur_m']:g} m de profondeur, ".replace(".", ","))
     desc = (
         f"Installation d'ombrières photovoltaïques sur le parking existant : "
         f"structure {p['famille']} en acier galvanisé, "
-        f"{p['longueur_m']:g} m x {p['profondeur_m']:g} m, "
-        f"hauteur hors tout {p['h_haut_m']:.2f} m, pente {p['pente_deg']:g} degrés, "
-        f"modules photovoltaïques full black"
+        f"{dims}"
+        f"hauteur hors tout {p['h_haut_m']:.2f} m".replace(".", ",")
+        + f", pente {p['pente_deg']:g} degrés".replace(".", ",")
+        + ", modules photovoltaïques full black"
     )
     if omb.get("module_puissance_wc"):
         desc += f" de {omb['module_puissance_wc']:g} Wc"
@@ -107,11 +112,36 @@ def _champs_engagement(projet: dict) -> dict:
 
 
 def preremplir(projet: dict):
-    """Remplit le gabarit et l'écrit dans les assets du projet. Renvoie le chemin."""
+    """Remplit le gabarit et l'écrit dans les assets du projet.
+
+    Renvoie (chemin, champs remplis, avertissements). Refuse un projet en
+    régime PC : le 16702 est le formulaire de la DÉCLARATION PRÉALABLE, le
+    générer pour un PC produirait un dossier erroné.
+    """
     if not GABARIT.exists():
         raise FileNotFoundError(
             "Gabarit Cerfa absent (app/gabarits/cerfa_16702.pdf)."
         )
+    from . import regles  # local : évite un cycle d'import
+    reg = regles.determiner_regime(
+        (projet.get("ombriere") or {}).get("puissance_kwc"),
+        (projet.get("urbanisme") or {}).get("secteur_abf"),
+    )
+    if reg["regime"] != regles.REGIME_DP:
+        raise ValueError(
+            "Le projet relève du Permis de Construire (" + " ; ".join(reg["raisons"])
+            + ") : le Cerfa DP 16702 ne s'applique pas."
+        )
+
+    avertissements: list[str] = []
+    toutes_parcelles = (projet.get("localisation") or {}).get("parcelles") or []
+    if len(toutes_parcelles) > 3:
+        avertissements.append(
+            f"{len(toutes_parcelles)} parcelles : seules les 3 premières figurent "
+            "sur le formulaire (3 lignes), joignez la liste complète sur papier "
+            "libre — la notice les mentionne toutes."
+        )
+
     champs = {
         **_champs_demandeur(projet),
         **_champs_terrain(projet),
@@ -133,4 +163,4 @@ def preremplir(projet: dict):
     chemin = config.assets_dir(projet["id"]) / "cerfa_16702_prerempli.pdf"
     with open(chemin, "wb") as f:
         writer.write(f)
-    return chemin, sorted(champs)
+    return chemin, sorted(champs), avertissements

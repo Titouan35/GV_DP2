@@ -7,17 +7,47 @@ alimenter le panneau de droite.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import threading
 import unicodedata
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from .. import config, regles
 from ..models import Projet
 
 router = APIRouter(prefix="/api/projets", tags=["projets"])
+
+# les routes sync tournent dans un threadpool : deux sauvegardes concurrentes
+# du même projet (autosave + clic « suivant », deux onglets) s'entrelaçaient.
+# Un verrou par projet sérialise l'écriture ; l'écriture elle-même est atomique
+# (fichier temporaire + os.replace) pour ne jamais laisser un JSON tronqué en
+# cas de crash ou de verrou OneDrive en plein write.
+_VERROUS_PROJET: dict[str, threading.Lock] = {}
+_VERROUS_GARDE = threading.Lock()
+
+
+def verrou_projet(projet_id: str) -> threading.Lock:
+    with _VERROUS_GARDE:
+        return _VERROUS_PROJET.setdefault(projet_id, threading.Lock())
+
+
+def _utilisateur(request: Request | None) -> str | None:
+    """Identité légère de l'auteur d'une modification (multi-poste BE).
+
+    En-tête X-Utilisateur si un proxy/déploiement le fournit, sinon le compte
+    Windows/Unix du poste (pertinent en local mono-utilisateur). Purement
+    informatif : sert au message du verrou optimiste, pas à des droits.
+    """
+    if request is not None:
+        entete = request.headers.get("x-utilisateur")
+        if entete:
+            return entete[:80]
+    return os.environ.get("USERNAME") or os.environ.get("USER")
 
 
 def _slug(nom: str) -> str:
@@ -35,16 +65,27 @@ def _chemin(projet_id: str):
 def _sauver(projet: Projet) -> None:
     config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
     chemin = _chemin(projet.id)
-    chemin.write_text(
-        projet.model_dump_json(indent=2), encoding="utf-8"
-    )
+    tmp = chemin.with_suffix(".json.tmp")
+    with verrou_projet(projet.id):
+        tmp.write_text(projet.model_dump_json(indent=2), encoding="utf-8")
+        os.replace(tmp, chemin)  # atomique : jamais de JSON à moitié écrit
 
 
 def _charger(projet_id: str) -> Projet:
     chemin = _chemin(projet_id)
     if not chemin.exists():
         raise HTTPException(status_code=404, detail="Projet introuvable.")
-    return Projet.model_validate(json.loads(chemin.read_text(encoding="utf-8")))
+    try:
+        return Projet.model_validate(json.loads(chemin.read_text(encoding="utf-8")))
+    except (ValueError, OSError) as exc:
+        # JSON tronqué, schéma incompatible ou fichier verrouillé (OneDrive) :
+        # un message actionnable plutôt qu'un 500 brut qui bloque tout le projet
+        raise HTTPException(
+            status_code=422,
+            detail=f"Projet illisible ({exc.__class__.__name__}) : fichier corrompu, "
+                   "format obsolète ou verrouillé par la synchronisation. "
+                   f"Voir PROJETS/{projet_id}.json.",
+        ) from exc
 
 
 @router.get("")
@@ -74,10 +115,11 @@ def lister_projets():
 
 
 @router.post("")
-def creer_projet(projet: Projet):
+def creer_projet(projet: Projet, request: Request = None):
     projet.id = f"{_slug(projet.nom)}-{uuid.uuid4().hex[:6]}"
     projet.date_creation = datetime.now().isoformat(timespec="seconds")
     projet.date_modification = projet.date_creation
+    projet.modifie_par = _utilisateur(request)
     evaluation = regles.evaluer(projet)
     projet.regime = evaluation["regime"]["regime"]
     _sauver(projet)
@@ -91,15 +133,72 @@ def lire_projet(projet_id: str):
 
 
 @router.put("/{projet_id}")
-def sauvegarder_projet(projet_id: str, projet: Projet):
-    if not _chemin(projet_id).exists():
-        raise HTTPException(status_code=404, detail="Projet introuvable.")
+def sauvegarder_projet(projet_id: str, projet: Projet, request: Request = None):
+    existant = _charger(projet_id)
+    # verrou optimiste multi-poste : si le fichier a changé depuis le
+    # chargement côté client (autre onglet, autre poste OneDrive), on refuse
+    # au lieu d'écraser silencieusement le travail de l'autre (last-write-wins)
+    if (projet.date_modification and existant.date_modification
+            and projet.date_modification != existant.date_modification):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Projet modifié entre-temps ({existant.date_modification}"
+                   + (f", par {existant.modifie_par}" if existant.modifie_par else "")
+                   + "). Rechargez la page pour repartir de la dernière version.",
+        )
     projet.id = projet_id
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    projet.modifie_par = _utilisateur(request)
     evaluation = regles.evaluer(projet)
     projet.regime = evaluation["regime"]["regime"]
     _sauver(projet)
     return {"projet": projet, "evaluation": evaluation}
+
+
+# fichiers d'assets REGÉNÉRABLES : caches d'optimisation, planches, kits
+# Gemini, pages PDF rendues, aperçus. Supprimables sans perte de donnée.
+_MOTIFS_CACHE = ("embed_*.jpg", "kit_*.png", "apercu_*.png", "_gradient*.png",
+                 "photo_reperee.png", "scaffold.png", "aerienne_*.png",
+                 "dp1_*.png", "dp3_provisoire.png", "dp*_p*.jpg")
+
+
+@router.post("/{projet_id}/nettoyer")
+def nettoyer_projet(projet_id: str):
+    """Purge les fichiers régénérables + les insertions non référencées.
+
+    Le dossier .assets grossit à chaque essai (caches, images non retenues) et
+    tout part dans la synchro OneDrive : ce nettoyage ne touche ni les uploads
+    BE, ni les photos du site, ni les images listées dans la galerie.
+    """
+    projet = _charger(projet_id)
+    assets = config.assets_dir(projet_id)
+    libere = 0
+    fichiers = 0
+
+    for motif in _MOTIFS_CACHE:
+        for f in assets.glob(motif):
+            libere += f.stat().st_size
+            f.unlink(missing_ok=True)
+            fichiers += 1
+
+    # insertions orphelines : fichiers du dossier insertion/ ni dans la
+    # galerie, ni dans les photos du site
+    references = {im.get("fichier") for im in projet.insertion.images}
+    references |= set(projet.insertion.photos or [])
+    dossier_ins = assets / "insertion"
+    if dossier_ins.exists():
+        for f in dossier_ins.iterdir():
+            if not f.is_file():
+                continue
+            rel = str(f.relative_to(config.PROJETS_DIR)).replace("\\", "/")
+            if rel in references:
+                continue
+            libere += f.stat().st_size
+            f.unlink(missing_ok=True)
+            fichiers += 1
+
+    return {"fichiers_supprimes": fichiers, "octets_liberes": libere,
+            "mo_liberes": round(libere / 1_048_576, 1)}
 
 
 @router.delete("/{projet_id}")
@@ -108,4 +207,7 @@ def supprimer_projet(projet_id: str):
     if not chemin.exists():
         raise HTTPException(status_code=404, detail="Projet introuvable.")
     chemin.unlink()
+    # le dossier .assets (uploads, exports, caches) part avec le projet :
+    # avant, il restait orphelin sur le disque et dans la synchro OneDrive
+    shutil.rmtree(config.PROJETS_DIR / f"{projet_id}.assets", ignore_errors=True)
     return {"ok": True}

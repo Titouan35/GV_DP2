@@ -65,11 +65,11 @@ def analyser_texte(texte: str) -> dict:
     lecture: dict = {}
 
     v = _nombre(cherche(r"Puissance\s*DC\s*=?\s*([\d.,]+)\s*kWc"))
-    if v:
+    if v and 1 <= v <= 30000:  # borne de plausibilité (parking : 3 kWc - 30 MWc)
         lecture["puissance_kwc"] = v
 
     v = _nombre(cherche(r"([\d]{3,4})\s*Wc\b"))
-    if v:
+    if v and 100 <= v <= 1000:  # un module PV fait 100 à ~800 Wc
         lecture["module_puissance_wc"] = v
 
     m = re.search(r"(\d{3,4})\s*[x×]\s*(\d{3,4})\s*[x×]\s*\d+\s*mm", t, re.IGNORECASE)
@@ -77,7 +77,7 @@ def analyser_texte(texte: str) -> dict:
         lecture["module_dimensions"] = f"{m.group(1)} x {m.group(2)} mm"
 
     v = cherche(r"(\d+)\s*modules\b")
-    if v:
+    if v and int(v) > 0:
         lecture["nb_modules"] = int(v)
 
     v = cherche(r"modules?\s+([A-Z][A-Z0-9][A-Z0-9\-]{3,})")
@@ -93,14 +93,31 @@ def analyser_texte(texte: str) -> dict:
     if m and 1 <= int(m.group(1)) <= 15:
         lecture["pente_deg"] = float(m.group(1))
 
-    # hauteurs « +2.50m ... +3.50m » : bas et haut de rampant
-    hauteurs = sorted({
-        h for h in (_nombre(x) for x in re.findall(r"\+\s*([\d.,]+)\s*m\b", t))
-        if h and 1.5 <= h <= 8.0
-    })
-    if len(hauteurs) >= 2:
-        lecture["garde_au_sol_m"] = hauteurs[0]
-        lecture["hauteur_hors_tout_m"] = hauteurs[-1]
+    # hauteurs de rampant : d'abord ANCRÉES sur leur libellé (fiable), sinon
+    # repli min/max, restreint au cas où EXACTEMENT deux cotes « +X.Xm »
+    # plausibles existent. L'ancien min/max global prenait n'importe quelle
+    # cote du cartouche (bâtiment voisin, garde-corps) pour un rampant.
+    def hauteur_libellee(libelle: str) -> float | None:
+        for pat in (rf"{libelle}\D{{0,15}}\+?\s*([\d.,]+)\s*m\b",
+                    rf"\+?\s*([\d.,]+)\s*m\b\D{{0,15}}{libelle}"):
+            v = _nombre(cherche(pat))
+            if v and 1.5 <= v <= 8.0:
+                return v
+        return None
+
+    h_bas = hauteur_libellee(r"bas\s+de\s+rampant")
+    h_haut = hauteur_libellee(r"haut\s+de\s+rampant")
+    if h_bas and h_haut and h_bas < h_haut:
+        lecture["garde_au_sol_m"] = h_bas
+        lecture["hauteur_hors_tout_m"] = h_haut
+    else:
+        hauteurs = sorted({
+            h for h in (_nombre(x) for x in re.findall(r"\+\s*([\d.,]+)\s*m\b", t))
+            if h and 1.5 <= h <= 8.0
+        })
+        if len(hauteurs) == 2:
+            lecture["garde_au_sol_m"] = hauteurs[0]
+            lecture["hauteur_hors_tout_m"] = hauteurs[-1]
 
     v = cherche(r"SCALE\s*:?\s*1\s*:\s*(\d+)")
     if v:
@@ -146,5 +163,8 @@ def lire_plan_masse(chemin: Path) -> dict:
         return {}
     try:
         return analyser_texte(_texte_pdf(chemin))
-    except Exception:  # PDF corrompu ou chiffré : lecture silencieusement vide
+    except Exception:  # PDF corrompu ou chiffré : lecture vide, mais tracée
+        import logging
+        logging.getLogger(__name__).warning(
+            "Lecture du plan de masse impossible (%s)", chemin.name, exc_info=True)
         return {}

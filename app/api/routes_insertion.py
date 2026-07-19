@@ -6,6 +6,7 @@ compteur de dépense local, et fiche de validation d'emprise (PPTX).
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -16,6 +17,7 @@ from fastapi.responses import FileResponse
 from .. import config, insertion_ia
 from ..fiche_emprise import generer_fiche
 from ..insertion_ia import InsertionError
+from .routes_documents import lire_upload, normaliser_exif, signature_valide
 from .routes_projets import _charger, _sauver
 
 router = APIRouter(prefix="/api/projets", tags=["insertion"])
@@ -97,54 +99,8 @@ def servir_reference(projet_id: str, i: int = 0):
     return FileResponse(refs[min(max(0, i), len(refs) - 1)])
 
 
-# ------------------------------------------------------------------ vue aérienne
-
-@router.get("/{projet_id}/insertion/aerienne")
-def lire_aerienne(projet_id: str):
-    """Fond aérien (crop du plan) + emprises (auto ou ajustées) + flèche."""
-    projet = _charger(projet_id)
-    d = insertion_ia.aerienne_donnees(projet.model_dump())
-    if not d:
-        return {"disponible": False}
-    rel = str(d["fond"].resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
-    return {
-        "disponible": True,
-        "fond": f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}",
-        "emprises": d["emprises"],
-        "fleche": d["fleche"],
-        "auto": d["auto"],
-    }
-
-
-@router.put("/{projet_id}/insertion/aerienne")
-def sauver_aerienne(projet_id: str, corps: dict = Body(...)):
-    """Emprises ajustées sur la vue aérienne (coordonnées 0-1 du crop)."""
-    projet = _charger(projet_id)
-
-    def _point(p):
-        try:
-            x, y = float(p[0]), float(p[1])
-        except (TypeError, ValueError, IndexError):
-            raise HTTPException(status_code=400, detail="Point invalide.")
-        return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
-
-    emprises = [[_point(p) for p in e] for e in (corps.get("emprises") or []) if len(e) >= 3]
-    if not emprises:
-        raise HTTPException(status_code=400, detail="Au moins une emprise attendue.")
-    projet.insertion.aerienne = {"emprises": emprises, "auto": False}
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
-    return {"projet": projet}
-
-
-@router.delete("/{projet_id}/insertion/aerienne")
-def reinitialiser_aerienne(projet_id: str):
-    """Revient à l'emprise automatique extraite du plan."""
-    projet = _charger(projet_id)
-    projet.insertion.aerienne = {}
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
-    return {"projet": projet}
+# (routes « vue aérienne » du flux v5 retirées le 19/07/2026 : plus appelées
+#  par l'UI, code archivé dans app/_archive/flux_v5_scaffold.py)
 
 
 # ------------------------------------------------------------------ photo du site
@@ -160,12 +116,16 @@ async def uploader_photos(projet_id: str, fichiers: list[UploadFile] = File(...)
         ext = Path(fichier.filename or "").suffix.lower()
         if ext not in EXTENSIONS:
             continue
-        contenu = await fichier.read()
-        if len(contenu) > TAILLE_MAX:
+        try:
+            contenu = await lire_upload(fichier, TAILLE_MAX)
+        except HTTPException:
+            continue  # fichier trop gros : on passe au suivant
+        if not signature_valide(ext, contenu):
             continue
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
         chemin = dossier / f"site_{stamp}{ext}"
         chemin.write_bytes(contenu)
+        normaliser_exif(chemin)  # photo redressée une fois pour toutes
         rel = str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/")
         projet.insertion.photos.append(rel)
         ajout += 1
@@ -265,31 +225,68 @@ def enregistrer_consignes(projet_id: str, corps: dict = Body(...)):
 
 # ------------------------------------------------------------------ génération (Gemini)
 
-@router.post("/{projet_id}/insertion/generer")
-def generer_insertion(projet_id: str, corps: dict = Body(default={})):
-    """Génère UNE insertion via l'API Gemini (Nano Banana). ~10-30 s, synchrone."""
-    projet = _charger(projet_id)
-    affinage = str(corps.get("affinage", "") or "")
-    if affinage:
-        projet.insertion.affinage = affinage[:2000]
-    prompt_override = str(corps.get("prompt", "") or "")[:8000]
+# Génération en TÂCHE DE FOND (19/07/2026) : l'appel Gemini dure 10-30 s.
+# En synchrone, l'onglet restait suspendu et fermer la page perdait une image
+# déjà payée. Un job par projet, verrou serveur : deux clics/onglets ne
+# déclenchent plus deux dépenses.
+_GENERATIONS: dict[str, dict] = {}
+_GENERATIONS_LOCK = threading.Lock()
+
+
+def _tache_generation(projet_id: str, affinage: str, prompt_override: str) -> None:
     try:
+        projet = _charger(projet_id)
         image = insertion_ia.generer_image(projet.model_dump(), affinage=affinage,
                                            prompt_override=prompt_override)
-    except InsertionError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    projet.insertion.images = [image, *projet.insertion.images]
-    if not projet.insertion.retenue:
-        projet.insertion.retenue = image["fichier"]
-    projet.insertion.prompt = image.get("prompt")
-    essais = int(image.get("essais", 1))   # coût réel (relance auto incluse)
-    projet.insertion.nb_images_generees += essais
-    images_global = insertion_ia.incrementer_compteur_global(essais)
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
-    return {"projet": projet, "image": image,
-            "images_projet": projet.insertion.nb_images_generees,
-            "images_global": images_global}
+        # recharger l'état le plus frais avant d'écrire (l'utilisateur a pu
+        # modifier le projet pendant la génération)
+        projet = _charger(projet_id)
+        if affinage:
+            projet.insertion.affinage = affinage[:2000]
+        projet.insertion.images = [image, *projet.insertion.images]
+        if not projet.insertion.retenue:
+            projet.insertion.retenue = image["fichier"]
+        projet.insertion.prompt = image.get("prompt")
+        projet.insertion.nb_images_generees += int(image.get("essais", 1))
+        projet.date_modification = datetime.now().isoformat(timespec="seconds")
+        _sauver(projet)
+        with _GENERATIONS_LOCK:
+            _GENERATIONS[projet_id] = {"etat": "prete", "image": image}
+    except Exception as exc:  # InsertionError, HTTPException, imprévu : tout doit sortir du job
+        detail = getattr(exc, "detail", None) or str(exc)
+        with _GENERATIONS_LOCK:
+            _GENERATIONS[projet_id] = {"etat": "erreur", "erreur": str(detail)}
+
+
+@router.post("/{projet_id}/insertion/generer")
+def generer_insertion(projet_id: str, corps: dict = Body(default={})):
+    """Lance UNE génération Gemini en tâche de fond. 409 si déjà en cours."""
+    _charger(projet_id)  # valide l'existence avant de démarrer quoi que ce soit
+    if not insertion_ia.api_configuree():
+        raise HTTPException(status_code=400,
+                            detail="Mode API non configuré : clé GEMINI_API_KEY absente.")
+    with _GENERATIONS_LOCK:
+        job = _GENERATIONS.get(projet_id)
+        if job and job.get("etat") == "en_cours":
+            raise HTTPException(status_code=409,
+                                detail="Une génération est déjà en cours pour ce projet.")
+        _GENERATIONS[projet_id] = {"etat": "en_cours",
+                                   "demarre": datetime.now().isoformat(timespec="seconds")}
+    affinage = str(corps.get("affinage", "") or "")[:2000]
+    prompt_override = str(corps.get("prompt", "") or "")[:8000]
+    threading.Thread(target=_tache_generation, daemon=True,
+                     args=(projet_id, affinage, prompt_override)).start()
+    return {"etat": "en_cours"}
+
+
+@router.get("/{projet_id}/insertion/generer/statut")
+def statut_generation(projet_id: str):
+    """État du job de génération : aucune / en_cours / prete / erreur."""
+    with _GENERATIONS_LOCK:
+        job = dict(_GENERATIONS.get(projet_id) or {"etat": "aucune"})
+    if job["etat"] in ("prete", "erreur"):
+        job["images_global"] = insertion_ia.compteur_global()
+    return job
 
 
 # ------------------------------------------------------------------ type d'ombrière
@@ -395,57 +392,7 @@ def plan_dims(projet_id: str):
     return {"dims_m": [{"longueur_m": L, "largeur_m": l} for L, l in dims]}
 
 
-@router.put("/{projet_id}/insertion/guides")
-def sauver_guides(projet_id: str, corps: dict = Body(...)):
-    """Repères tracés sur une photo : une ombrière = 2 traits (longueur+largeur).
-
-    Corps : {photo, ombrieres:[{longueur:[A,B], largeur:[C,D],
-    longueur_m?, largeur_m?}]}. Coordonnées 0-1. Les cotes manquantes sont
-    préremplies depuis le plan de masse (par ordre des rangées), modifiables.
-    """
-    projet = _charger(projet_id)
-    photo = corps.get("photo")
-    if photo not in (projet.insertion.photos or []):
-        raise HTTPException(status_code=400, detail="Photo inconnue.")
-
-    def _point(p):
-        try:
-            x, y = float(p[0]), float(p[1])
-        except (TypeError, ValueError, IndexError):
-            raise HTTPException(status_code=400, detail="Point de repère invalide.")
-        return [min(1.0, max(0.0, x)), min(1.0, max(0.0, y))]
-
-    def _cote(v):
-        try:
-            return round(float(v), 1) if v not in (None, "") else None
-        except (TypeError, ValueError):
-            return None
-
-    dims = insertion_ia.plan_dims(projet.model_dump())
-    ombrieres = []
-    for i, o in enumerate(corps.get("ombrieres") or []):
-        lo, la = o.get("longueur"), o.get("largeur")
-        if not (lo and la and len(lo) == 2 and len(la) == 2):
-            continue
-        L_m = _cote(o.get("longueur_m"))
-        l_m = _cote(o.get("largeur_m"))
-        if L_m is None and i < len(dims):
-            L_m = round(dims[i][0], 1)
-        if l_m is None and i < len(dims):
-            l_m = round(dims[i][1], 1)
-        ombrieres.append({
-            "longueur": [_point(lo[0]), _point(lo[1])],
-            "largeur": [_point(la[0]), _point(la[1])],
-            "longueur_m": L_m, "largeur_m": l_m,
-        })
-
-    if ombrieres:
-        projet.insertion.guides[photo] = {"ombrieres": ombrieres}
-    else:
-        projet.insertion.guides.pop(photo, None)
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
-    return {"projet": projet}
+# (route « guides » du flux v5 retirée le 19/07/2026 : remplacée par /pose)
 
 
 # ------------------------------------------------------------------ sélection & exports

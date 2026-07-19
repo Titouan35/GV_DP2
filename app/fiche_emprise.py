@@ -52,7 +52,12 @@ def _gradient_png(assets: Path) -> Path:
 
 
 def _image_dans_zone(slide, chemin_img: Path, zone):
-    """Colle l'image ajustée (contain) dans la zone (x, y, w, h) en EMU."""
+    """Colle l'image ajustée (contain) dans la zone (x, y, w, h) en EMU.
+
+    L'image doit être passée déjà optimisée (EXIF redressé, compressée) via
+    `assemblage._optimiser` : une photo portrait de smartphone collée brute
+    arrivait tournée et déformée (ratio calculé sur les dimensions brutes).
+    """
     with Image.open(chemin_img) as im:
         iw, ih = im.size
     x, y, w, h = zone
@@ -65,6 +70,7 @@ def _image_dans_zone(slide, chemin_img: Path, zone):
 
 def generer_fiche(projet: dict) -> Path:
     """Construit la fiche d'emprise PPTX. Requiert l'image d'insertion retenue."""
+    from .assemblage import _optimiser   # EXIF + compression, cache par mtime
     from .insertion_ia import image_kit  # local : évite un cycle d'import
 
     ins = projet.get("insertion") or {}
@@ -98,7 +104,8 @@ def generer_fiche(projet: dict) -> Path:
     haut = Inches(1.25)
     if photo:
         _texte(slide, Inches(0.5), haut, Inches(3), Inches(0.35), "Photo du site", taille=13, gras=True)
-        _image_dans_zone(slide, photo, (Inches(0.5), Inches(1.62), Inches(12.33), Inches(2.55)))
+        _image_dans_zone(slide, _optimiser(photo, assets),
+                         (Inches(0.5), Inches(1.62), Inches(12.33), Inches(2.55)))
         bas_titre = Inches(4.35)
         bas_zone = (Inches(0.5), Inches(4.72), Inches(12.33), Inches(2.35))
     else:
@@ -110,7 +117,7 @@ def generer_fiche(projet: dict) -> Path:
            "Insertion projetée", taille=13, gras=True)
     _texte(slide, Inches(2.4), bas_titre, Inches(4), Inches(0.35),
            "visuel IA — usage commercial", taille=11, gras=True, couleur=AMBRE)
-    _image_dans_zone(slide, chemin_insertion, bas_zone)
+    _image_dans_zone(slide, _optimiser(chemin_insertion, assets), bas_zone)
 
     # pied de page (garde-fou réglementaire)
     _texte(slide, Inches(0.5), Inches(7.12), Inches(12.3), Inches(0.32),

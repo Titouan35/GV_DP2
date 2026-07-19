@@ -42,9 +42,9 @@ TEMPLATES: dict[str, str] = {
         "et les accès sont conservés en l'état."
     ),
     "description": (
-        "Le projet consiste à installer une ombrière photovoltaïque de coupe {{coupe}}, de "
-        "{{longueur}} sur {{largeur}}, en structure métallique galvanisée : {{nb_travees}} "
-        "travées d'entraxe {{entraxe}}, {{toiture}} à {{pente}}, hauteur maximale {{hauteur_max}} "
+        "Le projet consiste à installer une ombrière photovoltaïque de coupe {{coupe}}, "
+        "{{dimensions}}, en structure métallique galvanisée : {{trame}}, "
+        "{{toiture}} à {{pente}}, hauteur maximale {{hauteur_max}} "
         "et point bas {{hauteur_bas}}. Elle reçoit des modules photovoltaïques full black"
         "{{modules_detail}} pour une puissance de {{puissance_kwc}}, et couvre {{nb_places}} "
         "places qui restent utilisables. Aucun terrassement significatif n'est nécessaire, les "
@@ -77,10 +77,10 @@ TEMPLATES: dict[str, str] = {
 # Ordre des balises à surligner : les plus longues d'abord (évite les recouvrements).
 CLES_SURLIGNE = [
     "raison_sociale", "representant", "adresse", "parcelles", "zonage",
-    "surface", "coupe", "longueur", "largeur", "entraxe", "pente",
-    "hauteur_max", "hauteur_bas", "puissance_kwc", "module_puissance",
-    "module_dimensions", "nb_travees", "nb_places", "commune",
-    "code_postal", "code_insee", "siret",
+    "surface", "coupe", "dimensions", "trame", "longueur", "largeur",
+    "entraxe", "pente", "hauteur_max", "hauteur_bas", "puissance_kwc",
+    "module_puissance", "module_dimensions", "nb_travees", "nb_places",
+    "commune", "code_postal", "code_insee", "siret",
 ]
 
 
@@ -129,7 +129,25 @@ def _valeurs(projet: dict) -> dict[str, str]:
         s = (f"{v:.2f}" if dec else f"{v:g}").replace(".", ",")
         return s + suf
 
+    # dimensions et trame : seules les valeurs SAISIES sont affirmées, les
+    # défauts fabriqués du catalogue (4 travées x 5 m) restent hors notice
+    # (« aucune donnée inventée », plan §13). La profondeur du type, elle,
+    # est une cote réelle du produit choisi.
+    saisis = (p or {}).get("saisis") or {}
+    if p and saisis.get("longueur"):
+        dimensions = f"de {num(p['longueur_m'], ' m')} sur {num(p['profondeur_m'], ' m')}"
+    elif p:
+        dimensions = f"de {num(p['profondeur_m'], ' m')} de profondeur"
+    else:
+        dimensions = "de dimensions à préciser"
+    if p and saisis.get("nb_travees") and saisis.get("entraxe"):
+        trame = f"{p['nb_travees']} travées d'entraxe {num(p['entraxe_m'], ' m')}"
+    else:
+        trame = "une trame de poteaux régulière"
+
     return {
+        "dimensions": dimensions,
+        "trame": trame,
         "raison_sociale": mo.get("raison_sociale") or "le maître d'ouvrage",
         "representant": mo.get("representant") or "son représentant",
         "siret": mo.get("siret") or "—",

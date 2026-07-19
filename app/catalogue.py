@@ -99,6 +99,18 @@ def parametres_effectifs(ombriere: dict) -> dict:
     nb_travees = int(ombriere.get("nb_travees") or 4)
     longueur = ombriere.get("longueur_m") or round(nb_travees * entraxe, 2)
 
+    # traçabilité des valeurs FABRIQUÉES : les défauts (entraxe 5 m, 4 travées,
+    # longueur déduite) servent aux dessins paramétriques mais ne doivent JAMAIS
+    # être affirmés dans les pièces réglementaires (Cerfa, notice) quand ils
+    # n'ont pas été saisis — « aucune donnée inventée » (plan §13). Les hauteurs
+    # et la profondeur du catalogue, elles, sont les cotes réelles du type choisi.
+    saisis = {
+        "longueur": bool(ombriere.get("longueur_m"))
+        or bool(ombriere.get("nb_travees") and ombriere.get("entraxe_m")),
+        "nb_travees": ombriere.get("nb_travees") is not None,
+        "entraxe": ombriere.get("entraxe_m") is not None,
+    }
+
     return {
         **base,
         "profondeur_m": float(profondeur),
@@ -108,4 +120,5 @@ def parametres_effectifs(ombriere: dict) -> dict:
         "entraxe_m": float(entraxe),
         "nb_travees": nb_travees,
         "longueur_m": float(longueur),
+        "saisis": saisis,
     }

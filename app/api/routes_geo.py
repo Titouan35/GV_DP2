@@ -59,13 +59,18 @@ def api_urbanisme(lon: float, lat: float, insee: str | None = None):
 
     Ces fonctions gèrent leurs erreurs en interne (flag `disponible`) :
     la couverture GPU est partielle, on n'échoue jamais en bloc.
+    Les 2-3 appels API Carto (souvent lents) partent en PARALLÈLE :
+    la latence de l'étape 1 vaut le plus lent, pas la somme des trois.
     """
-    reponse = {
-        "zonage": gpu.zonage_plu(lon, lat),
-        "servitudes": gpu.servitudes_abf(lon, lat),
-    }
-    if insee:
-        reponse["rnu"] = gpu.commune_rnu(insee)
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_zonage = pool.submit(gpu.zonage_plu, lon, lat)
+        f_abf = pool.submit(gpu.servitudes_abf, lon, lat)
+        f_rnu = pool.submit(gpu.commune_rnu, insee) if insee else None
+        reponse = {"zonage": f_zonage.result(), "servitudes": f_abf.result()}
+        if f_rnu:
+            reponse["rnu"] = f_rnu.result()
     return reponse
 
 

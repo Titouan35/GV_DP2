@@ -19,7 +19,17 @@ def test_dossier_pptx_offline(tmp_path, monkeypatch):
                                    "valide_humain": True}}
     chemin, avertissements = assemblage.generer_dossier(projet)
     assert chemin.exists()
-    assert avertissements == []
+    # depuis l'audit du 19/07/2026, les pièces manquantes sont signalées AVANT
+    # l'assemblage (plus de PPTX de placeholders silencieux) : ici les pièces
+    # BE ne sont pas fournies, elles doivent apparaître en avertissements.
+    assert any("DP2" in a for a in avertissements)
+    # uniquement des signalements de complétude ou la coupe provisoire,
+    # aucune erreur de génération
+    assert all("attendu" in a or "générer" in a or "valider" in a
+               or "pré-remplir" in a or "provisoire" in a
+               for a in avertissements), avertissements
+    # le type d'ombrière est choisi : la DP3 provisoire paramétrique est intégrée
+    assert any("provisoire" in a for a in avertissements)
 
     prs = Presentation(str(chemin))
     # maquette : garde + DP1 fusion + aérienne + DP2 + DP3 + notice

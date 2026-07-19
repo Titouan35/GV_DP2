@@ -14,6 +14,9 @@ pour garder un dossier léger.
 """
 from __future__ import annotations
 
+import math
+import os
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -66,6 +69,26 @@ def _date_fr() -> str:
 
 def _logo() -> Path:
     return config.REPO_ROOT / "app" / "static" / "img" / "greenvolt_logo.png"
+
+
+def _ajouter_logo(slide, x, y, height):
+    """Logo GV s'il est présent : son absence (déploiement incomplet) ne doit
+    pas faire échouer tout l'assemblage."""
+    chemin = _logo()
+    if chemin.exists():
+        slide.shapes.add_picture(str(chemin), x, y, height=height)
+
+
+# deux assemblages simultanés du même projet écrivaient les mêmes fichiers
+# (embed_*.jpg, Dossier_DP_<id>.pptx) : PPTX potentiellement corrompu. Un
+# verrou par projet sérialise la génération.
+_VERROUS_DOSSIER: dict[str, threading.Lock] = {}
+_VERROUS_DOSSIER_GARDE = threading.Lock()
+
+
+def _verrou_dossier(projet_id: str) -> threading.Lock:
+    with _VERROUS_DOSSIER_GARDE:
+        return _VERROUS_DOSSIER.setdefault(projet_id, threading.Lock())
 
 
 # ------------------------------------------------------------------ primitives
@@ -156,7 +179,7 @@ def _entete(slide, titre):
 
 def _cartouche(slide, projet, badge_txt, badge_bg=VERT, badge_fg=NAVY):
     _rect(slide, 0, 650, 1280, 1.2, fill=GRIS_LIGNE)
-    slide.shapes.add_picture(str(_logo()), P(22), P(675), height=P(21))
+    _ajouter_logo(slide, P(22), P(675), height=P(21))
     loc = projet.get("localisation") or {}
     mo = (projet.get("mo") or {}).get("raison_sociale") or projet.get("nom") or ""
     sous = " · ".join(filter(None, [mo, loc.get("adresse")]))
@@ -242,7 +265,19 @@ def _optimiser(chemin: Path, assets: Path) -> Path:
 
 def _pdf_en_images(chemin_pdf: Path, assets: Path, prefixe: str,
                    max_pages: int = 3) -> list[Path]:
-    """Rend les premières pages d'un PDF uploadé en JPEG (150 dpi)."""
+    """Rend les premières pages d'un PDF uploadé en JPEG (150 dpi).
+
+    Cache par date du PDF : sans lui, chaque assemblage re-rendait TOUS les
+    PDF du dossier (et la DP6 plusieurs fois), sous le verrou pdfium global
+    qui gèle en plus les autres requêtes pendant ce temps.
+    """
+    temoin = assets / f"{prefixe}_p1.jpg"
+    if temoin.exists() and temoin.stat().st_mtime >= chemin_pdf.stat().st_mtime:
+        pages = sorted(assets.glob(f"{prefixe}_p*.jpg"))
+        if pages:
+            return pages[:max_pages]
+    for ancien in assets.glob(f"{prefixe}_p*.jpg"):  # purge des pages périmées
+        ancien.unlink(missing_ok=True)
     sorties = []
     with config.PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(chemin_pdf))
@@ -280,7 +315,7 @@ def _pages_document(projet: dict, code: str, assets: Path) -> list[Path]:
 def _slide_garde(prs, assets, projet, evaluation):
     slide = _slide(prs)
     slide.shapes.add_picture(str(_gradient_v_png(assets)), 0, 0, P(14), P(720))
-    slide.shapes.add_picture(str(_logo()), P(80), P(60), height=P(52))
+    _ajouter_logo(slide, P(80), P(60), height=P(52))
 
     reg = evaluation["regime"]
     _texte(slide, 80, 170, 900, 22,
@@ -381,6 +416,28 @@ def _slide_notice(prs, projet, assets):
 
     _rect(slide, 640, ZONE[1] + 4, 1, ZONE[3] - 8, fill=GRIS_LIGNE)  # séparateur
 
+    def px_ajuste(cles, largeur_px=560, hauteur_px=ZONE[3] - 4):
+        """Taille de police qui fait tenir la colonne dans son cadre.
+
+        Les zones de texte sont à hauteur FIXE : une notice longue débordait
+        sous le cartouche. Estimation lignes = titres + texte replié à la
+        largeur de colonne ; on descend la police (12 -> 8,5 px) jusqu'à tenir.
+        """
+        px = 12.0
+        while px > 8.5:
+            cpl = max(30, largeur_px / (px * 0.55))   # ~caractères par ligne
+            lignes = 0.0
+            for cle in cles:
+                txt = (sections.get(cle) or "").strip()
+                if txt:
+                    lignes += 2.2 + math.ceil(len(txt) / cpl)  # titre + espaces
+            if lignes * px * 1.32 <= hauteur_px:
+                break
+            px -= 0.5
+        return px
+
+    px_corps = min(px_ajuste(COL1), px_ajuste(COL2))
+
     def colonne(cles, x, w):
         box = slide.shapes.add_textbox(P(x), P(ZONE[1] + 2), P(w), P(ZONE[3] - 4))
         tf = box.text_frame
@@ -394,14 +451,14 @@ def _slide_notice(prs, projet, assets):
             pt = tf.paragraphs[0] if premier else tf.add_paragraph()
             premier = False
             pt.text = TITRES[cle]
-            pt.font.size = _pt(14)
+            pt.font.size = _pt(px_corps + 2)
             pt.font.bold = True
             pt.font.color.rgb = NAVY
             pt.font.name = POLICE
             pt.space_after = Pt(2)
             pb = tf.add_paragraph()
             pb.text = txt
-            pb.font.size = _pt(12)
+            pb.font.size = _pt(px_corps)
             pb.font.color.rgb = SOFT
             pb.font.name = POLICE
             pb.line_spacing = 1.3
@@ -449,8 +506,12 @@ def _insertion_pour_apres(projet, assets):
     return None, False
 
 
-def _slide_dp6(prs, projet, assets):
-    """Insertion paysagère avant / après (cf. _insertion_pour_apres)."""
+def _slide_dp6(prs, projet, assets, apres, apres_ia):
+    """Insertion paysagère avant / après (cf. _insertion_pour_apres).
+
+    `apres`/`apres_ia` sont calculés UNE fois par l'appelant : recalculer ici
+    re-rendait les pages PDF de la DP6 à chaque planche.
+    """
     slide = _slide(prs)
     _entete(slide, "Insertion paysagère")
     demi = (ZONE[2] - 24) / 2
@@ -469,7 +530,6 @@ def _slide_dp6(prs, projet, assets):
     _pastille(slide, z_avant[0] + 14, z_avant[1] + 14, "Avant", NAVY, BLANC)
 
     # après : insertion IA retenue en priorité, vrai photomontage DP6 sinon
-    apres, apres_ia = _insertion_pour_apres(projet, assets)
     if apres:
         _rect(slide, *z_apres, fill=BLANC, ligne=GRIS_LIGNE, epaisseur=1)
         _image_zone(slide, _optimiser(apres, assets), z_apres)
@@ -513,9 +573,24 @@ def _slide_photos(prs, projet, assets):
 
 def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     """Construit le PPTX complet (style maquette). Renvoie (chemin, avertissements)."""
-    projet_id = projet["id"]
+    projet_id = projet.get("id")
+    if not projet_id:
+        raise ValueError("Projet sans identifiant : impossible d'assembler le dossier.")
+    with _verrou_dossier(projet_id):
+        return _generer_dossier_verrouille(projet, projet_id)
+
+
+def _generer_dossier_verrouille(projet: dict, projet_id: str) -> tuple[Path, list[str]]:
     assets = config.assets_dir(projet_id)
     avertissements: list[str] = []
+
+    evaluation = regles.evaluer(Projet.model_validate(projet))
+
+    # 0. complétude AVANT génération : un dossier assemblé incomplet doit le
+    # dire clairement, pas livrer un PPTX de placeholders en silence
+    for piece in evaluation["completude"]["pieces"]:
+        if piece["statut"] in ("en_attente", "a_generer", "a_completer"):
+            avertissements.append(f"{piece['titre']} : {piece['detail']}")
 
     # 1. (re)générer les pièces automatiques
     generees: dict[str, Path] = {}
@@ -527,8 +602,6 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
             generees[code] = chemin
         except (GeoApiError, ValueError) as exc:
             avertissements.append(f"{code} : {exc}")
-
-    evaluation = regles.evaluer(Projet.model_validate(projet))
 
     # 2. montage du PPTX (ordre de la maquette)
     prs = Presentation()
@@ -559,26 +632,48 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     # UNE seule planche, la 1re page : une coupe est un dessin unique, et les
     # pages suivantes du PDF fourni sont en pratique d'autres pièces (constaté
     # sur Anse, dont la page 2 rejouait le plan de masse — remarque Florent).
+    # Sans upload BE mais avec un type d'ombrière choisi : coupe PROVISOIRE
+    # paramétrique, étiquetée comme telle — un dossier d'avant-vente
+    # présentable plutôt qu'un placeholder (la vraie DP3 reste exigée au dépôt).
     titre_dp3 = "Coupe du terrain et de la construction"
     pages = _pages_document(projet, "dp3", assets)
     if pages:
         _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=pages[0])
     else:
-        _slide_piece_image(
-            prs, projet, assets, titre_dp3, "DP3",
-            placeholder=(f"{titre_dp3} en attente",
-                         "Coupe du projet fournie par le bureau d'études "
-                         "(pièce DP3, étape 2).", "Pièce DP3"))
+        provisoire = None
+        if (projet.get("ombriere") or {}).get("famille"):
+            try:
+                from .planches.ombriere import dessiner_coupe
+                image = dessiner_coupe(projet)
+                provisoire = assets / "dp3_provisoire.png"
+                image.save(provisoire, "PNG")
+            except (ValueError, OSError):
+                provisoire = None
+        if provisoire:
+            _slide_piece_image(prs, projet, assets, titre_dp3, "DP3",
+                               image=provisoire,
+                               pastille="Coupe provisoire — à remplacer par la DP3 du BE")
+            avertissements.append(
+                "DP3 : coupe provisoire paramétrique intégrée, à remplacer par "
+                "la coupe du bureau d'études avant dépôt.")
+        else:
+            _slide_piece_image(
+                prs, projet, assets, titre_dp3, "DP3",
+                placeholder=(f"{titre_dp3} en attente",
+                             "Coupe du projet fournie par le bureau d'études "
+                             "(pièce DP3, étape 2).", "Pièce DP3"))
 
     _slide_notice(prs, projet, assets)
-    _slide_dp6(prs, projet, assets)
+    # avant/après calculé UNE fois : servait aussi à dédupliquer les planches
+    # d'illustration, mais chaque appel re-rendait les pages PDF de la DP6
+    apres, apres_ia = _insertion_pour_apres(projet, assets)
+    _slide_dp6(prs, projet, assets, apres, apres_ia)
 
     # insertions IA sélectionnées : planches « visuel d'illustration » pour
     # celles qui ne sont PAS déjà montrées dans l'avant/après (sinon la planche
     # isolée faisait doublon avec la comparaison — remarque Florent 18/07).
     ia = _insertions_selectionnees(projet)
-    deja, _ = _insertion_pour_apres(projet, assets)
-    for chemin in [c for c in ia if c != deja]:
+    for chemin in [c for c in ia if c != apres]:
         _slide_piece_image(prs, projet, assets, "Insertion paysagère", "Insertion",
                            image=chemin, pastille="Visuel d'illustration (IA)")
 
@@ -587,5 +682,7 @@ def generer_dossier(projet: dict) -> tuple[Path, list[str]]:
     # un PDF joint au dépôt, la checklist reste dans l'outil (panneau complétude).
 
     chemin = assets / f"Dossier_DP_{projet_id}.pptx"
-    prs.save(str(chemin))
+    tmp = assets / f"Dossier_DP_{projet_id}.pptx.tmp"
+    prs.save(str(tmp))
+    os.replace(tmp, chemin)   # atomique : jamais de PPTX à moitié écrit
     return chemin, avertissements

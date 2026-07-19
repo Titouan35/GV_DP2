@@ -92,8 +92,17 @@ function nouveauProjet(nom) {
 
 // ---------------- sauvegarde ----------------
 let saveTimer = null;
+// chaîne : jamais deux PUT en parallèle, sinon la 2e sauvegarde partirait avec
+// une date_modification périmée et déclencherait le verrou optimiste (409)
+// pour un simple double-appui local.
+let chaineSauvegarde = Promise.resolve();
 
-async function sauvegarder(silencieux = true) {
+function sauvegarder(silencieux = true) {
+  chaineSauvegarde = chaineSauvegarde.catch(() => {}).then(() => _sauvegarderMaintenant(silencieux));
+  return chaineSauvegarde;
+}
+
+async function _sauvegarderMaintenant(silencieux) {
   const p = state.projet;
   if (!p) return;
   const data = p.id
@@ -1032,7 +1041,20 @@ function urlInsertion(chemin) {
 
 // agrandissement plein écran d'une image (clic pour fermer)
 function ouvrirLightbox(src) {
+  $("#lightbox").classList.remove("compare");
   $("#lightbox-img").src = src;
+  const im2 = $("#lightbox-img2"); if (im2) im2.hidden = true;
+  $("#lightbox").hidden = false;
+}
+
+// comparaison côte à côte (photo du site « avant » vs insertion « après »)
+function ouvrirComparaison(avant, apres) {
+  const im2 = $("#lightbox-img2");
+  if (!im2) { ouvrirLightbox(apres); return; }
+  $("#lightbox").classList.add("compare");
+  $("#lightbox-img").src = avant;
+  im2.src = apres;
+  im2.hidden = false;
   $("#lightbox").hidden = false;
 }
 
@@ -1168,6 +1190,7 @@ function renderInsertionAtelier(s) {
   renderTypeSelector();
   renderPhotosInsertion();
   renderGalerie();
+  reprendreGenerationSiEnCours();   // job encore en cours après un refresh ?
 }
 
 // ---- bandeau du payload : les images EXACTES qui partiront à Gemini ----
@@ -1204,121 +1227,9 @@ function renderAlertePhoto() {
   if (box) box.innerHTML = "";
 }
 
-// ---- vue aérienne : emprise auto extraite du plan, coins ajustables ----
-const aerUI = { img: null, data: null, drag: null };
+// (vue aérienne du flux v5 retirée le 19/07/2026 : jamais branchée dans
+//  le wizard actuel ; code serveur archivé dans app/_archive/)
 
-async function renderAerienne() {
-  const body = $("#aer-body");
-  if (!body) return;
-  let d;
-  try { d = await api(`/api/projets/${state.projet.id}/insertion/aerienne`); }
-  catch { return; }
-  const etat = $("#aer-etat");
-  if (!d.disponible) {
-    body.innerHTML = `<p class="sub">Dépose le plan de masse (DP2, étape 2) pour extraire l'emprise automatiquement.</p>`;
-    if (etat) etat.textContent = "";
-    return;
-  }
-  aerUI.data = d;
-  if (etat) etat.textContent = d.auto ? "(auto, extraite du plan)" : "(ajustée à la main)";
-  body.innerHTML = `
-    <div class="mesure-canvas-wrap"><canvas id="aer-canvas"></canvas></div>
-    <div class="actionsrow" style="margin-top:8px">
-      <button class="btn" id="aer-reset" ${d.auto ? "disabled" : ""}>↺ Emprise auto</button>
-      <span class="hint">glisse les coins magenta pour ajuster</span>
-    </div>`;
-  const canvas = $("#aer-canvas");
-  const img = new Image();
-  img.onload = () => {
-    const maxW = 640;
-    const sc = Math.min(1, maxW / img.naturalWidth);
-    canvas.width = Math.round(img.naturalWidth * sc);
-    canvas.height = Math.round(img.naturalHeight * sc);
-    aerUI.img = img;
-    dessinerAerienne();
-  };
-  img.src = `${d.fond}&t=${Date.now()}`;
-
-  const pos = (e) => {
-    const r = canvas.getBoundingClientRect();
-    return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
-  };
-  canvas.addEventListener("mousedown", (e) => {
-    const [x, y] = pos(e);
-    let plusProche = null;
-    aerUI.data.emprises.forEach((emp, ei) => emp.forEach((p, pi) => {
-      const dist = Math.hypot((p[0] - x) * canvas.width, (p[1] - y) * canvas.height);
-      if (dist < 14 && (!plusProche || dist < plusProche.dist)) plusProche = { ei, pi, dist };
-    }));
-    aerUI.drag = plusProche;
-  });
-  canvas.addEventListener("mousemove", (e) => {
-    if (!aerUI.drag) return;
-    const [x, y] = pos(e);
-    aerUI.data.emprises[aerUI.drag.ei][aerUI.drag.pi] =
-      [Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y))];
-    dessinerAerienne();
-  });
-  const finDrag = () => {
-    if (!aerUI.drag) return;
-    aerUI.drag = null;
-    api(`/api/projets/${state.projet.id}/insertion/aerienne`, {
-      method: "PUT", body: JSON.stringify({ emprises: aerUI.data.emprises }),
-    }).then((d2) => {
-      state.projet = d2.projet;
-      aerUI.data.auto = false;
-      const b = $("#aer-reset"); if (b) b.disabled = false;
-      const et = $("#aer-etat"); if (et) et.textContent = "(ajustée à la main)";
-      rafraichirPayloadEtPrompt();
-    }).catch(() => {});
-  };
-  canvas.addEventListener("mouseup", finDrag);
-  canvas.addEventListener("mouseleave", finDrag);
-  $("#aer-reset").addEventListener("click", async () => {
-    const d2 = await api(`/api/projets/${state.projet.id}/insertion/aerienne`, { method: "DELETE" });
-    state.projet = d2.projet;
-    renderAerienne();
-    rafraichirPayloadEtPrompt();
-  });
-}
-
-function dessinerAerienne() {
-  const canvas = $("#aer-canvas");
-  if (!canvas || !aerUI.img || !aerUI.data) return;
-  const dr = canvas.getContext("2d");
-  dr.clearRect(0, 0, canvas.width, canvas.height);
-  dr.drawImage(aerUI.img, 0, 0, canvas.width, canvas.height);
-  const X = (p) => p[0] * canvas.width, Y = (p) => p[1] * canvas.height;
-  for (const emp of aerUI.data.emprises) {
-    dr.beginPath();
-    emp.forEach((p, i) => (i ? dr.lineTo(X(p), Y(p)) : dr.moveTo(X(p), Y(p))));
-    dr.closePath();
-    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 3; dr.stroke();
-    for (const p of emp) {
-      dr.beginPath(); dr.arc(X(p), Y(p), 6, 0, 7); dr.fillStyle = "#FF00C8"; dr.fill();
-      dr.lineWidth = 2; dr.strokeStyle = "#fff"; dr.stroke();
-    }
-  }
-  const f = aerUI.data.fleche;
-  if (f) {
-    const a = [X(f.a), Y(f.a)], b = [X(f.b), Y(f.b)];
-    const v = [b[0] - a[0], b[1] - a[1]];
-    const n = Math.hypot(...v) || 1;
-    const u = [v[0] / n, v[1] / n], p = [-u[1], u[0]];
-    dr.strokeStyle = "#fff"; dr.lineWidth = 6;
-    dr.beginPath(); dr.moveTo(...a); dr.lineTo(...b); dr.stroke();
-    dr.strokeStyle = "#14141e"; dr.lineWidth = 3;
-    dr.beginPath(); dr.moveTo(...a); dr.lineTo(...b);
-    for (const s of [1, -1]) {
-      dr.moveTo(...b);
-      dr.lineTo(b[0] - 14 * u[0] + s * 8 * p[0], b[1] - 14 * u[1] + s * 8 * p[1]);
-    }
-    dr.stroke();
-  }
-}
-
-// ---- repères : 1 ombrière = trait de LONGUEUR + trait de LARGEUR (pente) ----
-// tracé en 4 clics : longueur début, longueur fin, largeur bas-de-pente, largeur haut-de-pente
 // ---- Type d'ombrière (Mono Bas / Mono Haut / Double) ----
 const TYPES_OMBRIERE = [
   { famille: "START PLAINE Bas", libelle: "Mono Bas", desc: "poteau côté haut" },
@@ -1631,22 +1542,54 @@ async function uploaderPhotosSite(files, sel = "#ins-photos") {
   renderPhotosInsertion(sel);
 }
 
-// génération directe via l'API Gemini (Nano Banana) — 1 image par clic
+// génération via l'API Gemini — en TÂCHE DE FOND côté serveur : le POST rend
+// la main tout de suite, on suit l'avancement par polling. Fermer/quitter la
+// page ne perd plus l'image (elle est rangée côté serveur à la fin du job).
+let pollGeneration = null;
+
 async function genererInsertionAPI() {
   const ins = state.projet.insertion || {};
   if (!ins.photo) { toast("Ajoute d'abord une photo du site (ou reprends une pièce BE).", "err"); return; }
-  const btn = $("#ins-generer-api");
-  const prog = $("#ins-progress");
-  if (btn) btn.disabled = true;
-  if (prog) prog.textContent = "Génération en cours (10 à 30 s)…";
   try {
     const promptEdite = state.promptEdite ? ($("#ins-prompt")?.value || "") : "";
-    const data = await api(`/api/projets/${state.projet.id}/insertion/generer`, {
+    await api(`/api/projets/${state.projet.id}/insertion/generer`, {
       method: "POST", body: JSON.stringify(promptEdite ? { prompt: promptEdite } : {}),
     });
-    state.projet = data.projet;
-    const ctrl = data.image?.controle;
-    if (prog) prog.textContent = "";
+  } catch { return; }  // 400/409 déjà affichés en toast par api()
+  majProgressGeneration(true);
+  suivreGeneration();
+}
+
+function majProgressGeneration(enCours) {
+  const btn = $("#ins-generer-api"), prog = $("#ins-progress");
+  if (btn) btn.disabled = enCours;
+  if (prog) prog.textContent = enCours
+    ? "Génération en cours (10 à 30 s)… tu peux continuer à travailler, l'image arrivera ici."
+    : "";
+}
+
+function suivreGeneration() {
+  clearInterval(pollGeneration);
+  const pid = state.projet?.id;
+  if (!pid) return;
+  pollGeneration = setInterval(async () => {
+    if (!state.projet || state.projet.id !== pid) { clearInterval(pollGeneration); return; }
+    let s;
+    try {
+      const resp = await fetch(`/api/projets/${pid}/insertion/generer/statut`);
+      s = await resp.json();
+    } catch { return; }   // réseau ponctuellement indisponible : on réessaie
+    if (s.etat === "en_cours") return;
+    clearInterval(pollGeneration);
+    pollGeneration = null;
+    majProgressGeneration(false);
+    if (s.etat === "erreur") { toast(s.erreur || "Génération échouée.", "err"); return; }
+    if (s.etat !== "prete") return;
+    try {
+      const d = await api(`/api/projets/${pid}`);
+      state.projet = d.projet; state.evaluation = d.evaluation; renderChrome();
+    } catch { return; }
+    const ctrl = s.image?.controle;
     if (ctrl && ctrl.verdict === "faible") {
       toast("Placement raté (ombrière hors emprise) : régénère.", "err");
     } else if (ctrl && ctrl.verdict === "partiel") {
@@ -1656,8 +1599,18 @@ async function genererInsertionAPI() {
     }
     renderGalerie();
     const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
-  } catch { if (prog) prog.textContent = ""; }
-  finally { if (btn) btn.disabled = false; }
+  }, 2500);
+}
+
+// au retour sur l'étape (ou après un refresh) : reprendre le suivi d'un job
+// encore en cours côté serveur
+async function reprendreGenerationSiEnCours() {
+  if (!state.projet?.id) return;
+  try {
+    const resp = await fetch(`/api/projets/${state.projet.id}/insertion/generer/statut`);
+    const s = await resp.json();
+    if (s.etat === "en_cours") { majProgressGeneration(true); suivreGeneration(); }
+  } catch { /* statut indisponible : rien à reprendre */ }
 }
 
 function renderGalerie() {
@@ -1671,9 +1624,12 @@ function renderGalerie() {
   }
   box.innerHTML = "";
   const dansDossier = new Set(ins.dans_dossier || []);
+  const photoAvant = ins.photo ? urlInsertion(ins.photo) : null;
   for (const v of images) {
     const retenue = ins.retenue === v.fichier;
     const incluse = dansDossier.has(v.fichier);
+    const quand = (v.date || "").replace("T", " ").slice(5, 16);   // MM-JJ HH:MM
+    const essais = Number(v.essais || 1);
     const div = document.createElement("div");
     div.className = "ins-vignette" + (retenue ? " retenue" : "");
     div.innerHTML = `
@@ -1682,17 +1638,42 @@ function renderGalerie() {
         ${badgeControle(v.controle)}
         ${retenue ? `<span class="ins-retenue">Retenue</span>` : ""}
       </div>
+      <div class="sub" style="margin:4px 2px 0">${esc(quand)}${essais > 1 ? ` · ${essais} appels` : ""}${v.modele ? ` · ${esc(v.modele)}` : ""}</div>
       <div class="ins-actions">
         <label class="ins-check" title="Inclure cette insertion au dossier DP exporté">
           <input type="checkbox" data-dossier="${esc(v.fichier)}" ${incluse ? "checked" : ""} />Dossier DP
         </label>
+        ${photoAvant ? `<button class="btn btn-sm" data-comparer="${esc(v.fichier)}" title="Photo du site et insertion côte à côte">Avant/après</button>` : ""}
+        ${v.prompt ? `<button class="btn btn-sm" data-prompt="${esc(v.fichier)}" title="Voir et réutiliser le prompt de cette image">Prompt</button>` : ""}
         <a class="btn btn-sm" href="/api/projets/${state.projet.id}/insertion/image.jpg?chemin=${encodeURIComponent(v.fichier)}" download>JPEG</a>
         <button class="btn btn-sm danger" data-suppr="${esc(v.fichier)}">Retirer</button>
         <button class="btn btn-sm ${retenue ? "primary" : "navy"}" data-retenue="${esc(v.fichier)}">${retenue ? "Retenue" : "Retenir"}</button>
+      </div>
+      <div class="ins-prompt-detail" data-detail="${esc(v.fichier)}" hidden style="margin-top:6px">
+        <textarea class="input prompt-ta" rows="6" readonly>${esc(v.prompt || "")}</textarea>
+        <button class="btn btn-sm" data-reprendre="${esc(v.fichier)}" style="margin-top:4px">↪ Reprendre ce prompt pour la prochaine génération</button>
       </div>`;
     div.querySelector(".zoomable").addEventListener("click", () => ouvrirLightbox(urlInsertion(v.fichier)));
     box.appendChild(div);
   }
+  const parFichier = Object.fromEntries(images.map((v) => [v.fichier, v]));
+  box.querySelectorAll("[data-comparer]").forEach((b) => b.addEventListener("click", () =>
+    ouvrirComparaison(photoAvant, urlInsertion(b.dataset.comparer))));
+  box.querySelectorAll("[data-prompt]").forEach((b) => b.addEventListener("click", () => {
+    const d = box.querySelector(`[data-detail="${CSS.escape(b.dataset.prompt)}"]`);
+    if (d) d.hidden = !d.hidden;
+  }));
+  box.querySelectorAll("[data-reprendre]").forEach((b) => b.addEventListener("click", () => {
+    const v = parFichier[b.dataset.reprendre];
+    const ta = $("#ins-prompt");
+    if (!v || !ta) return;
+    ta.value = v.prompt || "";
+    state.promptEdite = true;
+    majEtatPrompt();
+    const fold = $("#ins-prompt-fold"); if (fold) fold.open = true;
+    toast("Prompt repris : modifie-le puis génère.", "ok");
+    ta.scrollIntoView({ behavior: "smooth", block: "center" });
+  }));
   box.querySelectorAll("[data-dossier]").forEach((chk) => chk.addEventListener("change", async () => {
     const d = await api(`/api/projets/${state.projet.id}/insertion/dossier`, {
       method: "PUT", body: JSON.stringify({ fichier: chk.dataset.dossier, inclure: chk.checked }),
@@ -1861,7 +1842,9 @@ function renderEtapeExport(main) {
     <div class="actionsrow" style="margin:14px 0 8px">
       <button class="btn" id="btn-cerfa">Pré-remplir le Cerfa 16702</button>
       <button class="btn navy" id="btn-pptx">Assembler le dossier (PPTX)</button>
-      <button class="btn primary" id="btn-pdf">Exporter en PDF</button>
+      <button class="btn primary" id="btn-depot" title="Contrôle bloquant : refuse tant que toutes les pièces ne sont pas prêtes">Assembler pour dépôt</button>
+      <button class="btn" id="btn-pdf">Exporter en PDF</button>
+      <button class="btn" id="btn-nettoyer" title="Supprime les fichiers régénérables (caches, images non retenues) du dossier projet">🧹 Nettoyer</button>
     </div>
     <div id="export-liens" class="sub" style="min-height:20px"></div>
     <div class="gallery" id="gallery">
@@ -1882,15 +1865,45 @@ function renderEtapeExport(main) {
     el.addEventListener("click", () => chargerImg(el.dataset.regen, true)));
 
   const liens = $("#export-liens");
-  $("#btn-cerfa").addEventListener("click", async () => {
+  // opérations longues : bouton désactivé pendant l'appel (un double-clic
+  // lançait deux assemblages/exports concurrents) + message remis à zéro en
+  // cas d'échec (« en cours… » restait figé après une erreur).
+  const actionLongue = (btn, fn) => async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      await fn();
+    } catch (e) {
+      liens.textContent = "";   // l'erreur est déjà affichée en toast par api()
+    } finally {
+      btn.disabled = false;
+    }
+  };
+  const btnCerfa = $("#btn-cerfa"), btnPptx = $("#btn-pptx"), btnPdf = $("#btn-pdf");
+  const btnDepot = $("#btn-depot"), btnNettoyer = $("#btn-nettoyer");
+  btnDepot.addEventListener("click", actionLongue(btnDepot, async () => {
+    liens.textContent = "Contrôle de complétude puis assemblage…";
+    const data = await api(`/api/projets/${state.projet.id}/dossier?depot=1`, { method: "POST" });
+    telechargerFichier(data.telechargement, data.fichier);
+    liens.innerHTML = `Dossier PRÊT AU DÉPÔT téléchargé : <b>${esc(data.fichier)}</b> — `
+      + `<a href="${esc(data.telechargement)}" download>relancer</a>`
+      + (data.avertissements.length ? `<br />Avertissements : ${esc(data.avertissements.join(" ; "))}` : "");
+    toast("Dossier complet assemblé.", "ok");
+  }));
+  btnNettoyer.addEventListener("click", actionLongue(btnNettoyer, async () => {
+    const d = await api(`/api/projets/${state.projet.id}/nettoyer`, { method: "POST" });
+    toast(`Nettoyage : ${d.fichiers_supprimes} fichiers, ${d.mo_liberes} Mo libérés.`, "ok");
+  }));
+  btnCerfa.addEventListener("click", actionLongue(btnCerfa, async () => {
     const data = await api(`/api/projets/${state.projet.id}/cerfa`, { method: "POST" });
     state.projet = data.projet; state.evaluation = data.evaluation;
     renderChrome();
     liens.innerHTML = `Cerfa ${esc(data.cerfa)} pré-rempli (${data.champs_remplis} champs) —
-      <a href="/api/projets/${state.projet.id}/cerfa.pdf" target="_blank">ouvrir le PDF</a> (brouillon à relire).`;
+      <a href="/api/projets/${state.projet.id}/cerfa.pdf" target="_blank">ouvrir le PDF</a> (brouillon à relire).`
+      + ((data.avertissements || []).length ? `<br />Avertissements : ${esc(data.avertissements.join(" ; "))}` : "");
     toast("Cerfa pré-rempli.", "ok");
-  });
-  $("#btn-pptx").addEventListener("click", async () => {
+  }));
+  btnPptx.addEventListener("click", actionLongue(btnPptx, async () => {
     liens.textContent = "Assemblage en cours (génération des planches)…";
     const data = await api(`/api/projets/${state.projet.id}/dossier`, { method: "POST" });
     telechargerFichier(data.telechargement, data.fichier);
@@ -1898,15 +1911,15 @@ function renderEtapeExport(main) {
       + `<a href="${esc(data.telechargement)}" download>relancer</a>`
       + (data.avertissements.length ? `<br />Avertissements : ${esc(data.avertissements.join(" ; "))}` : "");
     toast("Dossier PPTX téléchargé.", "ok");
-  });
-  $("#btn-pdf").addEventListener("click", async () => {
+  }));
+  btnPdf.addEventListener("click", actionLongue(btnPdf, async () => {
     liens.textContent = "Export PDF en cours…";
     const data = await api(`/api/projets/${state.projet.id}/dossier/pdf`, { method: "POST" });
     telechargerFichier(data.telechargement, data.fichier);
     liens.innerHTML = `PDF téléchargé : <b>${esc(data.fichier)}</b> (dossier Téléchargements) — `
       + `<a href="${esc(data.telechargement)}" download>relancer</a>`;
     toast("PDF téléchargé.", "ok");
-  });
+  }));
 }
 
 // déclenche le téléchargement d'un fichier (atterrit dans le dossier Téléchargements)
@@ -1920,6 +1933,11 @@ function telechargerFichier(url, nom) {
 }
 
 // ---------------- init ----------------
+// saisie non sauvegardée (autosave débouncé à 900 ms) : avertir avant de
+// fermer/rafraîchir l'onglet plutôt que de perdre les derniers champs
+window.addEventListener("beforeunload", (e) => {
+  if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
+});
 $("#btn-accueil").addEventListener("click", () => { state.etape = 0; render(); });
 $("#lightbox").addEventListener("click", () => { $("#lightbox").hidden = true; });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").hidden = true; });

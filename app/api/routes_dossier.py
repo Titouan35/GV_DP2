@@ -44,9 +44,11 @@ def variables_notice(projet_id: str):
 def generer_cerfa(projet_id: str):
     projet = _charger(projet_id)
     try:
-        chemin, champs = preremplir(projet.model_dump())
+        chemin, champs, avertissements = preremplir(projet.model_dump())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ValueError as exc:  # régime PC : le Cerfa DP ne s'applique pas
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     projet.documents["cerfa"] = {
         "nom_fichier": chemin.name,
         "fichier": str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/"),
@@ -61,6 +63,7 @@ def generer_cerfa(projet_id: str):
         "evaluation": regles.evaluer(projet),
         "champs_remplis": len(champs),
         "cerfa": NUMERO_CERFA,
+        "avertissements": avertissements,
     }
 
 
@@ -73,13 +76,28 @@ def telecharger_cerfa(projet_id: str):
 
 
 @router.post("/projets/{projet_id}/dossier")
-def assembler_dossier(projet_id: str):
+def assembler_dossier(projet_id: str, depot: int = 0):
+    """Assemble le PPTX. `depot=1` = contrôle bloquant : refuse (409) tant que
+    toutes les pièces ne sont pas prêtes, pour qu'un dossier incomplet ne
+    parte jamais en mairie par distraction. Sans `depot`, mode brouillon :
+    on assemble et on signale les manques en avertissements."""
     projet = _charger(projet_id)
+    if depot:
+        manquantes = [
+            f"{p['titre']} ({p['detail']})"
+            for p in regles.completude(projet)["pieces"] if p["statut"] != "prete"
+        ]
+        if manquantes:
+            raise HTTPException(
+                status_code=409,
+                detail="Dossier incomplet pour un dépôt : " + " ; ".join(manquantes),
+            )
     chemin, avertissements = generer_dossier(projet.model_dump())
     return {
         "fichier": chemin.name,
         "telechargement": f"/api/projets/{projet_id}/dossier.pptx",
         "avertissements": avertissements,
+        "depot": bool(depot),
     }
 
 

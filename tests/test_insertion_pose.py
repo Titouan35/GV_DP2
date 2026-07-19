@@ -455,7 +455,9 @@ def test_route_type_et_pose(client):
 
 
 def test_relance_auto_sur_faible(tmp_path, monkeypatch):
-    """Un 1er rendu « faible » déclenche une relance ; on garde le meilleur."""
+    """Un 1er rendu quasi vide (couverture < 0,15) déclenche une relance ;
+    on garde le meilleur. Un simple « faible » à 0,2 ne relance plus (le
+    contrôle est approximatif : relancer doublait la dépense pour rien)."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     monkeypatch.setenv("GEMINI_API_KEY", "test")
     monkeypatch.setenv("GVDP_PRESERVER_SCENE", "0")
@@ -468,7 +470,7 @@ def test_relance_auto_sur_faible(tmp_path, monkeypatch):
         return img_bytes
 
     verdicts = iter([
-        {"couverture": 0.2, "verdict": "faible"},   # 1er essai raté
+        {"couverture": 0.05, "verdict": "faible"},   # 1er essai : rien construit
         {"couverture": 0.9, "verdict": "ok"},        # relance réussie
     ])
     monkeypatch.setattr(insertion_ia, "_appel_gemini", faux_appel)
@@ -477,6 +479,53 @@ def test_relance_auto_sur_faible(tmp_path, monkeypatch):
     res = insertion_ia.generer_image(projet)
     assert appels["n"] == 2 and res["essais"] == 2
     assert res["controle"]["verdict"] == "ok"        # la meilleure tentative gardée
+    assert insertion_ia.compteur_global() == 2       # chaque appel facturé compté
+
+
+def test_pas_de_relance_sur_faible_ambigu(tmp_path, monkeypatch):
+    """Couverture 0,2 (« faible » mais pas quasi nulle) : pas de relance —
+    le contrôle géométrique est approximatif, on ne double pas la dépense."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setenv("GVDP_PRESERVER_SCENE", "0")
+    projet, clean = _projet_photo(tmp_path, bord_avant=[[0.2, 0.6], [0.8, 0.6]])
+    img_bytes = _png(Image.open(clean).convert("RGB"))
+    appels = {"n": 0}
+
+    def faux_appel(parts, aspect_ratio=None):
+        appels["n"] += 1
+        return img_bytes
+
+    monkeypatch.setattr(insertion_ia, "_appel_gemini", faux_appel)
+    monkeypatch.setattr(insertion_ia, "controle_pose",
+                        lambda *a, **k: {"couverture": 0.2, "verdict": "faible"})
+    res = insertion_ia.generer_image(projet)
+    assert appels["n"] == 1 and res["essais"] == 1
+
+
+def test_relance_en_echec_garde_la_premiere_image(tmp_path, monkeypatch):
+    """Si la relance lève (quota…), on garde la 1re image déjà payée au lieu
+    de tout perdre, et le compteur reflète le seul appel facturé."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "test")
+    monkeypatch.setenv("GVDP_PRESERVER_SCENE", "0")
+    projet, clean = _projet_photo(tmp_path, bord_avant=[[0.2, 0.6], [0.8, 0.6]])
+    img_bytes = _png(Image.open(clean).convert("RGB"))
+    appels = {"n": 0}
+
+    def faux_appel(parts, aspect_ratio=None):
+        appels["n"] += 1
+        if appels["n"] > 1:
+            raise insertion_ia.InsertionError("Quota Gemini atteint")
+        return img_bytes
+
+    monkeypatch.setattr(insertion_ia, "_appel_gemini", faux_appel)
+    monkeypatch.setattr(insertion_ia, "controle_pose",
+                        lambda *a, **k: {"couverture": 0.05, "verdict": "faible"})
+    res = insertion_ia.generer_image(projet)
+    assert appels["n"] == 2 and res["essais"] == 1   # 2 appels, 1 seul facturé
+    assert res["fichier"]                            # l'image du 1er appel est gardée
+    assert insertion_ia.compteur_global() == 1
 
 
 def test_pas_de_relance_si_premier_ok(tmp_path, monkeypatch):

@@ -292,6 +292,8 @@ body.accueil .side, body.accueil .rightpanel { display: none; }
 }
 #lightbox[hidden] { display: none; }
 #lightbox img { max-width: 94vw; max-height: 94vh; border-radius: 8px; box-shadow: 0 12px 60px rgba(0, 0, 0, 0.5); }
+#lightbox.compare { gap: 10px; }
+#lightbox.compare img { max-width: 47vw; }
 .planche-img.zoomable { cursor: zoom-in; }
 .fiche-etape small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
 
