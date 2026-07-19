@@ -4,8 +4,12 @@ Cible : héberger l'outil pour toute l'équipe BE (tenant Microsoft Greenvolt).
 Même code qu'en local ; l'image conteneur ajoute **LibreOffice** pour la
 conversion PPTX → PDF côté Linux (le poste Windows utilise PowerPoint).
 
-> Aucune clé API : l'étape 5 (Insertion IA) est un générateur de prompt local.
-> Rien à provisionner côté secrets.
+> **Secret à provisionner : `GEMINI_API_KEY`** — l'étape Insertion IA appelle
+> l'API Gemini côté serveur (flux 17/07/2026). Sans la clé, l'outil fonctionne
+> mais l'atelier de génération reste désactivé (message clair dans l'UI).
+> Optionnels : `GVDP_GEMINI_MODEL` (défaut `gemini-3-pro-image`),
+> `GVDP_COUT_IMAGE_EUR` (défaut 0,13), `GVDP_AUTO_RETRY=0` pour couper la
+> relance automatique.
 
 ## 0. Prérequis
 
@@ -45,8 +49,10 @@ az containerapp create \
   --image $IMG \
   --registry-server $ACR.azurecr.io \
   --target-port 8420 --ingress internal \
-  --min-replicas 1 --max-replicas 2 \
-  --cpu 1.0 --memory 2.0Gi
+  --min-replicas 1 --max-replicas 1 \
+  --cpu 1.0 --memory 2.0Gi \
+  --secrets gemini-key=<clé Gemini> \
+  --env-vars GEMINI_API_KEY=secretref:gemini-key
 ```
 
 - `--ingress internal` : accessible uniquement depuis le réseau de l'entreprise
@@ -54,11 +60,20 @@ az containerapp create \
   l'outil manipule des données projet). Ajouter une **authentification** (Easy
   Auth / Entra ID) avant toute exposition externe.
 - `--memory 2.0Gi` : LibreOffice a besoin de RAM pour la conversion PDF.
+- `--max-replicas 1` : les verrous (projets, génération, pdfium) sont des
+  verrous **de process** ; plusieurs répliques les contourneraient. Une seule
+  réplique suffit largement pour une équipe BE.
+- L'identité de l'auteur des modifications peut être fournie par l'en-tête
+  HTTP `X-Utilisateur` (posé par un proxy/Easy Auth) ; à défaut, le compte
+  du conteneur est utilisé (peu parlant en prod).
 
 ## 4. Persistance des projets (recommandé)
 
 Par défaut, `PROJETS/` est **éphémère** (perdu au redémarrage du conteneur).
-Pour conserver les dossiers, monter un partage **Azure Files** sur `/app/PROJETS` :
+Ce dossier contient les projets JSON + leurs assets, mais aussi le **compteur
+de dépense IA** (`_compteur_ia.json`) et le **journal des générations**
+(`_journal_ia.jsonl`) : sans persistance, la comptabilité IA repart de zéro.
+Pour conserver le tout, monter un partage **Azure Files** sur `/app/PROJETS` :
 
 ```bash
 # compte de stockage + partage

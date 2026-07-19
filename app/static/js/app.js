@@ -1114,6 +1114,23 @@ function badgeControle(controle) {
   const pct = Math.round((controle.couverture || 0) * 100);
   return `<span class="chip ${d.cls}" title="Part de l'emprise tracée réellement couverte par la structure générée">${d.txt} · ${pct}%</span>`;
 }
+// ligne de dépense IA : « N images ce projet · M au total (~X €) »
+function depenseIA(s) {
+  if (!s || s.images_global == null) return "";
+  const cout = (s.images_global * (s.cout_image_eur || 0)).toFixed(2).replace(".", ",");
+  const proj = s.images_projet != null ? `${s.images_projet} image${s.images_projet > 1 ? "s" : ""} ce projet · ` : "";
+  return `${proj}${s.images_global} au total (~${cout} €)`;
+}
+
+async function majDepenseIA() {
+  const el = $("#ins-depense");
+  if (!el || !state.projet?.id) return;
+  try {
+    const s = await api(`/api/projets/${state.projet.id}/insertion/statut`);
+    el.textContent = depenseIA(s);
+  } catch { /* statut momentanément indisponible : on garde l'affichage actuel */ }
+}
+
 function renderInsertionAtelier(s) {
   const ins = state.projet.insertion || {};
   const main = $("#main");
@@ -1138,7 +1155,8 @@ function renderInsertionAtelier(s) {
     </div>
 
     <div class="card" style="margin-top:16px">
-      <div class="hd"><span class="ti-title">3 · Générer</span></div>
+      <div class="hd"><span class="ti-title">3 · Générer</span>
+        <span class="hint" id="ins-depense" title="Compteur local (l'API Gemini n'expose pas de solde) : nb d'images générées x coût unitaire">${depenseIA(s)}</span></div>
       <div class="bd">
         <div class="payload-strip" id="ins-payload"></div>
         <div class="field" style="margin-top:12px"><label>Consignes complémentaires</label>
@@ -1598,6 +1616,7 @@ function suivreGeneration() {
       toast("Insertion générée.", "ok");
     }
     renderGalerie();
+    majDepenseIA();
     const fiche = $("#ins-fiche"); if (fiche) fiche.disabled = !state.projet.insertion?.retenue;
   }, 2500);
 }
