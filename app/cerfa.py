@@ -82,9 +82,9 @@ def _champs_projet(projet: dict) -> dict:
         + ", modules photovoltaïques full black"
     )
     if omb.get("module_puissance_wc"):
-        desc += f" de {omb['module_puissance_wc']:g} Wc"
+        desc += f" de {omb['module_puissance_wc']:g} Wc".replace(".", ",")
     if omb.get("puissance_kwc"):
-        desc += f", puissance {omb['puissance_kwc']:g} kWc"
+        desc += f", puissance {omb['puissance_kwc']:g} kWc".replace(".", ",")
     if omb.get("nb_places"):
         desc += f", {omb['nb_places']} places couvertes"
     desc += ". Conforme à l'obligation de la loi APER (art. L.171-4 CCH)."

@@ -1590,13 +1590,26 @@ function suivreGeneration() {
   clearInterval(pollGeneration);
   const pid = state.projet?.id;
   if (!pid) return;
+  let echecs = 0;
   pollGeneration = setInterval(async () => {
     if (!state.projet || state.projet.id !== pid) { clearInterval(pollGeneration); return; }
     let s;
     try {
       const resp = await fetch(`/api/projets/${pid}/insertion/generer/statut`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       s = await resp.json();
-    } catch { return; }   // réseau ponctuellement indisponible : on réessaie
+      echecs = 0;
+    } catch {
+      // réseau/serveur momentanément indisponible : on réessaie, mais pas
+      // indéfiniment (sinon bouton désactivé + « en cours… » figés à vie)
+      if (++echecs >= 24) {   // ~1 min d'échecs consécutifs
+        clearInterval(pollGeneration);
+        pollGeneration = null;
+        majProgressGeneration(false);
+        toast("Suivi de la génération interrompu (serveur injoignable) : recharge la page.", "err");
+      }
+      return;
+    }
     if (s.etat === "en_cours") return;
     clearInterval(pollGeneration);
     pollGeneration = null;
@@ -1605,7 +1618,17 @@ function suivreGeneration() {
     if (s.etat !== "prete") return;
     try {
       const d = await api(`/api/projets/${pid}`);
-      state.projet = d.projet; state.evaluation = d.evaluation; renderChrome();
+      if (state.projet && state.projet.id === pid) {
+        // FUSION, pas remplacement : l'utilisateur a pu saisir des champs
+        // pendant la génération (« tu peux continuer à travailler ») — on ne
+        // reprend du serveur que la partie insertion et la date (le verrou
+        // optimiste accepterait sinon un autosave à date périmée -> 409).
+        state.projet.insertion = d.projet.insertion;
+        state.projet.date_modification = d.projet.date_modification;
+        state.projet.modifie_par = d.projet.modifie_par;
+        state.evaluation = d.evaluation;
+        renderChrome();
+      }
     } catch { return; }
     const ctrl = s.image?.controle;
     if (ctrl && ctrl.verdict === "faible") {

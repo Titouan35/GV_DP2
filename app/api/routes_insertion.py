@@ -18,7 +18,7 @@ from .. import config, insertion_ia
 from ..fiche_emprise import generer_fiche
 from ..insertion_ia import InsertionError
 from .routes_documents import lire_upload, normaliser_exif, signature_valide
-from .routes_projets import _charger, _sauver
+from .routes_projets import _charger, _ecrire, _sauver, verrou_projet
 
 router = APIRouter(prefix="/api/projets", tags=["insertion"])
 
@@ -239,17 +239,20 @@ def _tache_generation(projet_id: str, affinage: str, prompt_override: str) -> No
         image = insertion_ia.generer_image(projet.model_dump(), affinage=affinage,
                                            prompt_override=prompt_override)
         # recharger l'état le plus frais avant d'écrire (l'utilisateur a pu
-        # modifier le projet pendant la génération)
-        projet = _charger(projet_id)
-        if affinage:
-            projet.insertion.affinage = affinage[:2000]
-        projet.insertion.images = [image, *projet.insertion.images]
-        if not projet.insertion.retenue:
-            projet.insertion.retenue = image["fichier"]
-        projet.insertion.prompt = image.get("prompt")
-        projet.insertion.nb_images_generees += int(image.get("essais", 1))
-        projet.date_modification = datetime.now().isoformat(timespec="seconds")
-        _sauver(projet)
+        # modifier le projet pendant la génération) — TOUT sous le verrou du
+        # projet, sinon un autosave glissé entre le _charger et l'écriture
+        # serait écrasé par le thread
+        with verrou_projet(projet_id):
+            projet = _charger(projet_id)
+            if affinage:
+                projet.insertion.affinage = affinage[:2000]
+            projet.insertion.images = [image, *projet.insertion.images]
+            if not projet.insertion.retenue:
+                projet.insertion.retenue = image["fichier"]
+            projet.insertion.prompt = image.get("prompt")
+            projet.insertion.nb_images_generees += int(image.get("essais", 1))
+            projet.date_modification = datetime.now().isoformat(timespec="seconds")
+            _ecrire(projet)
         with _GENERATIONS_LOCK:
             _GENERATIONS[projet_id] = {"etat": "prete", "image": image}
     except Exception as exc:  # InsertionError, HTTPException, imprévu : tout doit sortir du job

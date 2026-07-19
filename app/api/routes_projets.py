@@ -62,13 +62,19 @@ def _chemin(projet_id: str):
     return config.PROJETS_DIR / f"{projet_id}.json"
 
 
-def _sauver(projet: Projet) -> None:
+def _ecrire(projet: Projet) -> None:
+    """Écriture atomique SANS verrou : réservée aux appelants qui tiennent
+    déjà `verrou_projet` (le verrou n'est pas réentrant)."""
     config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
     chemin = _chemin(projet.id)
     tmp = chemin.with_suffix(".json.tmp")
+    tmp.write_text(projet.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(tmp, chemin)  # atomique : jamais de JSON à moitié écrit
+
+
+def _sauver(projet: Projet) -> None:
     with verrou_projet(projet.id):
-        tmp.write_text(projet.model_dump_json(indent=2), encoding="utf-8")
-        os.replace(tmp, chemin)  # atomique : jamais de JSON à moitié écrit
+        _ecrire(projet)
 
 
 def _charger(projet_id: str) -> Projet:
@@ -134,24 +140,27 @@ def lire_projet(projet_id: str):
 
 @router.put("/{projet_id}")
 def sauvegarder_projet(projet_id: str, projet: Projet, request: Request = None):
-    existant = _charger(projet_id)
     # verrou optimiste multi-poste : si le fichier a changé depuis le
     # chargement côté client (autre onglet, autre poste OneDrive), on refuse
-    # au lieu d'écraser silencieusement le travail de l'autre (last-write-wins)
-    if (projet.date_modification and existant.date_modification
-            and projet.date_modification != existant.date_modification):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Projet modifié entre-temps ({existant.date_modification}"
-                   + (f", par {existant.modifie_par}" if existant.modifie_par else "")
-                   + "). Rechargez la page pour repartir de la dernière version.",
-        )
-    projet.id = projet_id
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    projet.modifie_par = _utilisateur(request)
-    evaluation = regles.evaluer(projet)
-    projet.regime = evaluation["regime"]["regime"]
-    _sauver(projet)
+    # au lieu d'écraser silencieusement le travail de l'autre (last-write-wins).
+    # TOUTE la séquence lire-comparer-écrire est sous le verrou du projet :
+    # sinon deux PUT simultanés passaient tous les deux le contrôle (TOCTOU).
+    with verrou_projet(projet_id):
+        existant = _charger(projet_id)
+        if (projet.date_modification and existant.date_modification
+                and projet.date_modification != existant.date_modification):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Projet modifié entre-temps ({existant.date_modification}"
+                       + (f", par {existant.modifie_par}" if existant.modifie_par else "")
+                       + "). Rechargez la page pour repartir de la dernière version.",
+            )
+        projet.id = projet_id
+        projet.date_modification = datetime.now().isoformat(timespec="seconds")
+        projet.modifie_par = _utilisateur(request)
+        evaluation = regles.evaluer(projet)
+        projet.regime = evaluation["regime"]["regime"]
+        _ecrire(projet)
     return {"projet": projet, "evaluation": evaluation}
 
 
