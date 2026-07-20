@@ -970,8 +970,6 @@ function renderEtapePieces(main) {
     <div class="scale-row" style="margin-bottom:6px">
       <label class="btn navy" style="cursor:pointer">+ ajouter des photos
         <input type="file" id="pieces-photos-add" accept=".png,.jpg,.jpeg,.webp" multiple hidden /></label>
-      <input class="input" id="pieces-scale-desc" placeholder="repère d'échelle (ex. : largeur d'une place)" value="${esc((state.projet.insertion || {}).echelle_desc || "")}" />
-      <input class="input" id="pieces-scale-dist" type="number" step="0.1" placeholder="m" value="${(state.projet.insertion || {}).echelle_distance_m ?? ""}" style="max-width:80px" />
     </div>
 
     <div class="actionsrow">
@@ -983,18 +981,6 @@ function renderEtapePieces(main) {
   renderPhotosInsertion("#pieces-photos");
   $("#pieces-photos-add").addEventListener("change", (e) => {
     if (e.target.files.length) uploaderPhotosSite(e.target.files, "#pieces-photos").catch(() => {});
-  });
-  const sauverEchellePieces = () => {
-    api(`/api/projets/${state.projet.id}/insertion/consignes`, {
-      method: "PUT",
-      body: JSON.stringify({
-        echelle_desc: $("#pieces-scale-desc").value,
-        echelle_distance_m: $("#pieces-scale-dist").value || "",
-      }),
-    }).then((d) => { state.projet = d.projet; }).catch(() => {});
-  };
-  ["#pieces-scale-desc", "#pieces-scale-dist"].forEach((s) => {
-    let t; $(s).addEventListener("input", () => { clearTimeout(t); t = setTimeout(sauverEchellePieces, 700); });
   });
   for (const piece of PIECES_UPLOAD) {
     const doc = state.projet.documents?.[piece.code];

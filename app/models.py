@@ -93,8 +93,9 @@ class Insertion(BaseModel):
     photos: list[str] = Field(default_factory=list)  # photos du site déposées (multi)
     consignes: str = ""                    # consignes libres pour le prompt
     affinage: str = ""                     # dernières corrections demandées
-    echelle_desc: str = ""                 # ce que représente le repère d'échelle (ex. « largeur d'une place »)
-    echelle_distance_m: Optional[float] = None  # distance réelle du repère (m), reportée au prompt
+    # (repère d'échelle textuel retiré le 19/07/2026 : l'échelle vient de la
+    #  perspective calibrée — longueur du bord tracé + hauteur de prise de vue.
+    #  Les anciens projets portant ces clés se chargent sans erreur.)
     prompt: Optional[str] = None           # dernier prompt envoyé (traçabilité)
     images: list[dict] = Field(default_factory=list)  # images générées {fichier, date, etiquette, modele}
     retenue: Optional[str] = None          # image retenue (fiche d'emprise)

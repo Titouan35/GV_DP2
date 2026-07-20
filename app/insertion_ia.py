@@ -801,15 +801,10 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
         blocs.append("STRUCTURE. Ombrière "
                      + _descriptif_ombriere(defaut, projet) + ".")
 
-    # repère d'échelle saisi par l'utilisateur : jusqu'ici collecté par l'UI
-    # mais jamais injecté dans le prompt (constaté à l'audit du 19/07/2026).
-    echelle_desc = (ins.get("echelle_desc") or "").strip()
-    echelle_m = ins.get("echelle_distance_m")
-    if echelle_desc and echelle_m:
-        blocs.append(
-            f"ECHELLE. Repère de taille réelle, visible sur la photo : "
-            f"{echelle_desc} mesure {_fmt(echelle_m)} m. Sers-t'en pour caler la "
-            "taille des volumes ; ne dessine ni ce repère, ni aucune cote.")
+    # (bloc ECHELLE textuel retiré le 19/07/2026 : depuis la perspective
+    #  calibrée, l'échelle est portée GÉOMÉTRIQUEMENT par l'emprise projetée,
+    #  bien plus contraignante qu'une phrase — et énoncer une mesure poussait
+    #  le modèle à dessiner des cotes, cf. leçon du bloc « COTES ».)
 
     # règle métier absolue (Florent) : Greenvolt ne pose jamais d'ombrière en Y.
     # Elle vaut pour TOUS les types, mono comme double.
