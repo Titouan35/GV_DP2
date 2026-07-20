@@ -828,6 +828,14 @@ def construire_prompt_scaffold(projet: dict, affinage: str = "") -> str:
         "n'ajoute aucune ombrière ailleurs dans l'image. Tu ne fais que donner "
         "une matière et une lumière réelles à ce volume.",
 
+        # constaté sur RIVE (20/07/2026) : le modèle « rapprochait » la
+        # structure en la prolongeant vers le spectateur, au-delà du volume
+        "PREMIER PLAN. Le bord avant du volume gris est le bord avant "
+        "DÉFINITIF de l'ombrière : la structure ne s'étend pas d'un "
+        "centimètre vers le spectateur au-delà de ce bord. Tout le sol situé "
+        "devant le volume reste exactement comme sur la photo, nu et à "
+        "découvert, sans toiture au-dessus.",
+
         "STRUCTURE. Remplace les aplats gris par une vraie charpente : poteaux "
         "en acier de section carrée, poutres et pannes sous la toiture, bord de "
         "toiture net et fin. La surface que tu vois est la SOUS-FACE de "
@@ -1352,8 +1360,28 @@ def controle_pose(projet: dict, photo_propre: Path, image_generee: bytes) -> dic
     modifie = np.asarray(diff.filter(ImageFilter.GaussianBlur(3))) > 16
 
     couverture = int((attendu & modifie).sum()) / aire
-    verdict = "ok" if couverture >= 0.55 else "partiel" if couverture >= 0.30 else "faible"
-    return {"couverture": round(couverture, 3), "verdict": verdict}
+
+    # DÉBORDEMENT (constaté sur RIVE, 20/07/2026) : le modèle avait prolongé
+    # la structure vers le spectateur — la couverture était bonne (0,91) mais
+    # rien ne mesurait ce qui avait été construit HORS de la zone autorisée.
+    deborde = 0.0
+    zone = zone_autorisee(projet, W0, H0, photo_propre)
+    if zone is not None:
+        zone_r = np.asarray(Image.fromarray(zone.astype(np.uint8) * 255)
+                            .resize((W, H), Image.NEAREST)) > 0
+        hors = int((modifie & ~zone_r).sum())
+        deborde = hors / aire
+
+    if couverture < 0.30:
+        verdict = "faible"
+    elif deborde > 0.8:
+        verdict = "deborde"
+    elif couverture < 0.55:
+        verdict = "partiel"
+    else:
+        verdict = "ok"
+    return {"couverture": round(couverture, 3), "verdict": verdict,
+            "deborde": round(deborde, 3)}
 
 
 # ------------------------------------------------------------------ état projet

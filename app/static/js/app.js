@@ -1093,6 +1093,7 @@ const CONTROLE_LIB = {
   ok: { cls: "ok", txt: "Emprise bien couverte" },
   partiel: { cls: "warn", txt: "Ombrière raccourcie / partielle" },
   faible: { cls: "err", txt: "Placement hors emprise" },
+  deborde: { cls: "warn", txt: "Structure étendue au-delà du volume" },
 };
 function badgeControle(controle) {
   if (!controle || !controle.verdict) return "";
@@ -1409,7 +1410,12 @@ async function renderPose() {
   const canvas = $("#p-canvas");
   const img = new Image();
   img.onload = () => {
-    const scale = Math.min(1, 760 / img.naturalWidth);
+    // canvas a la LARGEUR DISPONIBLE (retour Florent : 760 px etait trop
+    // petit, et un grand canvas rend chaque geste moins sensible : moins de
+    // metres par pixel d'ecran)
+    const dispo = Math.min(1400, (body.clientWidth || 760) - 4);
+    const scale = Math.min(1, dispo / img.naturalWidth,
+                           (window.innerHeight * 0.78) / img.naturalHeight);
     canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
     poseUI.img = img;
@@ -1463,6 +1469,12 @@ async function renderPose() {
       poseUI.horizonAjuste = true;
       dessinerPose();
       return;
+    }
+    // zone morte : un clic legerement tremble ne doit pas deplacer l'ombriere
+    if (!d.arme) {
+      const [x0, y0] = poseUI.pressePx || px(e);
+      if (Math.hypot(px(e)[0] - x0, px(e)[1] - y0) < 6) return;
+      d.arme = true;
     }
     gizmoBouger(d, px(e), canvas);
     dessinerPose();
@@ -2006,6 +2018,8 @@ function suivreGeneration() {
     const ctrl = s.image?.controle;
     if (ctrl && ctrl.verdict === "faible") {
       toast("Placement raté (ombrière hors emprise) : régénère.", "err");
+    } else if (ctrl && ctrl.verdict === "deborde") {
+      toast("Le modèle a construit au-delà du volume demandé : vérifie le rendu, régénère au besoin.", "warn");
     } else if (ctrl && ctrl.verdict === "partiel") {
       toast("Ombrière partiellement placée : à vérifier ou régénérer.", "warn");
     } else {
