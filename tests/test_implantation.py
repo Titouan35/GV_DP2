@@ -96,6 +96,33 @@ def test_decadrer_retire_l_habillage_type_plan(tmp_path):
     assert insertion_ia.decadrer(chemin, plein_cadre) == plein_cadre
 
 
+def test_preserver_scene_garde_une_structure_de_meme_luminance(tmp_path):
+    """Régression du 20/07/2026 : une ombrière galvanisée mate devant un ciel
+    bleu a presque la même LUMINANCE que le fond. L'ancienne diff en niveaux
+    de gris ne la voyait pas et la remplaçait par la photo d'origine, d'où des
+    rendus translucides. La diff en couleur doit la conserver."""
+    rng = np.random.default_rng(3)
+    fond = np.zeros((300, 400, 3), dtype=np.float32)
+    fond[:180] = [120, 170, 235]        # ciel bleu
+    fond[180:] = [110, 108, 105]        # bitume
+    fond = np.clip(fond + rng.normal(0, 6, fond.shape), 0, 255).astype(np.uint8)
+    chemin = tmp_path / "orig.png"
+    Image.fromarray(fond).save(chemin)
+
+    gen = fond.astype(np.float32).copy()
+    gen[100:150, 80:320] = [168, 175, 182]      # galva mat, luminance ~ celle du ciel
+    gen = np.clip(gen + 8, 0, 255).astype(np.uint8)   # + éclaircissement du modèle
+
+    res = np.asarray(Image.open(io.BytesIO(
+        insertion_ia.preserver_scene(chemin, _png(Image.fromarray(gen))))).convert("RGB"))
+    # la structure est toujours là (grise), pas remplacée par le ciel bleu
+    pixel = res[125, 200].astype(int)
+    assert abs(pixel[2] - pixel[0]) < 40, f"le ciel a repris le dessus : {pixel}"
+    assert pixel[0] > 140, f"structure effacée : {pixel}"
+    # et le ciel loin de la structure est bien restauré
+    assert abs(int(res[30, 30][2]) - int(fond[30, 30][2])) < 12
+
+
 def test_preserver_scene_cadrage_different(tmp_path):
     """Ratio d'image différent : on rend l'image générée sans y toucher."""
     orig = Image.new("RGB", (400, 300), (100, 100, 100))

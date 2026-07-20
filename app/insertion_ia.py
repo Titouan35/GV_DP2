@@ -689,12 +689,17 @@ def _descriptif_ombriere(o: dict, projet: dict, emprise: bool = False) -> str:
             else "la toiture descend en s'éloignant du spectateur")
 
     if e["double"]:
-        profil = ("de type DOUBLE : une file de poteaux centraux uniques portant "
-                  "UNE SEULE toiture inclinée d'un seul tenant, qui déborde en "
-                  "porte-à-faux de part et d'autre du poteau. En coupe, "
-                  "l'ensemble dessine un T. La pente descend de façon continue et "
-                  "régulière d'un bord à l'autre : la toiture reste un plan "
-                  "unique, sans arête ni sommet au milieu")
+        # Formulation refondue le 20/07/2026 après un rendu en papillon malgré
+        # l'interdiction : « déborde de part et d'autre du poteau » suggérait
+        # deux ailes symétriques, et « dessine un T » évoquait deux bras. On
+        # décrit désormais l'objet par une image mentale univoque (le plateau
+        # incliné sur un pied), sans jamais nommer de forme à deux versants.
+        profil = ("de type DOUBLE : UN SEUL plateau plan, incliné d'un seul "
+                  "tenant, posé en équilibre sur une file de poteaux uniques "
+                  "plantés en son milieu — exactement comme une table dont un "
+                  "côté serait plus haut que l'autre. Le plateau descend en "
+                  "pente régulière depuis son bord haut jusqu'à son bord bas, "
+                  "sans jamais changer de direction en chemin")
         # avec l'emprise dessinée, la file de poteaux est localisable
         # exactement : on la rattache au quadrilatère plutôt que de laisser le
         # modèle la placer au jugé.
@@ -841,17 +846,24 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
 
     # règle métier absolue (Florent) : Greenvolt ne pose jamais d'ombrière en Y.
     # Elle vaut pour TOUS les types, mono comme double.
+    # Règle métier absolue (Florent) : Greenvolt ne pose jamais d'ombrière en Y.
+    # Énoncée POSITIVEMENT depuis le 20/07/2026 : l'ancienne version listait
+    # « jamais de V, de Y, de papillon » et le modèle a produit exactement un
+    # papillon — nommer une forme, même pour l'interdire, la met en tête.
     blocs.append(
-        "TOITURE. Règle absolue, valable pour chaque ombrière : la toiture est un "
-        "PLAN UNIQUE incliné d'un seul tenant, d'un bord à l'autre. Jamais deux "
-        "versants opposés, jamais de faîtage ni d'arête au sommet, jamais de "
-        "profil en V, en Y ou en papillon. Vue de bout, on ne voit qu'une seule "
-        "ligne droite inclinée posée sur ses poteaux.")
+        "TOITURE. Règle absolue, valable pour chaque ombrière : la toiture est "
+        "une surface plane unique, inclinée dans une seule direction, comme une "
+        "rampe. Vue de bout, elle se lit comme un unique segment de droite "
+        "penché, qui descend régulièrement de son bord haut vers son bord bas "
+        "et garde la même direction sur toute sa largeur.")
 
     blocs.append(
         "MATERIAUX. Structure en acier galvanisé gris clair (poteaux caisson, "
         "poutres et arbalétriers), toiture de modules photovoltaïques NOIRS et "
-        "mats (full black) alignés en trame régulière, sous-face claire.")
+        "mats (full black) alignés en trame régulière, sous-face claire. La "
+        "structure est pleine et parfaitement opaque : elle masque complètement "
+        "les voitures, les arbres et les bâtiments situés derrière elle, on ne "
+        "voit rien au travers de sa toiture ni de ses poteaux.")
 
     familles = _familles_tracees(projet)[:2]
     noms = [libelle_coupe(f) for f in familles]
@@ -1137,16 +1149,29 @@ def controle_pose(projet: dict, photo_propre: Path, image_generee: bytes) -> dic
     except OSError:
         return None
     W0, H0 = orig.size
-    bandes = _bandes_pose(projet, W0, H0)
-    if not bandes:
+    # zone attendue : la SILHOUETTE exacte du volume (sol + toiture) quand la
+    # perspective est calculable ; repli sur la bande approximative sinon.
+    # Avec la seule bande au sol, une structure minuscule mais bien placée
+    # obtenait un verdict « ok » (constaté sur Anse, 76 % pour une ombrière
+    # de 3 places au lieu de 20 m).
+    volumes = [v for v in volumes_poses(projet, W0, H0, photo_propre) if v]
+    if volumes:
+        formes = []
+        for v in volumes:
+            sol, toit = v["sol"], v["toit"]
+            formes += [sol, toit, [sol[0], sol[1], toit[1], toit[0]],
+                       [sol[3], sol[2], toit[2], toit[3]]]
+    else:
+        formes = _bandes_pose(projet, W0, H0)
+    if not formes:
         return None
     ech = min(1.0, 1000 / max(W0, H0))
     W, H = max(1, round(W0 * ech)), max(1, round(H0 * ech))
 
     masque = Image.new("L", (W, H), 0)
     dessin = ImageDraw.Draw(masque)
-    for bande in bandes:
-        dessin.polygon([(x * ech, y * ech) for x, y in bande], fill=255)
+    for forme in formes:
+        dessin.polygon([(x * ech, y * ech) for x, y in forme], fill=255)
     attendu = np.asarray(masque) > 0
     aire = int(attendu.sum())
     if aire == 0:
@@ -1154,10 +1179,14 @@ def controle_pose(projet: dict, photo_propre: Path, image_generee: bytes) -> dic
 
     gen = gen.resize((W, H), Image.LANCZOS)
     orig_s = orig.resize((W, H), Image.LANCZOS)
-    o = np.asarray(orig_s.convert("L"), dtype=np.float32)
-    g = np.asarray(gen.convert("L"), dtype=np.float32)
-    g = (g - g.mean()) / (g.std() or 1.0) * (o.std() or 1.0) + o.mean()
-    diff = Image.fromarray(np.clip(np.abs(g - o), 0, 255).astype(np.uint8))
+    # diff en COULEUR, comme preserver_scene : en luminance, une structure
+    # galvanisée devant le ciel est invisible pour le contrôle
+    o = np.asarray(orig_s, dtype=np.float32)
+    g = np.asarray(gen, dtype=np.float32).copy()
+    for c in range(3):
+        g[..., c] += o[..., c].mean() - g[..., c].mean()
+    ecart = np.abs(g - o).max(axis=2)
+    diff = Image.fromarray(np.clip(ecart, 0, 255).astype(np.uint8))
     modifie = np.asarray(diff.filter(ImageFilter.GaussianBlur(3))) > 16
 
     couverture = int((attendu & modifie).sum()) / aire
@@ -1425,12 +1454,20 @@ def preserver_scene(photo_origine: Path, image_generee: bytes,
         return image_generee  # cadrage différent : diff inexploitable
     gen = gen.resize(orig.size, Image.LANCZOS)
 
-    o = np.asarray(orig.convert("L"), dtype=np.float32)
-    g = np.asarray(gen.convert("L"), dtype=np.float32)
-    ecart_type = g.std() or 1.0
-    g = (g - g.mean()) / ecart_type * (o.std() or 1.0) + o.mean()  # expo alignée
+    # Différence en COULEUR, pas en luminance (corrigé le 20/07/2026) : une
+    # structure galvanisée gris clair devant un ciel bleu clair a presque la
+    # même luminance — en niveaux de gris elle passait sous le seuil et se
+    # faisait remplacer par la photo d'origine, d'où des rendus translucides.
+    o_rgb = np.asarray(orig, dtype=np.float32)
+    g_rgb = np.asarray(gen, dtype=np.float32).copy()
+    # exposition alignée par simple DÉCALAGE de moyenne, canal par canal. Le
+    # recalage en gain (écart-type) écrasait le signal quand la photo est peu
+    # contrastée (grand aplat de ciel) au point d'effacer la structure.
+    for c in range(3):
+        g_rgb[..., c] += o_rgb[..., c].mean() - g_rgb[..., c].mean()
+    ecart = np.abs(g_rgb - o_rgb).max(axis=2)     # le canal le plus discriminant
 
-    diff = Image.fromarray(np.clip(np.abs(g - o), 0, 255).astype(np.uint8))
+    diff = Image.fromarray(np.clip(ecart, 0, 255).astype(np.uint8))
     diff = diff.filter(ImageFilter.GaussianBlur(5))
     masque = np.asarray(diff) > 16
     if zone is not None and zone.shape == masque.shape:
@@ -1439,9 +1476,12 @@ def preserver_scene(photo_origine: Path, image_generee: bytes,
     if fraction > 0.65:
         return image_generee  # tout a changé : la restauration effacerait l'ombrière
 
+    # alpha franc au cœur de la zone construite, dégradé sur les seuls bords :
+    # un fondu progressif au centre rendrait la structure semi-transparente.
     alpha = Image.fromarray((masque * 255).astype(np.uint8))
-    alpha = alpha.filter(ImageFilter.MaxFilter(15)).filter(ImageFilter.GaussianBlur(10))
-    a = np.asarray(alpha, dtype=np.float32)[..., None] / 255.0
+    alpha = alpha.filter(ImageFilter.MaxFilter(15)).filter(ImageFilter.GaussianBlur(6))
+    a = np.asarray(alpha, dtype=np.float32) / 255.0
+    a = np.clip(a * 1.6, 0.0, 1.0)[..., None]     # saturation : cœur à 1 franc
     fusion = np.asarray(gen, dtype=np.float32) * a + np.asarray(orig, dtype=np.float32) * (1 - a)
 
     tampon = io.BytesIO()
@@ -1514,6 +1554,15 @@ def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -
             break                                     # assez bon : on s'arrête
 
     image, controle = meilleur_img, meilleur_ctrl
+    dossier = config.assets_dir(projet["id"]) / "insertion"
+    dossier.mkdir(parents=True, exist_ok=True)
+    horodatage = datetime.now().strftime("%Y%m%d-%H%M%S")
+    # image BRUTE conservée avant le recollage de scène : sans elle, impossible
+    # de distinguer un défaut de Gemini d'un dégât de notre post-traitement
+    # (constaté le 20/07/2026 sur un rendu translucide). Purgée par « Nettoyer ».
+    brut = dossier / f"insertion_{horodatage}_brut.png"
+    brut.write_bytes(image)
+
     if os.environ.get("GVDP_PRESERVER_SCENE", "1") != "0":
         zone = None
         if os.environ.get("GVDP_SCENE_STRICTE", "1") != "0":
@@ -1523,9 +1572,7 @@ def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -
             except OSError:
                 zone = None
         image = preserver_scene(propre, image, zone=zone)
-    dossier = config.assets_dir(projet["id"]) / "insertion"
-    dossier.mkdir(parents=True, exist_ok=True)
-    nom = f"insertion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+    nom = f"insertion_{horodatage}.png"
     (dossier / nom).write_bytes(image)
     rel = str((dossier / nom).relative_to(config.PROJETS_DIR)).replace("\\", "/")
     journaliser_generation({

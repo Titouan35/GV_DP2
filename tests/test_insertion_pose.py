@@ -138,39 +138,54 @@ def test_prompt_pose_mono(tmp_path, monkeypatch):
     assert "REFERENCE" in p and "GUIDES" in p        # référence + anti-repère
 
 
-def test_prompt_double_decrit_un_T_pas_un_Y(tmp_path, monkeypatch):
-    """Le profil Double doit être décrit comme UNE toiture d'un seul tenant.
+def test_prompt_double_decrit_un_plateau_incline(tmp_path, monkeypatch):
+    """Le profil Double = UN plateau plan sur un pied central.
 
-    Constaté le 18/07/2026 : parler de « deux versants » faisait dessiner une
-    arête centrale (profil en Y / V inversé) au lieu du T de la coupe Solstyce.
+    Deux formulations ont successivement produit un profil à deux versants :
+    « toiture à deux versants » (18/07) puis « déborde de part et d'autre du
+    poteau / dessine un T » (20/07, papillon constaté sur Anse). Toutes deux
+    sont bannies au profit d'une image mentale univoque.
     """
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet, _ = _projet_photo(tmp_path, famille="START PLAINE Double",
                               bord_avant=[[0.2, 0.6], [0.8, 0.6]])
     p = insertion_ia.construire_prompt_pose(projet, pose=True)
-    assert "DOUBLE" in p and "dessine un T" in p
-    assert "UNE SEULE toiture" in p and "sans arête ni sommet au milieu" in p
-    # la formulation fautive est bannie ; « versants » ne subsiste que dans
-    # l'interdiction explicite (« Jamais deux versants opposés »)
+    assert "DOUBLE" in p
+    assert "UN SEUL plateau plan" in p
+    assert "sans jamais changer de direction" in p
+    # formulations fautives bannies
     assert "toiture à deux versants" not in p
-    assert "Jamais deux versants opposés" in p
+    assert "de part et d'autre" not in p
+    assert "dessine un T" not in p
     assert "10 m de profondeur" in p                 # cote du type Double
 
 
-def test_jamais_de_profil_en_Y(tmp_path, monkeypatch):
-    """Règle métier absolue : Greenvolt ne pose jamais d'ombrière en Y.
+def test_toiture_dun_seul_tenant_sans_nommer_les_formes_interdites(tmp_path, monkeypatch):
+    """Règle métier absolue (Florent) : jamais d'ombrière en Y.
 
-    L'interdiction vaut pour TOUS les types, mono comme double, et doit être
-    portée par le prompt indépendamment du type tracé.
+    Elle vaut pour TOUS les types. Elle est désormais énoncée POSITIVEMENT :
+    lister « jamais de V, de Y, de papillon » a précédé un rendu en papillon
+    (20/07/2026) — nommer une forme, même pour l'interdire, la met en tête du
+    modèle. Ce test verrouille les deux aspects.
     """
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     for famille in ("START PLAINE Bas", "START PLAINE Haut", "START PLAINE Double"):
         projet, _ = _projet_photo(tmp_path / famille, famille=famille,
                                   bord_avant=[[0.2, 0.6], [0.8, 0.6]])
         p = insertion_ia.construire_prompt_pose(projet, pose=True)
-        assert "PLAN UNIQUE incliné" in p
-        assert "en V, en Y ou en papillon" in p
-        assert "UNE SEULE toiture" in p
+        assert "surface plane unique" in p
+        assert "même direction sur toute sa largeur" in p
+        # aucune forme interdite n'est nommée dans tout le prompt
+        for mot in (" en V", " en Y", "papillon", "faîtage", "deux versants"):
+            assert mot not in p, f"{mot!r} évoque la forme à éviter ({famille})"
+
+
+def test_structure_declaree_opaque(tmp_path, monkeypatch):
+    """Rendu translucide constaté le 20/07 : le prompt exige l'opacité."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, bord_avant=[[0.2, 0.6], [0.8, 0.6]])
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "parfaitement opaque" in p and "on ne voit rien au travers" in p
 
 
 def test_coupe_be_prime_toujours(tmp_path, monkeypatch):
