@@ -522,6 +522,9 @@ def retirer_image(projet_id: str, fichier: str):
     base = config.assets_dir(projet_id).resolve()
     if base in cible.parents and cible.exists():
         cible.unlink()
+        # l'image BRUTE (diagnostic pré-post-traitement) part avec le rendu
+        brut = cible.with_name(cible.stem + "_brut.png")
+        brut.unlink(missing_ok=True)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet}

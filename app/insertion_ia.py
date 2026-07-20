@@ -1349,15 +1349,19 @@ def controle_pose(projet: dict, photo_propre: Path, image_generee: bytes) -> dic
 
     gen = gen.resize((W, H), Image.LANCZOS)
     orig_s = orig.resize((W, H), Image.LANCZOS)
-    # diff en COULEUR, comme preserver_scene : en luminance, une structure
-    # galvanisée devant le ciel est invisible pour le contrôle
+    # même double critère que preserver_scene : luminance fine OU couleur
+    # (structure grise sur ciel), sans mordre sur le bruit chroma JPEG
     o = np.asarray(orig_s, dtype=np.float32)
     g = np.asarray(gen, dtype=np.float32).copy()
     for c in range(3):
         g[..., c] += o[..., c].mean() - g[..., c].mean()
-    ecart = np.abs(g - o).max(axis=2)
-    diff = Image.fromarray(np.clip(ecart, 0, 255).astype(np.uint8))
-    modifie = np.asarray(diff.filter(ImageFilter.GaussianBlur(3))) > 16
+
+    def _floue3(a):
+        im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+        return np.asarray(im.filter(ImageFilter.GaussianBlur(3)), dtype=np.float32)
+
+    modifie = ((_floue3(np.abs(g.mean(axis=2) - o.mean(axis=2))) > 16)
+               | (_floue3(np.abs(g - o).max(axis=2)) > 30))
 
     couverture = int((attendu & modifie).sum()) / aire
 
@@ -1616,6 +1620,51 @@ def zone_autorisee(projet: dict, W: int, H: int, chemin_photo) -> "np.ndarray | 
     return np.asarray(img) > 0
 
 
+def _composantes_dans_zone(masque: "np.ndarray", zone: "np.ndarray",
+                           seuil: float = 0.22) -> "np.ndarray":
+    """Garde les composantes connexes du masque qui recouvrent la zone.
+
+    Étiquetage BFS sur une version sous-échantillonnée (rapide, numpy seul) ;
+    une composante est conservée ENTIÈRE si au moins `seuil` de sa surface est
+    dans la zone autorisée, supprimée sinon. Voir l'appelant pour le pourquoi.
+    """
+    from collections import deque
+
+    H, W = masque.shape
+    ech = max(1, round(max(H, W) / 500))
+    m = masque[::ech, ::ech]
+    z = zone[::ech, ::ech]
+    h, w = m.shape
+    vus = np.zeros((h, w), dtype=bool)
+    garde = np.zeros((h, w), dtype=bool)
+
+    for i0 in range(h):
+        for j0 in range(w):
+            if not m[i0, j0] or vus[i0, j0]:
+                continue
+            pile = deque([(i0, j0)])
+            vus[i0, j0] = True
+            composante = []
+            dans_zone = 0
+            while pile:
+                i, j = pile.popleft()
+                composante.append((i, j))
+                if z[i, j]:
+                    dans_zone += 1
+                for di, dj in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < h and 0 <= nj < w and m[ni, nj] and not vus[ni, nj]:
+                        vus[ni, nj] = True
+                        pile.append((ni, nj))
+            if dans_zone / max(1, len(composante)) >= seuil:
+                idx = np.array(composante)
+                garde[idx[:, 0], idx[:, 1]] = True
+
+    grand = np.asarray(Image.fromarray(garde.astype(np.uint8) * 255)
+                       .resize((W, H), Image.NEAREST)) > 0
+    return masque & grand
+
+
 def preserver_scene(photo_origine: Path, image_generee: bytes,
                     zone: "np.ndarray | None" = None) -> bytes:
     """Recolle les pixels d'origine partout où le modèle n'a rien construit.
@@ -1655,13 +1704,27 @@ def preserver_scene(photo_origine: Path, image_generee: bytes,
     # contrastée (grand aplat de ciel) au point d'effacer la structure.
     for c in range(3):
         g_rgb[..., c] += o_rgb[..., c].mean() - g_rgb[..., c].mean()
-    ecart = np.abs(g_rgb - o_rgb).max(axis=2)     # le canal le plus discriminant
 
-    diff = Image.fromarray(np.clip(ecart, 0, 255).astype(np.uint8))
-    diff = diff.filter(ImageFilter.GaussianBlur(5))
-    masque = np.asarray(diff) > 16
+    # double critère : LUMINANCE à seuil fin (structures sombres, ombres) OU
+    # COULEUR à seuil plus haut (structure grise sur ciel bleu de même
+    # luminance). Le critère couleur seul à seuil fin attrapait le bruit de
+    # chrominance JPEG et soudait tout le fond en une composante géante.
+    def _floue(a, rayon=5):
+        im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+        return np.asarray(im.filter(ImageFilter.GaussianBlur(rayon)), dtype=np.float32)
+
+    ecart_lum = _floue(np.abs(g_rgb.mean(axis=2) - o_rgb.mean(axis=2)))
+    ecart_col = _floue(np.abs(g_rgb - o_rgb).max(axis=2))
+    masque = (ecart_lum > 16) | (ecart_col > 30)
     if zone is not None and zone.shape == masque.shape:
-        masque = masque & zone
+        # Filtrage par COMPOSANTES, pas par intersection brute (20/07/2026,
+        # constaté sur RIVE) : quand le modèle construit un peu plus grand que
+        # le volume demandé, l'intersection dure COUPAIT la toiture en plein
+        # milieu et la remplaçait par le ciel — bord fondu, rendu gâché. On
+        # garde donc ENTIÈRES les zones modifiées qui recouvrent franchement
+        # la zone autorisée (c'est l'ombrière, même débordante), et on
+        # n'annule que celles qui vivent ailleurs (hallucinations isolées).
+        masque = _composantes_dans_zone(masque, zone)
     fraction = float(masque.mean())
     if fraction > 0.65:
         return image_generee  # tout a changé : la restauration effacerait l'ombrière
@@ -1773,6 +1836,7 @@ def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -
         "cout_eur": round(essais * cout_image_eur(), 2),
         "couverture": (controle or {}).get("couverture"),
         "verdict": (controle or {}).get("verdict"),
+        "deborde": (controle or {}).get("deborde"),
         "fichier": rel,
         "prompt": prompt,
     })

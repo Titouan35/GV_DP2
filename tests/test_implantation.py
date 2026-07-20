@@ -123,6 +123,35 @@ def test_preserver_scene_garde_une_structure_de_meme_luminance(tmp_path):
     assert abs(int(res[30, 30][2]) - int(fond[30, 30][2])) < 12
 
 
+def test_zone_stricte_garde_la_structure_debordante_entiere(tmp_path):
+    """Cas RIVE (20/07/2026) : le modèle construit une structure un peu plus
+    grande que la zone autorisée. L'intersection dure coupait la toiture en
+    plein milieu (bord fondu remplacé par le ciel). Le filtrage par
+    composantes garde la structure ENTIÈRE (elle recouvre franchement la
+    zone) et n'annule que l'hallucination isolée, ailleurs dans l'image."""
+    import numpy as np
+
+    from app import insertion_ia
+
+    rng = np.random.default_rng(9)
+    fond = rng.integers(90, 160, (600, 900, 3), dtype=np.uint8)
+    orig = tmp_path / "orig.png"
+    Image.fromarray(fond).save(orig)
+
+    gen = fond.copy()
+    gen[200:300, 100:700] = (24, 26, 30)     # structure : déborde à droite de la zone
+    gen[420:480, 780:860] = (24, 26, 30)     # hallucination isolée, loin de la zone
+
+    zone = np.zeros((600, 900), dtype=bool)
+    zone[150:350, 80:500] = True             # zone autorisée : gauche seulement
+
+    sortie = insertion_ia.preserver_scene(orig, _png(Image.fromarray(gen)), zone=zone)
+    res = np.asarray(Image.open(io.BytesIO(sortie)).convert("RGB"))
+    assert res[250, 300].mean() < 60         # structure dans la zone : gardée
+    assert res[250, 650].mean() < 60         # débordement CONTIGU : gardé entier
+    assert abs(int(res[450, 820].mean()) - int(fond[450, 820].mean())) < 12  # hallucination annulée
+
+
 def test_preserver_scene_cadrage_different(tmp_path):
     """Ratio d'image différent : on rend l'image générée sans y toucher."""
     orig = Image.new("RGB", (400, 300), (100, 100, 100))
