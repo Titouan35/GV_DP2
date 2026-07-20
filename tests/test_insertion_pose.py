@@ -134,7 +134,11 @@ def test_prompt_pose_mono(tmp_path, monkeypatch):
                               bord_avant=[[0.2, 0.6], [0.8, 0.6]])
     p = insertion_ia.construire_prompt_pose(projet, pose=True)
     assert "bord AVANT" in p and "magenta" in p
-    assert "MONOPENTE" in p and "full black" in p.lower()
+    assert "MONOPENTE" in p
+    # les modules sont décrits « noirs et mats » (le jargon « full black » a été
+    # retiré le 20/07 : depuis le sol, ce sont la sous-face et la charpente
+    # qu'on voit, les modules n'apparaissent que par la tranche)
+    assert "noirs et mats" in p
     assert "REFERENCE" in p and "GUIDES" in p        # référence + anti-repère
 
 
@@ -350,6 +354,27 @@ def test_prompt_avec_cadres_n_enonce_pas_les_cotes_au_sol(tmp_path, monkeypatch)
     assert "au point bas" in p and "au point haut" in p     # hauteurs conservées
     # les poteaux sont rattachés au cadre, pas laissés au jugé
     assert "le long du côté" in p
+
+
+def test_prompt_decrit_la_sous_face_pas_la_vue_de_dessus(tmp_path, monkeypatch):
+    """Depuis le parking on voit le DESSOUS de l'ombrière, pas ses panneaux.
+
+    Rendu de référence validé par Florent le 20/07/2026 : ce qui domine
+    l'image, c'est la sous-face et sa charpente. Décrire « des modules alignés
+    en trame » (vue de dessus) envoyait le modèle sur un point de vue qu'un
+    piéton ne peut pas avoir.
+    """
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, ombrieres=[
+        {"bord_avant": [[0.15, 0.72], [0.85, 0.74]], "famille": "START PLAINE Bas",
+         "longueur_m": 40.0, "profondeur_m": 10.0}])
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "PAR EN DESSOUS" in p and "SOUS-FACE" in p
+    assert "que par la tranche" in p            # modules vus sur le bord seul
+    assert "restent visibles entre les poteaux" in p
+    # trame de poteaux et ampleur de l'ouvrage
+    assert "POTEAUX." in p and "tous les 5 à 6 mètres" in p
+    assert "OUVRAGE DE GRANDE DIMENSION" in p
 
 
 def test_prompt_factorise_les_ombrieres_identiques(tmp_path, monkeypatch):

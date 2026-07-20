@@ -768,10 +768,13 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
                 "exacte de la photo : en épousant leurs côtés fuyants, tu "
                 "obtiens d'office la bonne taille, la bonne orientation et le "
                 "bon point de fuite — ne les redresse pas, ne les recentre "
-                "pas. Les cadres magenta sont de simples GUIDES de tracé : ils "
-                "ne doivent pas apparaître dans l'image finale, remplace-les "
-                "par le sol et la structure. N'ajoute aucune flèche, aucun "
-                "trait de couleur, aucun symbole ni aucun texte.")
+                "pas. C'est un OUVRAGE DE GRANDE DIMENSION, d'un seul tenant, "
+                "qui abrite toutes les places comprises dans le cadre : une "
+                "structure réduite à quelques places serait un échec. Les "
+                "cadres magenta sont de simples GUIDES de tracé : ils ne "
+                "doivent pas apparaître dans l'image finale, remplace-les par "
+                "le sol et la structure. N'ajoute aucune flèche, aucun trait "
+                "de couleur, aucun symbole ni aucun texte.")
         else:
             blocs.append(
                 f"PLACEMENT. L'image à éditer porte {n} trait"
@@ -857,13 +860,34 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
         "penché, qui descend régulièrement de son bord haut vers son bord bas "
         "et garde la même direction sur toute sa largeur.")
 
+    # VUE DEPUIS LE SOL : bloc décisif ajouté le 20/07/2026 sur un rendu de
+    # référence validé par Florent. Le prompt décrivait la toiture vue de
+    # DESSUS (« modules noirs alignés »), invisible depuis un piéton : ce qu'on
+    # voit réellement, c'est la sous-face et sa charpente.
     blocs.append(
-        "MATERIAUX. Structure en acier galvanisé gris clair (poteaux caisson, "
-        "poutres et arbalétriers), toiture de modules photovoltaïques NOIRS et "
-        "mats (full black) alignés en trame régulière, sous-face claire. La "
-        "structure est pleine et parfaitement opaque : elle masque complètement "
-        "les voitures, les arbres et les bâtiments situés derrière elle, on ne "
-        "voit rien au travers de sa toiture ni de ses poteaux.")
+        "VUE DEPUIS LE SOL. La photo est prise depuis le parking, à hauteur "
+        "d'homme : tu vois donc l'ombrière PAR EN DESSOUS. Ce qui domine "
+        "l'image, c'est sa SOUS-FACE — une grande surface plane et continue, "
+        "portée par une trame régulière de poutres et de pannes métalliques "
+        "apparentes, qui paraît sombre à contre-jour du ciel. Les modules "
+        "photovoltaïques ne se voient que par la tranche, le long du bord de "
+        "toiture, qui dessine une ligne franche et fine. Sous la structure, les "
+        "voitures garées et le marquage au sol restent visibles entre les "
+        "poteaux : l'ombrière les couvre sans les cacher.")
+
+    blocs.append(
+        "POTEAUX. Une trame de poteaux verticaux fins et réguliers, répétés "
+        "tous les 5 à 6 mètres sur toute la longueur de l'ouvrage et plantés "
+        "d'aplomb sur le bitume. Ils se répètent en enfilade et rapetissent "
+        "avec la distance, ce qui donne sa profondeur à l'ouvrage.")
+
+    blocs.append(
+        "MATERIAUX. Charpente en acier (poteaux caisson, poutres et "
+        "arbalétriers) de teinte grise, qui apparaît sombre vue de dessous à "
+        "contre-jour ; modules photovoltaïques noirs et mats. La structure est "
+        "pleine et parfaitement opaque : elle masque complètement ce qui se "
+        "trouve derrière elle, on ne voit rien au travers de sa toiture ni de "
+        "ses poteaux.")
 
     familles = _familles_tracees(projet)[:2]
     noms = [libelle_coupe(f) for f in familles]
@@ -936,11 +960,10 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
             quoi = "La photographie jointe montre une vraie ombrière de ce genre"
         blocs.append(
             f"REFERENCE. {quoi}. Elles servent uniquement de repère de réalisme : "
-            "aspect de l'acier galvanisé, finesse des profilés, façon dont la "
-            "lumière accroche la structure. N'en recopie NI le fond, NI les "
-            "voitures, NI le ciel, NI la couleur des panneaux (garde des modules "
-            "noirs), et si leur silhouette diffère de la coupe, c'est la COUPE qui "
-            "l'emporte.")
+            "ampleur de l'ouvrage, finesse des profilés, aspect de la sous-face "
+            "et de sa charpente, façon dont la lumière accroche la structure. "
+            "N'en recopie NI le fond, NI les voitures, NI le ciel, et si leur "
+            "silhouette diffère de la coupe, c'est la COUPE qui l'emporte.")
 
     sous_quoi = "chaque ombrière" if pluriel else "l'ombrière"
     blocs.append(
