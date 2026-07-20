@@ -1274,9 +1274,10 @@ function renderTypeSelector() {
 }
 
 // ---- Placement « un geste » : un cliqué-glissé = une ombrière ----
-const poseUI = { img: null, dragging: false, a: null, b: null, ombrieres: [], planDims: [],
-                 volumes: [], horizon: null, horizonAjuste: false, dragHorizon: false,
-                 hauteurVue: 1.6, diagnostic: null };
+const poseUI = { img: null, ombrieres: [], planDims: [], volumes: [],
+                 horizon: null, horizonAjuste: false, hauteurVue: 1.6,
+                 diagnostic: null, cam: null, sel: null, drag: null,
+                 volumesLocaux: {}, pressePx: null };
 
 function posePhoto() {
   return (state.projet.insertion || {}).photo || null;
@@ -1321,6 +1322,8 @@ function sauverPose() {
 // Gemini (même moteur de perspective) : jamais de double calcul côté client
 function appliquerVolumes(v) {
   poseUI.volumes = (v && v.volumes) || [];
+  poseUI.cam = cameraJS(v && v.camera);
+  poseUI.volumesLocaux = {};
   if (v && v.horizon != null) poseUI.horizon = v.horizon;
   if (v) {
     poseUI.horizonAjuste = !!v.horizon_ajuste;
@@ -1366,15 +1369,16 @@ async function renderPose() {
     return;
   }
   poseUI.ombrieres = poseOmbrieres();
-  poseUI.dragging = false;
-  poseUI.a = poseUI.b = null;
+  poseUI.drag = null;
+  poseUI.sel = null;
+  poseUI.volumesLocaux = {};
   majEtatPose();
   try { poseUI.planDims = (await api(`/api/projets/${state.projet.id}/insertion/plan-dims`)).dims_m || []; }
   catch { poseUI.planDims = []; }
 
   body.innerHTML = `
     <div class="mesure-tools">
-      <span class="hint">Un cliqué-glissé = une ombrière</span>
+      <span class="hint">Clique sur le parking pour poser · glisse pour déplacer · coins : taille · rond : rotation</span>
       <label class="hint" style="display:flex;align-items:center;gap:5px">Photo prise à
         <select class="input mini-select" id="p-hauteur">
           <option value="1.6">1,6 m (debout)</option>
@@ -1410,9 +1414,16 @@ async function renderPose() {
     canvas.height = Math.round(img.naturalHeight * scale);
     poseUI.img = img;
     dessinerPose();
-    chargerVolumes();          // filaire initial (géométrie serveur)
+    chargerVolumes();          // filaire initial + caméra (géométrie serveur)
   };
   img.src = urlInsertion(photo);
+
+  // ---- GIZMO (20/07/2026) : on ne trace plus, on POSE puis on manipule ----
+  // Un clic pose l'ombrière ; on la déplace en la saisissant, on la
+  // redimensionne par les coins, on la tourne par la poignée ronde. Toute la
+  // manipulation se fait en coordonnées SOL via la caméra calibrée (fluide,
+  // aucun aller-retour serveur pendant le geste) ; la sauvegarde reconvertit
+  // en bord_avant, donc le backend est inchangé.
 
   const pt = (e) => {
     const r = canvas.getBoundingClientRect();
@@ -1421,74 +1432,301 @@ async function renderPose() {
       Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
     ];
   };
+  const px = (e) => {                      // en pixels CANVAS
+    const [nx, ny] = pt(e);
+    return [nx * canvas.width, ny * canvas.height];
+  };
   const surHorizon = (e) => {
     if (poseUI.horizon == null || !poseUI.ombrieres.length) return false;
     const r = canvas.getBoundingClientRect();
     return Math.abs((e.clientY - r.top) - poseUI.horizon * r.height) < 10;
   };
+
   canvas.addEventListener("pointerdown", (e) => {
-    try { canvas.setPointerCapture(e.pointerId); } catch { /* pointeur non capturable */ }
-    if (surHorizon(e)) {                      // priorité à la poignée d'horizon
-      poseUI.dragHorizon = true;
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* non capturable */ }
+    poseUI.pressePx = px(e);
+    if (surHorizon(e)) { poseUI.drag = { mode: "horizon" }; return; }
+    const prise = gizmoSaisir(px(e), canvas);
+    if (prise) { poseUI.drag = prise; poseUI.sel = prise.i; dessinerPose(); return; }
+    poseUI.drag = { mode: "attente" };      // clic court = pose, sinon rien
+  });
+
+  canvas.addEventListener("pointermove", (e) => {
+    const d = poseUI.drag;
+    if (!d || d.mode === "attente") {
+      if (!d) canvas.style.cursor = surHorizon(e) ? "ns-resize"
+        : (gizmoSaisir(px(e), canvas) || {}).curseur || "copy";
       return;
     }
-    poseUI.dragging = true;
-    poseUI.a = pt(e); poseUI.b = pt(e);
-    dessinerPose();
-  });
-  canvas.addEventListener("pointermove", (e) => {
-    if (poseUI.dragHorizon) {
+    if (d.mode === "horizon") {
       poseUI.horizon = Math.min(0.9, Math.max(0.05, pt(e)[1]));
       poseUI.horizonAjuste = true;
       dessinerPose();
       return;
     }
-    canvas.style.cursor = surHorizon(e) ? "ns-resize" : "crosshair";
-    if (!poseUI.dragging) return;
-    poseUI.b = pt(e);
+    gizmoBouger(d, px(e), canvas);
     dessinerPose();
   });
+
   canvas.addEventListener("pointerup", (e) => {
-    if (poseUI.dragHorizon) {
-      poseUI.dragHorizon = false;
-      sauverPose();                            // persiste l'horizon + recalcule
+    const d = poseUI.drag;
+    poseUI.drag = null;
+    if (!d) return;
+    if (d.mode === "horizon") { sauverPose(); return; }
+    const [x0, y0] = poseUI.pressePx || px(e);
+    const court = Math.hypot(px(e)[0] - x0, px(e)[1] - y0) < 8;
+    if (d.mode === "attente") {
+      if (court) gizmoPoser(px(e), canvas);
       return;
     }
-    if (!poseUI.dragging) return;
-    poseUI.dragging = false;
-    const debut = poseUI.a, fin = pt(e);
-    poseUI.a = poseUI.b = null;
-    if (!debut) { dessinerPose(); return; }
-    const dx = (fin[0] - debut[0]) * canvas.width;
-    const dy = (fin[1] - debut[1]) * canvas.height;
-    if (Math.hypot(dx, dy) < 20) { dessinerPose(); return; }   // simple clic : ignoré
-    // on stocke toujours gauche -> droite (le sens de fuite est le perpendiculaire haut)
-    let [a, b] = [debut, fin];
-    if (b[0] < a[0]) [a, b] = [b, a];
-    poseUI.ombrieres.push({
-      bord_avant: [a, b],
-      famille: state.projet.ombriere?.famille || "START PLAINE Bas",
-      longueur_m: null, profondeur_m: null,      // pré-remplies par le serveur
-      pente_vers: "fond",                        // point haut au fond par défaut
-    });
-    sauverPose();
-    toast("Ombrière tracée.", "ok");
+    if (court) { dessinerPose(); return; }   // simple clic de sélection
+    gizmoCommettre(d);
+  });
+
+  canvas.addEventListener("dblclick", () => {
+    if (poseUI.sel != null) {
+      poseUI.ombrieres.splice(poseUI.sel, 1);
+      poseUI.sel = null;
+      sauverPose();
+    }
   });
 
   $("#p-annuler").addEventListener("click", () => {
     if (!poseUI.ombrieres.length) return;
     poseUI.ombrieres.pop();
+    poseUI.sel = null;
     sauverPose();
   });
   $("#p-effacer").addEventListener("click", () => {
     poseUI.ombrieres = [];
+    poseUI.sel = null;
     sauverPose();
   });
   renderTableauOmbrieres();
 }
 
+// ---------------- gizmo : caméra et géométrie sol ----------------
+
+// réplique JS EXACTE de perspective.Camera (Python) : mêmes formules, pour
+// manipuler au sol à 60 fps sans aller-retour serveur pendant le geste
+function cameraJS(c) {
+  if (!c) return null;
+  const cx = c.W / 2, cy = c.H / 2;
+  const theta = Math.atan2(cy - c.y_h, c.f);
+  const s = Math.sin(theta), co = Math.cos(theta);
+  return {
+    W: c.W, H: c.H,
+    imageVersSol(x, y) {
+      const a = (y - cy) / c.f;
+      const den = a * co + s;
+      if (den <= 1e-6) return null;
+      const Z = c.h_cam * (co - a * s) / den;
+      const fwd = c.h_cam * s + Z * co;
+      return [(x - cx) / c.f * fwd, Z];
+    },
+    solVersImage(X, Z, h = 0) {
+      const ym = h - c.h_cam;
+      const fwd = -ym * s + Z * co;
+      if (fwd <= 1e-6) return null;
+      return [cx + c.f * X / fwd, cy - c.f * (ym * co + Z * s) / fwd];
+    },
+  };
+}
+
+// état SOL d'une ombrière : centre, direction du bord (u), fuite (v), L, P
+function gizmoEtat(i) {
+  const cam = poseUI.cam;
+  const o = poseUI.ombrieres[i];
+  if (!cam || !o) return null;
+  const A = cam.imageVersSol(o.bord_avant[0][0] * cam.W, o.bord_avant[0][1] * cam.H);
+  const B = cam.imageVersSol(o.bord_avant[1][0] * cam.W, o.bord_avant[1][1] * cam.H);
+  if (!A || !B) return null;
+  let ux = B[0] - A[0], uz = B[1] - A[1];
+  const L = Math.hypot(ux, uz) || 1;
+  ux /= L; uz /= L;
+  let vx = -uz, vz = ux;
+  const mx = (A[0] + B[0]) / 2, mz = (A[1] + B[1]) / 2;
+  // v pointe du côté qui S'ÉLOIGNE de la caméra (même convention que le serveur)
+  if (Math.hypot(mx + vx, mz + vz) < Math.hypot(mx, mz)) { vx = -vx; vz = -vz; }
+  const P = o.profondeur_m || 5;
+  const vol = poseUI.volumes[i] || {};
+  return { i, ux, uz, vx, vz, L, P,
+           cx: mx + vx * P / 2, cz: mz + vz * P / 2,
+           hAvant: vol.h_avant ?? 2.5, hFond: vol.h_fond ?? 3.5 };
+}
+
+function gizmoCoinsSol(st) {
+  const u2 = st.L / 2, v2 = st.P / 2;
+  return [                                  // avG, avD, fondD, fondG
+    [st.cx - st.ux * u2 - st.vx * v2, st.cz - st.uz * u2 - st.vz * v2],
+    [st.cx + st.ux * u2 - st.vx * v2, st.cz + st.uz * u2 - st.vz * v2],
+    [st.cx + st.ux * u2 + st.vx * v2, st.cz + st.uz * u2 + st.vz * v2],
+    [st.cx - st.ux * u2 + st.vx * v2, st.cz - st.uz * u2 + st.vz * v2],
+  ];
+}
+
+function gizmoVolume(st) {
+  const cam = poseUI.cam;
+  if (!cam || !st) return null;
+  const coins = gizmoCoinsSol(st);
+  const hs = [st.hAvant, st.hAvant, st.hFond, st.hFond];
+  const sol = coins.map((p) => cam.solVersImage(p[0], p[1], 0));
+  const toit = coins.map((p, k) => cam.solVersImage(p[0], p[1], hs[k]));
+  if (sol.some((p) => !p) || toit.some((p) => !p)) return null;
+  const N = (p) => [p[0] / cam.W, p[1] / cam.H];
+  return { sol: sol.map(N), toit: toit.map(N),
+           h_avant: st.hAvant, h_fond: st.hFond };
+}
+
+// position de la poignée de rotation : dans l'axe du bord, 2 m au-delà du côté droit
+function gizmoPoigneeRotation(st) {
+  return [st.cx + st.ux * (st.L / 2 + 2.0), st.cz + st.uz * (st.L / 2 + 2.0)];
+}
+
+function _dansPolygone(p, poly) {
+  let dedans = false;
+  for (let a = 0, b = poly.length - 1; a < poly.length; b = a++) {
+    const [xa, ya] = poly[a], [xb, yb] = poly[b];
+    if ((ya > p[1]) !== (yb > p[1])
+        && p[0] < (xb - xa) * (p[1] - ya) / (yb - ya) + xa) dedans = !dedans;
+  }
+  return dedans;
+}
+
+// que saisit-on à cette position (px canvas) ? poignées de la sélection
+// d'abord, puis corps de n'importe quelle ombrière
+function gizmoSaisir(p, canvas) {
+  const cam = poseUI.cam;
+  if (!cam) return null;
+  const ech = canvas.width / cam.W;             // px image -> px canvas
+  const C = (q) => [q[0] * ech, q[1] * ech];
+  const RAYON = 12;
+
+  if (poseUI.sel != null) {
+    const st = gizmoEtat(poseUI.sel);
+    if (st) {
+      const rot = cam.solVersImage(...gizmoPoigneeRotation(st), 0);
+      if (rot && Math.hypot(...C(rot).map((v, k) => v - p[k])) < RAYON + 2) {
+        return { mode: "rotation", i: poseUI.sel, st, curseur: "grab" };
+      }
+      const coins = gizmoCoinsSol(st).map((q) => cam.solVersImage(q[0], q[1], 0));
+      for (let k = 0; k < 4; k++) {
+        if (coins[k] && Math.hypot(...C(coins[k]).map((v, j) => v - p[j])) < RAYON) {
+          return { mode: "coin", i: poseUI.sel, st, coin: k, curseur: "nwse-resize" };
+        }
+      }
+    }
+  }
+  for (let i = 0; i < poseUI.ombrieres.length; i++) {
+    const st = gizmoEtat(i);
+    if (!st) continue;
+    const sol = gizmoCoinsSol(st).map((q) => cam.solVersImage(q[0], q[1], 0));
+    if (sol.every(Boolean) && _dansPolygone(p, sol.map(C))) {
+      const prise = cam.imageVersSol(p[0] / ech, p[1] / ech);
+      return { mode: "corps", i, st,
+               decal: prise ? [st.cx - prise[0], st.cz - prise[1]] : [0, 0],
+               curseur: "move" };
+    }
+  }
+  return null;
+}
+
+function gizmoBouger(d, p, canvas) {
+  const cam = poseUI.cam;
+  if (!cam || !d.st) return;
+  const sol = cam.imageVersSol(p[0] * cam.W / canvas.width, p[1] * cam.H / canvas.height);
+  if (!sol) return;
+  const st = d.st;
+  if (d.mode === "corps") {
+    st.cx = sol[0] + d.decal[0];
+    st.cz = sol[1] + d.decal[1];
+  } else if (d.mode === "rotation") {
+    const ang = Math.atan2(sol[1] - st.cz, sol[0] - st.cx);
+    const pas = Math.PI / 36;                      // crans de 5°
+    const a = Math.round(ang / pas) * pas;
+    st.ux = Math.cos(a); st.uz = Math.sin(a);
+    st.vx = -st.uz; st.vz = st.ux;
+    if (Math.hypot(st.cx + st.vx, st.cz + st.vz) < Math.hypot(st.cx, st.cz)) {
+      st.vx = -st.vx; st.vz = -st.vz;             // v reste côté fuite
+    }
+  } else if (d.mode === "coin") {
+    // demi-dimensions = projection du coin saisi sur les axes u et v,
+    // arrondies au demi-mètre (crans nets, comme SketchUp)
+    const dx = sol[0] - st.cx, dz = sol[1] - st.cz;
+    const suivantU = Math.abs(dx * st.ux + dz * st.uz);
+    const suivantV = Math.abs(dx * st.vx + dz * st.vz);
+    st.L = Math.min(120, Math.max(5, Math.round(suivantU * 2 / 0.5) * 0.5));
+    st.P = Math.min(40, Math.max(3, Math.round(suivantV * 2 / 0.5) * 0.5));
+  }
+  poseUI.volumesLocaux[d.i] = gizmoVolume(st);
+}
+
+// fin de geste : reconvertit l'état sol en bord_avant + cotes, puis sauvegarde
+function gizmoCommettre(d) {
+  const cam = poseUI.cam;
+  const o = poseUI.ombrieres[d.i];
+  if (!cam || !o || !d.st) return;
+  const st = d.st;
+  const coins = gizmoCoinsSol(st);
+  const A = cam.solVersImage(coins[0][0], coins[0][1], 0);
+  const B = cam.solVersImage(coins[1][0], coins[1][1], 0);
+  if (!A || !B) { poseUI.volumesLocaux = {}; dessinerPose(); return; }
+  o.bord_avant = [
+    [Math.min(1, Math.max(0, A[0] / cam.W)), Math.min(1, Math.max(0, A[1] / cam.H))],
+    [Math.min(1, Math.max(0, B[0] / cam.W)), Math.min(1, Math.max(0, B[1] / cam.H))],
+  ];
+  // cotes recalées sur la géométrie réelle : plus JAMAIS d'écart entre le
+  // tracé et la valeur saisie (l'incohérence n°1 du diagnostic)
+  o.longueur_m = Math.round(st.L * 10) / 10;
+  o.profondeur_m = Math.round(st.P * 10) / 10;
+  poseUI.volumesLocaux = {};
+  sauverPose();
+}
+
+// clic sur une zone libre : pose une nouvelle ombrière centrée là
+function gizmoPoser(p, canvas) {
+  const cam = poseUI.cam;
+  const famille = state.projet.ombriere?.famille || "START PLAINE Bas";
+  const dims = poseUI.planDims[poseUI.ombrieres.length];
+  const L = dims ? Math.round(dims.longueur_m * 10) / 10 : 20;
+  const P = dims ? Math.round(dims.largeur_m * 10) / 10
+                 : (famille === "START PLAINE Double" ? 10 : 5);
+
+  if (cam) {
+    const sol = cam.imageVersSol(p[0] * cam.W / canvas.width, p[1] * cam.H / canvas.height);
+    if (!sol) { toast("Clique sous la ligne d'horizon (sur le sol).", "err"); return; }
+    const st = { cx: sol[0], cz: sol[1], ux: 1, uz: 0, vx: 0, vz: 1, L, P };
+    // bord perpendiculaire au regard : u = perpendiculaire de la direction caméra->point
+    const n = Math.hypot(sol[0], sol[1]) || 1;
+    st.vx = sol[0] / n; st.vz = sol[1] / n;        // fuite = s'éloigner
+    st.ux = -st.vz; st.uz = st.vx;
+    const A = cam.solVersImage(st.cx - st.ux * L / 2 - st.vx * P / 2,
+                               st.cz - st.uz * L / 2 - st.vz * P / 2, 0);
+    const B = cam.solVersImage(st.cx + st.ux * L / 2 - st.vx * P / 2,
+                               st.cz + st.uz * L / 2 - st.vz * P / 2, 0);
+    if (!A || !B) { toast("Trop près du bord : clique plus au centre.", "err"); return; }
+    poseUI.ombrieres.push({
+      bord_avant: [[A[0] / cam.W, A[1] / cam.H], [B[0] / cam.W, B[1] / cam.H]],
+      famille, longueur_m: L, profondeur_m: P, pente_vers: "fond",
+    });
+  } else {
+    // toute première pose : pas encore de caméra. Bord horizontal centré sur
+    // le clic ; le serveur calibre la perspective dès la sauvegarde.
+    const [nx, ny] = [p[0] / canvas.width, p[1] / canvas.height];
+    const demi = 0.2;
+    poseUI.ombrieres.push({
+      bord_avant: [[Math.max(0, nx - demi), ny], [Math.min(1, nx + demi), ny]],
+      famille, longueur_m: L, profondeur_m: P, pente_vers: "fond",
+    });
+  }
+  poseUI.sel = poseUI.ombrieres.length - 1;
+  sauverPose();
+  toast("Ombrière posée : glisse-la, tourne-la, ajuste ses coins.", "ok");
+}
+
 // tableau : par ombrière, son type et ses cotes (auto du plan, modifiables)
 function renderTableauOmbrieres() {
+
   const box = $("#p-tableau");
   if (!box) return;
   if (!poseUI.ombrieres.length) { box.innerHTML = ""; return; }
@@ -1533,48 +1771,89 @@ function dessinerPose() {
   dr.clearRect(0, 0, canvas.width, canvas.height);
   dr.drawImage(poseUI.img, 0, 0, canvas.width, canvas.height);
 
-  const trace = (a, b, avecNum, num) => {
-    const A = [a[0] * canvas.width, a[1] * canvas.height];
-    const B = [b[0] * canvas.width, b[1] * canvas.height];
-    dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4;
-    dr.beginPath(); dr.moveTo(A[0], A[1]); dr.lineTo(B[0], B[1]); dr.stroke();
-    dr.fillStyle = "#FF00C8";
-    for (const p of [A, B]) { dr.beginPath(); dr.arc(p[0], p[1], 5, 0, 7); dr.fill(); }
-    const mx = (A[0] + B[0]) / 2, my = (A[1] + B[1]) / 2;
-    let px = -(B[1] - A[1]), py = B[0] - A[0];
-    const n = Math.hypot(px, py) || 1; px /= n; py /= n;
-    if (py > 0) { px = -px; py = -py; }
-    const L = 0.10 * Math.min(canvas.width, canvas.height);
-    traitFleche(dr, [mx, my], [mx + px * L, my + py * L], "#00C8FF");
-    if (avecNum) {
-      dr.fillStyle = "#002455"; dr.font = "bold 15px sans-serif";
-      dr.fillText(String(num), A[0] + 8, A[1] - 8);
-    }
-  };
-
-  // filaire des volumes (géométrie serveur = ce que Gemini recevra) : emprise
-  // au sol magenta, toiture violette, arêtes verticales fines
   const X = (p) => [p[0] * canvas.width, p[1] * canvas.height];
-  const poly = (pts, coul, larg, pointille) => {
+  const poly = (pts, coul, larg, pointille, remplir) => {
     dr.strokeStyle = coul; dr.lineWidth = larg;
     dr.setLineDash(pointille ? [6, 5] : []);
     dr.beginPath();
     pts.forEach((p, i) => { const [x, y] = X(p); i ? dr.lineTo(x, y) : dr.moveTo(x, y); });
-    dr.closePath(); dr.stroke();
+    dr.closePath();
+    if (remplir) { dr.fillStyle = remplir; dr.fill(); }
+    dr.stroke();
     dr.setLineDash([]);
   };
-  for (const vol of (poseUI.volumes || [])) {
-    if (!vol) continue;
-    poly(vol.sol, "rgba(255,0,200,0.85)", 2, true);
-    poly(vol.toit, "rgba(119,109,248,0.95)", 2.5, false);
-    dr.strokeStyle = "rgba(119,109,248,0.7)"; dr.lineWidth = 1.5;
-    for (let i = 0; i < 4; i++) {
-      const [xs, ys] = X(vol.sol[i]), [xt, yt] = X(vol.toit[i]);
-      dr.beginPath(); dr.moveTo(xs, ys); dr.lineTo(xt, yt); dr.stroke();
+
+  // volumes : version LOCALE pendant un geste (fluide), serveur sinon
+  poseUI.ombrieres.forEach((o, i) => {
+    const vol = poseUI.volumesLocaux[i] || poseUI.volumes[i];
+    const actif = i === poseUI.sel;
+    if (vol) {
+      poly(vol.sol, actif ? "rgba(255,0,200,0.95)" : "rgba(255,0,200,0.6)",
+           actif ? 2.5 : 2, true,
+           actif ? "rgba(255,0,200,0.08)" : null);
+      poly(vol.toit, actif ? "rgba(119,109,248,1)" : "rgba(119,109,248,0.7)",
+           actif ? 3 : 2, false,
+           actif ? "rgba(119,109,248,0.14)" : "rgba(119,109,248,0.08)");
+      dr.strokeStyle = "rgba(119,109,248,0.7)"; dr.lineWidth = 1.5;
+      for (let k = 0; k < 4; k++) {
+        const [xs, ys] = X(vol.sol[k]), [xt, yt] = X(vol.toit[k]);
+        dr.beginPath(); dr.moveTo(xs, ys); dr.lineTo(xt, yt); dr.stroke();
+      }
+      const [nx, ny] = X(vol.toit[0]);
+      dr.fillStyle = "#002455"; dr.font = "bold 14px sans-serif";
+      dr.fillText(String(i + 1), nx + 6, ny - 6);
+    } else {
+      // pas de volume calculable : on montre au moins le bord avant stocké
+      const A = X(o.bord_avant[0]), B = X(o.bord_avant[1]);
+      dr.strokeStyle = "#FF00C8"; dr.lineWidth = 4;
+      dr.beginPath(); dr.moveTo(A[0], A[1]); dr.lineTo(B[0], B[1]); dr.stroke();
+    }
+  });
+
+  // poignées de la sélection : coins (carrés) + rotation (rond violet)
+  if (poseUI.sel != null && poseUI.cam) {
+    const st = (poseUI.drag && poseUI.drag.i === poseUI.sel && poseUI.drag.st)
+      ? poseUI.drag.st : gizmoEtat(poseUI.sel);
+    if (st) {
+      const cam = poseUI.cam;
+      const ech = canvas.width / cam.W;
+      const C = (q) => [q[0] * ech, q[1] * ech];
+      for (const coin of gizmoCoinsSol(st)) {
+        const q = cam.solVersImage(coin[0], coin[1], 0);
+        if (!q) continue;
+        const [x, y] = C(q);
+        dr.fillStyle = "#FFFFFF"; dr.strokeStyle = "#FF00C8"; dr.lineWidth = 2.5;
+        dr.beginPath(); dr.rect(x - 6, y - 6, 12, 12); dr.fill(); dr.stroke();
+      }
+      const rot = cam.solVersImage(...gizmoPoigneeRotation(st), 0);
+      const bord = cam.solVersImage(st.cx + st.ux * st.L / 2, st.cz + st.uz * st.L / 2, 0);
+      if (rot && bord) {
+        const [rx, ry] = C(rot), [bx, by] = C(bord);
+        dr.strokeStyle = "rgba(119,109,248,0.8)"; dr.lineWidth = 2;
+        dr.setLineDash([4, 4]);
+        dr.beginPath(); dr.moveTo(bx, by); dr.lineTo(rx, ry); dr.stroke();
+        dr.setLineDash([]);
+        dr.fillStyle = "#776DF8"; dr.strokeStyle = "#FFFFFF"; dr.lineWidth = 2.5;
+        dr.beginPath(); dr.arc(rx, ry, 9, 0, 7); dr.fill(); dr.stroke();
+        dr.fillStyle = "#FFFFFF"; dr.font = "bold 11px sans-serif";
+        dr.fillText("↻", rx - 4, ry + 4);
+      }
+      // cotes vivantes pendant le geste : L x P au centre
+      const centre = cam.solVersImage(st.cx, st.cz, 0);
+      if (centre && poseUI.drag && poseUI.drag.st) {
+        const [mx, my] = C(centre);
+        const txt = `${String(st.L).replace(".", ",")} m × ${String(st.P).replace(".", ",")} m`;
+        dr.font = "bold 13px sans-serif";
+        const w = dr.measureText(txt).width + 12;
+        dr.fillStyle = "rgba(0,36,85,0.85)";
+        dr.fillRect(mx - w / 2, my - 12, w, 22);
+        dr.fillStyle = "#FFFFFF";
+        dr.fillText(txt, mx - w / 2 + 6, my + 4);
+      }
     }
   }
 
-  // ligne d'horizon (poignée) : visible dès qu'une ombrière est tracée
+  // ligne d'horizon (poignée) : visible dès qu'une ombrière est posée
   if (poseUI.horizon != null && poseUI.ombrieres.length) {
     const yh = poseUI.horizon * canvas.height;
     dr.strokeStyle = "rgba(0,140,255,0.85)"; dr.lineWidth = 2;
@@ -1586,21 +1865,9 @@ function dessinerPose() {
     dr.fillStyle = "#004a80"; dr.font = "11px sans-serif";
     dr.fillText("horizon", canvas.width - 68, yh - 6);
   }
-
-  poseUI.ombrieres.forEach((o, i) => trace(o.bord_avant[0], o.bord_avant[1], true, i + 1));
-  if (poseUI.dragging && poseUI.a && poseUI.b) trace(poseUI.a, poseUI.b, false);
 }
 
-function traitFleche(dr, a, b, coul) {
-  dr.strokeStyle = coul; dr.fillStyle = coul; dr.lineWidth = 4;
-  dr.beginPath(); dr.moveTo(a[0], a[1]); dr.lineTo(b[0], b[1]); dr.stroke();
-  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
-  dr.beginPath(); dr.moveTo(b[0], b[1]);
-  dr.lineTo(b[0] - 12 * Math.cos(ang - 0.5), b[1] - 12 * Math.sin(ang - 0.5));
-  dr.moveTo(b[0], b[1]);
-  dr.lineTo(b[0] - 12 * Math.cos(ang + 0.5), b[1] - 12 * Math.sin(ang + 0.5));
-  dr.stroke();
-}
+
 
 // sélecteur de photos du site (multi) : active = base de génération
 async function renderPhotosInsertion(sel = "#ins-photos") {

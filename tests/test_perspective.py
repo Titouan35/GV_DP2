@@ -268,6 +268,36 @@ def test_prompt_impose_l_orientation(tmp_path, monkeypatch):
     assert "par son PIGNON" in insertion_ia.construire_prompt_pose(projet)
 
 
+def test_route_volumes_expose_la_camera(tmp_path, monkeypatch):
+    """Le gizmo du front manipule au sol en local : la route /volumes doit
+    exposer la caméra calibrée (f, y_h, h_cam) et les hauteurs par volume."""
+    from fastapi.testclient import TestClient
+    from app.main import app as fastapp
+
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path / "PROJETS")
+    client = TestClient(fastapp)
+    pid = client.post("/api/projets", json={"nom": "Cam"}).json()["projet"]["id"]
+    import io
+    buf = io.BytesIO()
+    Image.new("RGB", (1600, 1200), (140, 150, 160)).save(buf, "PNG")
+    client.post(f"/api/projets/{pid}/insertion/photos",
+                files=[("fichiers", ("site.png", buf.getvalue(), "image/png"))])
+    photo = client.get(f"/api/projets/{pid}").json()["projet"]["insertion"]["photo"]
+    client.put(f"/api/projets/{pid}/insertion/pose", json={
+        "photo": photo, "hauteur_vue": 1.6,
+        "ombrieres": [{"bord_avant": [[0.2, 0.7], [0.8, 0.72]],
+                       "famille": "START PLAINE Bas",
+                       "longueur_m": 20.0, "profondeur_m": 5.0}]})
+    v = client.get(f"/api/projets/{pid}/insertion/volumes").json()
+    assert v["disponible"] and v["camera"]
+    cam = v["camera"]
+    assert cam["W"] == 1600 and cam["H"] == 1200
+    assert cam["f"] > 500 and 0 < cam["y_h"] < 1200
+    assert abs(cam["h_cam"] - 1.6) < 0.05
+    vol = v["volumes"][0]
+    assert vol["h_avant"] > 0 and vol["h_fond"] > vol["h_avant"]
+
+
 def test_volumes_sans_cote_indisponibles(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet = _projet_pose(tmp_path)

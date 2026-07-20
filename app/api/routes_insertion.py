@@ -431,7 +431,14 @@ def _volumes_reponse(projet) -> dict:
         "horizon_ajuste": insertion_ia.horizon_actif(data) is not None,
         "hauteur_vue": insertion_ia.hauteur_prise_vue(data),
         "diagnostic": diag,
-        "volumes": [({"sol": norm(v["sol"]), "toit": norm(v["toit"])} if v else None)
+        # caméra calibrée (px de l'image d'origine) : le gizmo du front s'en
+        # sert pour manipuler l'ombrière en coordonnées SOL, en local, sans
+        # aller-retour serveur pendant le geste
+        "camera": ({"W": W, "H": H, "f": round(cam.f, 2),
+                    "y_h": round(cam.y_h, 2), "h_cam": round(cam.h_cam, 3)}
+                   if cam else None),
+        "volumes": [({"sol": norm(v["sol"]), "toit": norm(v["toit"]),
+                      "h_avant": v["h_avant"], "h_fond": v["h_fond"]} if v else None)
                     for v in volumes],
     }
 

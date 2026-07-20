@@ -610,8 +610,14 @@ def volumes_poses(projet: dict, W: int, H: int, chemin_photo) -> list[dict | Non
         h_avant = g["h_bas"] if vers_fond else g["h_haut"]
         h_fond = g["h_haut"] if vers_fond else g["h_bas"]
         a, b = _points_bord(o, W, H)
-        volumes.append(perspective.volume_ombriere(
-            cam, a, b, o.get("profondeur_m") or g["prof"], h_avant, h_fond))
+        vol = perspective.volume_ombriere(
+            cam, a, b, o.get("profondeur_m") or g["prof"], h_avant, h_fond)
+        if vol:
+            # hauteurs effectives jointes au volume : le gizmo du front en a
+            # besoin pour reprojeter la toiture EN LOCAL pendant un drag
+            vol["h_avant"] = h_avant
+            vol["h_fond"] = h_fond
+        volumes.append(vol)
     return volumes
 
 
