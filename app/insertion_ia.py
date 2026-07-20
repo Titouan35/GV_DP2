@@ -649,6 +649,63 @@ def photo_reperee(projet: dict) -> Path | None:
     return sortie
 
 
+def _position_poteaux(o: dict, projet: dict) -> float:
+    """Profondeur de la file de poteaux : 0 = bord avant, 1 = fond, 0,5 = axe.
+
+    Double : file centrale unique. Monopente : la file est du côté haut ou bas
+    selon le type, ce qui, combiné au sens de la pente, la place devant ou au
+    fond vu du photographe.
+    """
+    entree = CATALOGUE.get(o["famille"], CATALOGUE["START PLAINE Bas"])
+    if entree["double"]:
+        return 0.5
+    vers_fond = o.get("pente_vers", "fond") == "fond"
+    return 1.0 if (entree["poteau"] == "haut") == vers_fond else 0.0
+
+
+def scaffold_photo(projet: dict) -> Path | None:
+    """Photo du site avec l'ombrière POSÉE EN VOLUME (structure complète).
+
+    C'est cette image qui part à Gemini quand la perspective est calculable :
+    le modèle n'a plus à placer ni dimensionner quoi que ce soit, seulement à
+    habiller un volume déjà juste. None si aucun volume n'est calculable (on
+    retombe alors sur la photo simplement repérée).
+    """
+    from . import scaffold as mod_scaffold
+
+    photo = image_kit(projet, "photo")
+    ombrieres = poses_actives(projet)
+    if not photo or not ombrieres:
+        return None
+    try:
+        image = _ouvrir_image(photo).convert("RGB")
+    except OSError:
+        return None
+    W, H = image.size
+    volumes = volumes_poses(projet, W, H, photo)
+    if not any(volumes):
+        return None
+
+    cam = _camera_photo(projet, W, H, photo)
+    infos = []
+    for o in ombrieres:
+        g = _geometrie_ombriere(o, projet)
+        # vue plongeante (drone, étage) : on voit le dessus des modules ;
+        # depuis le sol, c'est la sous-face qui est visible
+        vue_dessus = bool(cam and cam.h_cam > max(g["h_bas"], g["h_haut"]))
+        infos.append({
+            "v_poteaux": _position_poteaux(o, projet),
+            "longueur_m": o.get("longueur_m"),
+            "profondeur_m": o.get("profondeur_m") or g["prof"],
+            "vue_dessus": vue_dessus,
+        })
+
+    sortie = config.assets_dir(projet.get("id")) / "scaffold.png"
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    mod_scaffold.poser(image, volumes, infos).save(sortie)
+    return sortie
+
+
 def _geometrie_ombriere(o: dict, projet: dict) -> dict:
     """Hauteurs et pente EFFECTIVES d'une ombrière tracée.
 
@@ -726,6 +783,68 @@ def _descriptif_ombriere(o: dict, projet: dict, emprise: bool = False) -> str:
             f"{_fmt(g['h_haut'])} m au point haut, soit une pente douce "
             f"d'environ {_fmt(g['pente'])}°. SENS DE LA PENTE : son point haut "
             f"est {haut_ou}, autrement dit {sens}.{poteaux}")
+
+
+def _consignes_libres(projet: dict, affinage: str) -> list[str]:
+    """Consignes de l'utilisateur + dernières corrections, ponctuées."""
+    ins = projet.get("insertion") or {}
+    sortie = []
+    for texte in ((ins.get("consignes") or "").strip(),
+                  (affinage or ins.get("affinage") or "").strip()):
+        if texte:
+            sortie.append(texte if texte.endswith((".", "!", "?")) else texte + ".")
+    return sortie
+
+
+def construire_prompt_scaffold(projet: dict, affinage: str = "") -> str:
+    """Prompt du mode SCAFFOLD : la structure est déjà posée, on l'habille.
+
+    Trois fois plus court que le prompt de pose, parce que tout ce qui relevait
+    de la géométrie (placement, cotes, orientation, forme de toiture, position
+    des poteaux) est désormais PORTÉ PAR L'IMAGE et n'a plus à être décrit.
+    Ne restent que la matière, la lumière et l'intégration.
+    """
+    ombrieres = poses_actives(projet) or []
+    pluriel = len(ombrieres) > 1
+    la = "les maquettes grises" if pluriel else "la maquette grise"
+    elles = "elles" if pluriel else "elle"
+
+    blocs = [
+        f"Cette photographie contient déjà {la} d'une ombrière photovoltaïque "
+        f"de parking, posée en volume. Transforme{'-les' if pluriel else '-la'} "
+        "en ombrière photoréaliste, comme si "
+        f"{elles} avai{'en' if pluriel else ''}t toujours été là.",
+
+        "GEOMETRIE VERROUILLEE. Le volume gris donne la position, la taille, "
+        "l'orientation, la pente et la silhouette EXACTES de l'ouvrage : "
+        "conserve-les rigoureusement. Ne déplace rien, n'agrandis ni ne "
+        "rétrécis rien, ne change ni le nombre de poteaux ni leur écartement, "
+        "n'ajoute aucune ombrière ailleurs dans l'image. Tu ne fais que donner "
+        "une matière et une lumière réelles à ce volume.",
+
+        "STRUCTURE. Remplace les aplats gris par une vraie charpente : poteaux "
+        "en acier de section carrée, poutres et pannes sous la toiture, bord de "
+        "toiture net et fin. La surface que tu vois est la SOUS-FACE de "
+        "l'ombrière (la photo est prise depuis le parking) : donne-lui la "
+        "texture d'un platelage métallique nervuré, sombre à contre-jour du "
+        "ciel, avec ses pannes apparentes. Les modules photovoltaïques noirs et "
+        "mats ne se devinent que par la tranche, sur le bord.",
+
+        "INTEGRATION. Garde le reste de la scène rigoureusement identique : "
+        "voitures, revêtement du sol et marquages, bordures, arbres, bâtiments "
+        "et ciel restent exactement à leur place. Les voitures et le marquage "
+        "restent visibles sous l'ombrière, entre les poteaux. Reprends la "
+        "lumière du jour et la direction des ombres déjà présentes ; l'ombre "
+        "portée au sol reste douce et cohérente avec elles. La structure est "
+        "opaque : on ne voit rien au travers.",
+    ]
+
+    rendu = ["RENDU. Le résultat est une photographie plein cadre, au même "
+             "cadrage que l'originale : aucun aplat gris résiduel, aucun texte, "
+             "aucun chiffre, aucune cote, aucune flèche, aucun logo."]
+    rendu += _consignes_libres(projet, affinage)
+    blocs.append(" ".join(rendu))
+    return "\n\n".join(blocs)
 
 
 def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) -> str:
@@ -1108,8 +1227,18 @@ def _preparer_requete_pose(projet: dict, affinage: str = "") -> dict:
     if not base_propre:
         raise InsertionError("Ajoutez d'abord une photo du site (upload ou reprise d'une pièce BE).")
     ombrieres = poses_actives(projet)
-    reperee = photo_reperee(projet) if ombrieres else None
-    base, mode = (reperee, "pose") if reperee else (base_propre, "libre")
+    # SCAFFOLD (20/07/2026) : quand la perspective est calculable, on envoie la
+    # photo avec l'ombrière DÉJÀ POSÉE en volume — le modèle n'a plus qu'à
+    # l'habiller. Repli sur la photo repérée (cadre magenta), puis sur la photo
+    # nue. Désactivable par GVDP_SCAFFOLD=0 pour comparer les deux approches.
+    base = mode = None
+    if ombrieres and os.environ.get("GVDP_SCAFFOLD", "1") != "0":
+        volume = scaffold_photo(projet)
+        if volume:
+            base, mode = volume, "scaffold"
+    if base is None:
+        reperee = photo_reperee(projet) if ombrieres else None
+        base, mode = (reperee, "pose") if reperee else (base_propre, "libre")
 
     chemins: list[Path] = [base]
     roles = ["photo"]
@@ -1120,7 +1249,11 @@ def _preparer_requete_pose(projet: dict, affinage: str = "") -> dict:
         chemins.append(ref)
         roles.append("reference")
 
-    prompt = construire_prompt_pose(projet, affinage=affinage, pose=bool(ombrieres))
+    if mode == "scaffold":
+        prompt = construire_prompt_scaffold(projet, affinage=affinage)
+    else:
+        prompt = construire_prompt_pose(projet, affinage=affinage,
+                                        pose=bool(ombrieres))
     return {"chemins": chemins, "roles": roles, "prompt": prompt,
             "base_propre": base_propre, "mode": mode}
 

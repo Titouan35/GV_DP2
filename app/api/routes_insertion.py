@@ -46,10 +46,12 @@ def apercu_prompt(projet_id: str):
 
 
 TITRES_PAYLOAD = {
-    "photo": "Photo repérée (bords avant + fuite)",
+    "photo": "Photo repérée (emprise au sol)",
     "coupe": "Coupe technique (profil exact)",
     "reference": "Ombrière de référence (réalisme)",
 }
+# en mode scaffold, la 1re image n'est plus un repère mais la structure posée
+TITRE_SCAFFOLD = "Ombrière posée en volume (Gemini ne fait que l'habiller)"
 
 
 @router.get("/{projet_id}/insertion/apercu-payload")
@@ -80,7 +82,8 @@ def apercu_payload(projet_id: str):
         else:
             rel = str(Path(chemin).resolve().relative_to(config.PROJETS_DIR.resolve())).replace("\\", "/")
             url = f"/api/projets/{projet_id}/insertion/fichier?chemin={quote(rel)}"
-        titre = TITRES_PAYLOAD.get(role, role)
+        titre = (TITRE_SCAFFOLD if role == "photo" and req.get("mode") == "scaffold"
+                 else TITRES_PAYLOAD.get(role, role))
         if role in compte:
             if total[role] > 1 and rang < len(familles):
                 titre = f"{titre.split(' (')[0]} · {libelle_coupe(familles[rang])}"
