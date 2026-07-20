@@ -376,13 +376,61 @@ def sauver_pose(projet_id: str, corps: dict = Body(...)):
             "pente_vers": pente if pente in ("fond", "avant") else "fond",
         })
 
+    # ligne d'horizon ajustée (poignée UI) : persistée par photo, elle cale
+    # la perspective de l'emprise projetée
+    horizon = None
+    try:
+        h = float(corps.get("horizon"))
+        if 0.02 <= h <= 0.95:
+            horizon = round(h, 4)
+    except (TypeError, ValueError):
+        horizon = None
+
     if ombrieres:
-        projet.insertion.poses[photo] = {"ombrieres": ombrieres}
+        entree = {"ombrieres": ombrieres}
+        if horizon is not None:
+            entree["horizon"] = horizon
+        projet.insertion.poses[photo] = entree
     else:
         projet.insertion.poses.pop(photo, None)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
-    return {"projet": projet}
+    return {"projet": projet, "volumes": _volumes_reponse(projet)}
+
+
+def _volumes_reponse(projet) -> dict:
+    """Volumes projetés de la photo active, en coordonnées 0-1 (pour le
+    filaire du canvas : la MÊME géométrie que celle envoyée à Gemini)."""
+    data = projet.model_dump() if hasattr(projet, "model_dump") else projet
+    photo = insertion_ia.image_kit(data, "photo")
+    if not photo:
+        return {"disponible": False}
+    try:
+        W, H = insertion_ia._ouvrir_image(photo).size
+        volumes = insertion_ia.volumes_poses(data, W, H, photo)
+        cam = insertion_ia._camera_photo(data, W, H, photo)
+    except OSError:
+        return {"disponible": False}
+
+    def norm(pts):
+        return [[round(x / W, 4), round(y / H, 4)] for x, y in pts]
+
+    return {
+        "disponible": any(volumes),
+        # horizon EFFECTIF (ajusté > détecté > défaut) : c'est lui que la
+        # poignée du canvas doit afficher, pas seulement la valeur enregistrée
+        "horizon": round(cam.y_h / H, 4) if cam else insertion_ia.horizon_actif(data),
+        "horizon_ajuste": insertion_ia.horizon_actif(data) is not None,
+        "volumes": [({"sol": norm(v["sol"]), "toit": norm(v["toit"])} if v else None)
+                    for v in volumes],
+    }
+
+
+@router.get("/{projet_id}/insertion/volumes")
+def lire_volumes(projet_id: str):
+    """Filaire de pose : emprise + toiture projetées de chaque ombrière."""
+    projet = _charger(projet_id)
+    return _volumes_reponse(projet)
 
 
 # ------------------------------------------------------------------ guides photo (legacy)

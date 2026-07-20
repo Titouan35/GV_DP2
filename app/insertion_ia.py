@@ -433,8 +433,84 @@ def _points_bord(o: dict, W: int, H: int):
             (o["bord_avant"][1][0] * W, o["bord_avant"][1][1] * H))
 
 
+# ------------------------------------------------------------------ perspective
+
+def horizon_actif(projet: dict) -> float | None:
+    """Ordonnée d'horizon (0-1) enregistrée pour la photo active, ou None."""
+    ins = projet.get("insertion") or {}
+    photo = ins.get("photo")
+    if not photo:
+        return None
+    v = ((ins.get("poses") or {}).get(photo) or {}).get("horizon")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if 0.02 <= v <= 0.95 else None
+
+
+def _camera_photo(projet: dict, W: int, H: int, chemin_photo) -> "perspective.Camera | None":
+    """Caméra calibrée pour la photo active, ou None (repli approximatif).
+
+    Horizon : valeur ajustée par l'utilisateur (poignée), sinon détection des
+    fuyantes, sinon défaut 0,42 x H (léger piqué vers le sol, typique d'une
+    photo de parking debout). Échelle : bord avant tracé le plus long qui
+    porte une longueur réelle.
+    """
+    from . import perspective
+
+    ombrieres = poses_actives(projet) or []
+    candidates = [o for o in ombrieres if o.get("longueur_m")]
+    if not candidates:
+        return None
+    ref = max(candidates,
+              key=lambda o: math.hypot(*(b - a for a, b in
+                                         zip(*_points_bord(o, W, H)))))
+    y_h = horizon_actif(projet)
+    if y_h is None:
+        y_h = perspective.proposer_horizon(chemin_photo)
+    y_h_px = (y_h if y_h is not None else 0.42) * H
+    f = perspective.focale_px(chemin_photo, W)
+    a, b = _points_bord(ref, W, H)
+    return perspective.calibrer(W, H, y_h_px, f, a, b, ref["longueur_m"])
+
+
+def volumes_poses(projet: dict, W: int, H: int, chemin_photo) -> list[dict | None]:
+    """Volume 3D (sol + toit, px image) de chaque ombrière tracée.
+
+    Une entrée par ombrière, None quand la géométrie n'est pas calculable
+    (pas de cote, horizon incohérent) : l'appelant retombe alors sur
+    l'ancienne approximation pour CETTE ombrière.
+    """
+    from . import perspective
+
+    ombrieres = poses_actives(projet) or []
+    cam = _camera_photo(projet, W, H, chemin_photo)
+    if cam is None:
+        return [None] * len(ombrieres)
+    volumes: list[dict | None] = []
+    for o in ombrieres:
+        g = _geometrie_ombriere(o, projet)
+        vers_fond = o.get("pente_vers", "fond") == "fond"
+        h_avant = g["h_bas"] if vers_fond else g["h_haut"]
+        h_fond = g["h_haut"] if vers_fond else g["h_bas"]
+        a, b = _points_bord(o, W, H)
+        volumes.append(perspective.volume_ombriere(
+            cam, a, b, o.get("profondeur_m") or g["prof"], h_avant, h_fond))
+    return volumes
+
+
 def photo_reperee(projet: dict) -> Path | None:
-    """Photo active avec CHAQUE bord avant (MAGENTA) + sa flèche de fuite (CYAN)."""
+    """Photo active repérée : EMPRISE AU SOL complète (quadrilatère magenta,
+    bord avant plus épais) quand la perspective est calculable, sinon le seul
+    bord avant (ancien comportement).
+
+    19/07/2026 (défaut n°1 : placement/dimensionnement) : avec le seul bord
+    avant, le modèle devait deviner la profondeur en perspective. Le
+    quadrilatère projeté au sol (convergence réelle) la lui donne. Toujours
+    des traits fins sans texte ni flèche — tout marquage riche envoyé au
+    modèle finit redessiné dans l'image (leçons v5).
+    """
     from PIL import ImageDraw
 
     ombrieres = poses_actives(projet)
@@ -444,14 +520,14 @@ def photo_reperee(projet: dict) -> Path | None:
     image = _ouvrir_image(photo).convert("RGB")
     W, H = image.size
     dr = ImageDraw.Draw(image)
-    # repère MINIMAL : un simple trait fin par bord avant. Ni pastille, ni
-    # numéro, ni flèche de fuite (18/07/2026 : la flèche cyan était redessinée
-    # en grand par le modèle par-dessus les toitures, hors de la bande
-    # d'effacement — le sens de fuite est donc porté par le texte du prompt).
     ep = max(3, round(min(W, H) / 320))
-    for o in ombrieres:
+    volumes = volumes_poses(projet, W, H, photo)
+    for o, vol in zip(ombrieres, volumes):
         a, b = _points_bord(o, W, H)
-        dr.line([a, b], fill=MAGENTA, width=ep)
+        if vol:
+            quad = vol["sol"]
+            dr.line([*quad, quad[0]], fill=MAGENTA, width=max(2, ep - 1))
+        dr.line([a, b], fill=MAGENTA, width=ep + 1)   # bord avant appuyé
     sortie = config.assets_dir(projet.get("id")) / "photo_reperee.png"
     sortie.parent.mkdir(parents=True, exist_ok=True)
     image.save(sortie)
@@ -536,20 +612,46 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
             + ("elles avaient" if pluriel else "elle avait") + " toujours été là.")
     blocs = [tete]
 
+    # les emprises complètes (quadrilatères projetés) sont-elles dessinées ?
+    quads = False
+    photo_active = image_kit(projet, "photo")
+    if pose and ombrieres and photo_active:
+        try:
+            W_p, H_p = _ouvrir_image(photo_active).size
+            quads = any(volumes_poses(projet, W_p, H_p, photo_active))
+        except OSError:
+            quads = False
+
     if pose and ombrieres:
-        blocs.append(
-            f"PLACEMENT. L'image à éditer porte {n} trait"
-            f"{'s' if pluriel else ''} magenta, et tu dois construire "
-            f"EXACTEMENT {n} ombrière{'s' if pluriel else ''} : une par trait, "
-            "ni plus, ni moins, et aucune ailleurs dans l'image. Chaque trait "
-            "magenta est le bord AVANT d'une ombrière, posé au sol, du côté le "
-            "plus proche du spectateur : la base des poteaux avant repose "
-            "précisément sur ce trait, sur toute sa longueur, et la toiture "
-            "s'éloigne du spectateur vers le fond de l'image. Ne déplace, "
-            "n'allonge ni ne raccourcis aucun trait. Les traits magenta sont de "
-            "simples GUIDES de tracé : ils ne doivent pas apparaître dans l'image "
-            "finale, remplace-les par le sol et la structure. N'ajoute aucune "
-            "flèche, aucun trait de couleur, aucun symbole ni aucun texte.")
+        if quads:
+            blocs.append(
+                f"PLACEMENT. L'image à éditer porte {n} cadre"
+                f"{'s' if pluriel else ''} magenta dessiné"
+                f"{'s' if pluriel else ''} en perspective sur le sol : chacun "
+                "délimite EXACTEMENT l'emprise au sol d'une ombrière. Construis "
+                f"EXACTEMENT {n} ombrière{'s' if pluriel else ''} : une par "
+                "cadre, ni plus, ni moins, et aucune ailleurs dans l'image. La "
+                "toiture couvre toute la surface du cadre, ni plus, ni moins ; "
+                "les poteaux se posent à l'intérieur du cadre. Le côté du cadre "
+                "au trait le plus épais est le bord AVANT, le plus proche du "
+                "spectateur. Les cadres magenta sont de simples GUIDES de "
+                "tracé : ils ne doivent pas apparaître dans l'image finale, "
+                "remplace-les par le sol et la structure. N'ajoute aucune "
+                "flèche, aucun trait de couleur, aucun symbole ni aucun texte.")
+        else:
+            blocs.append(
+                f"PLACEMENT. L'image à éditer porte {n} trait"
+                f"{'s' if pluriel else ''} magenta, et tu dois construire "
+                f"EXACTEMENT {n} ombrière{'s' if pluriel else ''} : une par trait, "
+                "ni plus, ni moins, et aucune ailleurs dans l'image. Chaque trait "
+                "magenta est le bord AVANT d'une ombrière, posé au sol, du côté le "
+                "plus proche du spectateur : la base des poteaux avant repose "
+                "précisément sur ce trait, sur toute sa longueur, et la toiture "
+                "s'éloigne du spectateur vers le fond de l'image. Ne déplace, "
+                "n'allonge ni ne raccourcis aucun trait. Les traits magenta sont de "
+                "simples GUIDES de tracé : ils ne doivent pas apparaître dans l'image "
+                "finale, remplace-les par le sol et la structure. N'ajoute aucune "
+                "flèche, aucun trait de couleur, aucun symbole ni aucun texte.")
         # cotes réelles, ombrière par ombrière, dans l'ordre gauche -> droite
         details = []
         for i, o in enumerate(ombrieres, 1):
@@ -685,12 +787,21 @@ def _bande_marqueur(projet: dict, taille: tuple[int, int]) -> np.ndarray | None:
     lg = 0.12 * min(W, H)
     img = Image.new("L", (W, H), 0)
     dr = ImageDraw.Draw(img)
-    for o in ombrieres:
+    photo = image_kit(projet, "photo")
+    volumes = (volumes_poses(projet, W, H, photo) if photo
+               else [None] * len(ombrieres))
+    for o, vol in zip(ombrieres, volumes):
         a, b = _points_bord(o, W, H)
         dr.line([a, b], fill=255, width=ep)
-        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
-        fx, fy = _fuite(a, b)
-        dr.line([(mx, my), (mx + fx * lg, my + fy * lg)], fill=255, width=ep)
+        if vol:
+            # les arêtes du quadrilatère d'emprise sont aussi dessinées sur la
+            # photo envoyée : leur bande doit être effaçable de la même façon
+            quad = vol["sol"]
+            dr.line([*quad, quad[0]], fill=255, width=ep)
+        else:
+            mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+            fx, fy = _fuite(a, b)
+            dr.line([(mx, my), (mx + fx * lg, my + fy * lg)], fill=255, width=ep)
     return np.asarray(img) > 0
 
 
@@ -796,12 +907,24 @@ def _preparer_requete_pose(projet: dict, affinage: str = "") -> dict:
 
 
 def _bandes_pose(projet: dict, W: int, H: int) -> list[list[tuple[float, float]]]:
-    """Emprises approximatives des toits : un quad par ombrière, extrudé vers la
-    fuite. La profondeur en px est estimée depuis la longueur du trait et les
-    cotes réelles quand elles sont connues (sinon ratio nominal). Sert au
-    contrôle de présence, pas à une mesure exacte."""
+    """Emprises des ombrières pour le contrôle de présence.
+
+    Depuis le 19/07/2026 : l'emprise PROJETÉE (perspective calibrée) quand
+    elle est calculable — le contrôle mesure alors la vraie zone attendue et
+    la relance auto ne se déclenche plus sur une bande mal estimée. Repli :
+    l'ancienne extrusion approximative vers la fuite.
+    """
+    photo = image_kit(projet, "photo")
+    ombrieres = poses_actives(projet) or []
+    volumes = (volumes_poses(projet, W, H, photo) if photo
+               else [None] * len(ombrieres))
     bandes = []
-    for o in (poses_actives(projet) or []):
+    for o, vol in zip(ombrieres, volumes):
+        if vol:
+            # silhouette visible : pieds du bord avant -> coins de toit du fond
+            bandes.append([vol["sol"][0], vol["sol"][1],
+                           vol["toit"][2], vol["toit"][3]])
+            continue
         a, b = _points_bord(o, W, H)
         long_px = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
         prof = o.get("profondeur_m") or 5.0
@@ -1053,14 +1176,55 @@ def decadrer(photo_origine: Path, image_generee: bytes) -> bytes:
     return image_generee
 
 
-def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
+def zone_autorisee(projet: dict, W: int, H: int, chemin_photo) -> "np.ndarray | None":
+    """Masque bool HxW des zones que le modèle a le DROIT de modifier.
+
+    Union des volumes projetés (sol, face avant, toiture) agrandis de 35 %
+    autour de leur centre + une copie de l'emprise au sol décalée vers le bas
+    (l'ombre portée s'étale devant la structure). None dès qu'une ombrière n'a
+    pas de volume calculable : on retombe alors sur la diff globale — un
+    masque faux effacerait une partie de l'ombrière.
+    """
+    from PIL import ImageDraw
+
+    ombrieres = poses_actives(projet) or []
+    if not ombrieres:
+        return None
+    volumes = volumes_poses(projet, W, H, chemin_photo)
+    if len(volumes) != len(ombrieres) or not all(volumes):
+        return None
+
+    def agrandi(pts, facteur=1.35):
+        cx = sum(p[0] for p in pts) / len(pts)
+        cy = sum(p[1] for p in pts) / len(pts)
+        return [(cx + (p[0] - cx) * facteur, cy + (p[1] - cy) * facteur)
+                for p in pts]
+
+    img = Image.new("L", (W, H), 0)
+    dr = ImageDraw.Draw(img)
+    for vol in volumes:
+        sol, toit = vol["sol"], vol["toit"]
+        for quad in (sol, toit,
+                     [sol[0], sol[1], toit[1], toit[0]],      # face avant
+                     [sol[0], sol[1], toit[2], toit[3]]):     # silhouette
+            dr.polygon(agrandi(quad), fill=255)
+        decal = 0.08 * H                                       # ombre au sol
+        dr.polygon(agrandi([(p[0], p[1] + decal) for p in sol]), fill=255)
+    return np.asarray(img) > 0
+
+
+def preserver_scene(photo_origine: Path, image_generee: bytes,
+                    zone: "np.ndarray | None" = None) -> bytes:
     """Recolle les pixels d'origine partout où le modèle n'a rien construit.
 
     Diff en niveaux de gris (après normalisation d'exposition), flou, seuil,
     dilatation puis fondu : seules les zones réellement modifiées (l'ombrière
     et ses ombres) restent générées ; voitures, sol et bâtiments retrouvent
-    leurs pixels d'origine. Sécurités : formats incompatibles ou image presque
-    entièrement changée -> on rend l'image générée telle quelle.
+    leurs pixels d'origine. `zone` (masque bool à la taille de la photo)
+    restreint EN PLUS les modifications à l'emprise autorisée : le ciel, les
+    voitures et le bâtiment redeviennent intouchables même si le modèle les a
+    repeints. Sécurités : formats incompatibles ou image presque entièrement
+    changée -> on rend l'image générée telle quelle.
     """
     import io
 
@@ -1085,6 +1249,8 @@ def preserver_scene(photo_origine: Path, image_generee: bytes) -> bytes:
     diff = Image.fromarray(np.clip(np.abs(g - o), 0, 255).astype(np.uint8))
     diff = diff.filter(ImageFilter.GaussianBlur(5))
     masque = np.asarray(diff) > 16
+    if zone is not None and zone.shape == masque.shape:
+        masque = masque & zone
     fraction = float(masque.mean())
     if fraction > 0.65:
         return image_generee  # tout a changé : la restauration effacerait l'ombrière
@@ -1165,7 +1331,14 @@ def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -
 
     image, controle = meilleur_img, meilleur_ctrl
     if os.environ.get("GVDP_PRESERVER_SCENE", "1") != "0":
-        image = preserver_scene(propre, image)
+        zone = None
+        if os.environ.get("GVDP_SCENE_STRICTE", "1") != "0":
+            try:
+                Wp, Hp = _ouvrir_image(propre).size
+                zone = zone_autorisee(projet, Wp, Hp, propre)
+            except OSError:
+                zone = None
+        image = preserver_scene(propre, image, zone=zone)
     dossier = config.assets_dir(projet["id"]) / "insertion"
     dossier.mkdir(parents=True, exist_ok=True)
     nom = f"insertion_{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"

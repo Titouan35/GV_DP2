@@ -1288,7 +1288,8 @@ function renderTypeSelector() {
 }
 
 // ---- Placement « un geste » : un cliqué-glissé = une ombrière ----
-const poseUI = { img: null, dragging: false, a: null, b: null, ombrieres: [], planDims: [] };
+const poseUI = { img: null, dragging: false, a: null, b: null, ombrieres: [], planDims: [],
+                 volumes: [], horizon: null, horizonAjuste: false, dragHorizon: false };
 
 function posePhoto() {
   return (state.projet.insertion || {}).photo || null;
@@ -1314,16 +1315,34 @@ function majEtatPose() {
 function sauverPose() {
   const photo = posePhoto();
   if (!photo) return;
+  const corps = { photo, ombrieres: poseUI.ombrieres };
+  if (poseUI.horizonAjuste && poseUI.horizon != null) corps.horizon = poseUI.horizon;
   api(`/api/projets/${state.projet.id}/insertion/pose`, {
-    method: "PUT", body: JSON.stringify({ photo, ombrieres: poseUI.ombrieres }),
+    method: "PUT", body: JSON.stringify(corps),
   }).then((d) => {
     state.projet = d.projet;
     poseUI.ombrieres = poseOmbrieres();      // récupère cotes pré-remplies + tri
+    appliquerVolumes(d.volumes);             // filaire = la géométrie du serveur
     majEtatPose();
     renderTableauOmbrieres();
     dessinerPose();
     rafraichirPayloadEtPrompt();
   }).catch(() => {});
+}
+
+// le filaire affiché est EXACTEMENT la géométrie que le serveur enverra à
+// Gemini (même moteur de perspective) : jamais de double calcul côté client
+function appliquerVolumes(v) {
+  poseUI.volumes = (v && v.volumes) || [];
+  if (v && v.horizon != null) poseUI.horizon = v.horizon;
+  if (v) poseUI.horizonAjuste = !!v.horizon_ajuste;
+}
+
+async function chargerVolumes() {
+  try {
+    appliquerVolumes(await api(`/api/projets/${state.projet.id}/insertion/volumes`));
+  } catch { appliquerVolumes(null); }
+  dessinerPose();
 }
 
 async function renderPose() {
@@ -1345,7 +1364,7 @@ async function renderPose() {
 
   body.innerHTML = `
     <div class="mesure-tools">
-      <span class="hint">Un cliqué-glissé = une ombrière</span>
+      <span class="hint">Un cliqué-glissé = une ombrière · la ligne bleue = horizon (glisse-la si le volume semble faux)</span>
       <span style="flex:1"></span>
       <button class="btn" id="p-annuler">Annuler la dernière</button>
       <button class="btn" id="p-effacer">Tout effacer</button>
@@ -1361,6 +1380,7 @@ async function renderPose() {
     canvas.height = Math.round(img.naturalHeight * scale);
     poseUI.img = img;
     dessinerPose();
+    chargerVolumes();          // filaire initial (géométrie serveur)
   };
   img.src = urlInsertion(photo);
 
@@ -1371,18 +1391,39 @@ async function renderPose() {
       Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)),
     ];
   };
+  const surHorizon = (e) => {
+    if (poseUI.horizon == null || !poseUI.ombrieres.length) return false;
+    const r = canvas.getBoundingClientRect();
+    return Math.abs((e.clientY - r.top) - poseUI.horizon * r.height) < 10;
+  };
   canvas.addEventListener("pointerdown", (e) => {
     try { canvas.setPointerCapture(e.pointerId); } catch { /* pointeur non capturable */ }
+    if (surHorizon(e)) {                      // priorité à la poignée d'horizon
+      poseUI.dragHorizon = true;
+      return;
+    }
     poseUI.dragging = true;
     poseUI.a = pt(e); poseUI.b = pt(e);
     dessinerPose();
   });
   canvas.addEventListener("pointermove", (e) => {
+    if (poseUI.dragHorizon) {
+      poseUI.horizon = Math.min(0.9, Math.max(0.05, pt(e)[1]));
+      poseUI.horizonAjuste = true;
+      dessinerPose();
+      return;
+    }
+    canvas.style.cursor = surHorizon(e) ? "ns-resize" : "crosshair";
     if (!poseUI.dragging) return;
     poseUI.b = pt(e);
     dessinerPose();
   });
   canvas.addEventListener("pointerup", (e) => {
+    if (poseUI.dragHorizon) {
+      poseUI.dragHorizon = false;
+      sauverPose();                            // persiste l'horizon + recalcule
+      return;
+    }
     if (!poseUI.dragging) return;
     poseUI.dragging = false;
     const debut = poseUI.a, fin = pt(e);
@@ -1480,6 +1521,41 @@ function dessinerPose() {
       dr.fillText(String(num), A[0] + 8, A[1] - 8);
     }
   };
+
+  // filaire des volumes (géométrie serveur = ce que Gemini recevra) : emprise
+  // au sol magenta, toiture violette, arêtes verticales fines
+  const X = (p) => [p[0] * canvas.width, p[1] * canvas.height];
+  const poly = (pts, coul, larg, pointille) => {
+    dr.strokeStyle = coul; dr.lineWidth = larg;
+    dr.setLineDash(pointille ? [6, 5] : []);
+    dr.beginPath();
+    pts.forEach((p, i) => { const [x, y] = X(p); i ? dr.lineTo(x, y) : dr.moveTo(x, y); });
+    dr.closePath(); dr.stroke();
+    dr.setLineDash([]);
+  };
+  for (const vol of (poseUI.volumes || [])) {
+    if (!vol) continue;
+    poly(vol.sol, "rgba(255,0,200,0.85)", 2, true);
+    poly(vol.toit, "rgba(119,109,248,0.95)", 2.5, false);
+    dr.strokeStyle = "rgba(119,109,248,0.7)"; dr.lineWidth = 1.5;
+    for (let i = 0; i < 4; i++) {
+      const [xs, ys] = X(vol.sol[i]), [xt, yt] = X(vol.toit[i]);
+      dr.beginPath(); dr.moveTo(xs, ys); dr.lineTo(xt, yt); dr.stroke();
+    }
+  }
+
+  // ligne d'horizon (poignée) : visible dès qu'une ombrière est tracée
+  if (poseUI.horizon != null && poseUI.ombrieres.length) {
+    const yh = poseUI.horizon * canvas.height;
+    dr.strokeStyle = "rgba(0,140,255,0.85)"; dr.lineWidth = 2;
+    dr.setLineDash([10, 7]);
+    dr.beginPath(); dr.moveTo(0, yh); dr.lineTo(canvas.width, yh); dr.stroke();
+    dr.setLineDash([]);
+    dr.fillStyle = "rgba(0,140,255,0.9)";
+    dr.beginPath(); dr.arc(canvas.width - 16, yh, 6, 0, 7); dr.fill();
+    dr.fillStyle = "#004a80"; dr.font = "11px sans-serif";
+    dr.fillText("horizon", canvas.width - 68, yh - 6);
+  }
 
   poseUI.ombrieres.forEach((o, i) => trace(o.bord_avant[0], o.bord_avant[1], true, i + 1));
   if (poseUI.dragging && poseUI.a && poseUI.b) trace(poseUI.a, poseUI.b, false);
