@@ -673,7 +673,7 @@ def _geometrie_ombriere(o: dict, projet: dict) -> dict:
             "entree": entree}
 
 
-def _descriptif_ombriere(o: dict, projet: dict) -> str:
+def _descriptif_ombriere(o: dict, projet: dict, emprise: bool = False) -> str:
     """Phrase décrivant la structure d'une ombrière (profil, poteaux, hauteurs).
 
     Le profil DOUBLE est décrit sans jamais parler de « deux versants » :
@@ -695,7 +695,12 @@ def _descriptif_ombriere(o: dict, projet: dict) -> str:
                   "l'ensemble dessine un T. La pente descend de façon continue et "
                   "régulière d'un bord à l'autre : la toiture reste un plan "
                   "unique, sans arête ni sommet au milieu")
-        poteaux = ""
+        # avec l'emprise dessinée, la file de poteaux est localisable
+        # exactement : on la rattache au quadrilatère plutôt que de laisser le
+        # modèle la placer au jugé.
+        poteaux = (" Sa file de poteaux se dresse sur l'AXE MÉDIAN du "
+                   "quadrilatère, à mi-profondeur, parallèlement au bord avant."
+                   if emprise else "")
     else:
         cote = "du côté haut" if e["poteau"] == "haut" else "du côté bas"
         profil = (f"de type MONOPENTE : une seule file de poteaux {cote} du "
@@ -703,9 +708,14 @@ def _descriptif_ombriere(o: dict, projet: dict) -> str:
         # le côté du poteau se déduit du type ET du sens de la pente : cela
         # fixe entièrement la silhouette vue du photographe.
         poteau_fond = (e["poteau"] == "haut") == vers_fond
-        poteaux = (" Ses poteaux sont donc "
-                   + ("au fond, du côté éloigné du spectateur."
-                      if poteau_fond else "devant, du côté du spectateur."))
+        if emprise:
+            poteaux = (" Ses poteaux se dressent le long du côté "
+                       + ("OPPOSÉ au bord avant (au fond du quadrilatère)."
+                          if poteau_fond else "ÉPAIS, c'est-à-dire le bord avant."))
+        else:
+            poteaux = (" Ses poteaux sont donc "
+                       + ("au fond, du côté éloigné du spectateur."
+                          if poteau_fond else "devant, du côté du spectateur."))
 
     return (f"{profil}. Hauteur libre {_fmt(g['h_bas'])} m au point bas et "
             f"{_fmt(g['h_haut'])} m au point haut, soit une pente douce "
@@ -749,10 +759,14 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
                 "toiture couvre toute la surface du cadre, ni plus, ni moins ; "
                 "les poteaux se posent à l'intérieur du cadre. Le côté du cadre "
                 "au trait le plus épais est le bord AVANT, le plus proche du "
-                "spectateur. Les cadres magenta sont de simples GUIDES de "
-                "tracé : ils ne doivent pas apparaître dans l'image finale, "
-                "remplace-les par le sol et la structure. N'ajoute aucune "
-                "flèche, aucun trait de couleur, aucun symbole ni aucun texte.")
+                "spectateur. Ces cadres sont déjà tracés dans la perspective "
+                "exacte de la photo : en épousant leurs côtés fuyants, tu "
+                "obtiens d'office la bonne taille, la bonne orientation et le "
+                "bon point de fuite — ne les redresse pas, ne les recentre "
+                "pas. Les cadres magenta sont de simples GUIDES de tracé : ils "
+                "ne doivent pas apparaître dans l'image finale, remplace-les "
+                "par le sol et la structure. N'ajoute aucune flèche, aucun "
+                "trait de couleur, aucun symbole ni aucun texte.")
         else:
             blocs.append(
                 f"PLACEMENT. L'image à éditer porte {n} trait"
@@ -767,19 +781,38 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
                 "simples GUIDES de tracé : ils ne doivent pas apparaître dans l'image "
                 "finale, remplace-les par le sol et la structure. N'ajoute aucune "
                 "flèche, aucun trait de couleur, aucun symbole ni aucun texte.")
-        # cotes réelles, ombrière par ombrière, dans l'ordre gauche -> droite
-        details = []
-        for i, o in enumerate(ombrieres, 1):
-            rang = (f"Ombrière {i} (le {i}{'er' if i == 1 else 'e'} trait en "
-                    "partant de la gauche)") if pluriel else "L'ombrière"
+        # Description ombrière par ombrière, dans l'ordre gauche -> droite.
+        # Avec les cadres, les cotes AU SOL ne sont plus énoncées : elles sont
+        # portées par la géométrie dessinée, et les répéter en texte allonge le
+        # prompt pour rien tout en incitant le modèle à tracer des cotes.
+        # Restent les hauteurs et la pente, invisibles sur un tracé au sol.
+        repere = "cadre" if quads else "trait"
+
+        def _mesure(o):
+            if quads:
+                return ""      # cotes au sol portées par le cadre
             cotes = []
             if o.get("longueur_m"):
                 cotes.append(f"{_fmt(o['longueur_m'])} m de long")
             if o.get("profondeur_m"):
                 cotes.append(f"{_fmt(o['profondeur_m'])} m de profondeur")
-            mesure = (" mesure " + " sur ".join(cotes)) if cotes else ""
-            details.append(f"{rang}{mesure}. Elle est "
-                           f"{_descriptif_ombriere(o, projet)}")
+            return (" mesure " + " sur ".join(cotes)) if cotes else ""
+
+        fiches = [(_mesure(o), _descriptif_ombriere(o, projet, emprise=quads))
+                  for o in ombrieres]
+        # ombrières toutes identiques (même type, mêmes cotes) : une seule
+        # description au lieu de la répéter mot pour mot — un prompt deux fois
+        # plus court porte d'autant mieux ses consignes.
+        if pluriel and len(set(fiches)) == 1:
+            mesure, descriptif = fiches[0]
+            details = [f"Les {n} ombrières sont identiques{mesure and ',' + mesure}. "
+                       f"Chacune est {descriptif}"]
+        else:
+            details = []
+            for i, (mesure, descriptif) in enumerate(fiches, 1):
+                rang = (f"Ombrière {i} (le {i}{'er' if i == 1 else 'e'} {repere} en "
+                        "partant de la gauche)") if pluriel else "L'ombrière"
+                details.append(f"{rang}{mesure}. Elle est {descriptif}")
         # NB : ne jamais titrer ce bloc « COTES » — constaté le 18/07/2026, le
         # modèle traçait alors de vraies lignes de cote chiffrées sur la photo.
         blocs.append(
@@ -849,27 +882,38 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
     # le modèle vers le pignon : on lui impose le point de vue déduit de la
     # géométrie réelle.
     if pose and ombrieres:
-        vus = []
-        for i, o in enumerate(ombrieres, 1):
-            L = o.get("longueur_m")
-            P = o.get("profondeur_m")
-            if not (L and P):
-                continue
-            rang = f"l'ombrière {i}" if pluriel else "l'ombrière"
-            if L >= P:
-                vus.append(
-                    f"Tu regardes {rang} par sa LONGUE FAÇADE : sa plus grande "
-                    f"dimension ({_fmt(L)} m) se déploie latéralement dans "
-                    f"l'image, en largeur, et sa profondeur ({_fmt(P)} m) "
-                    "s'enfonce vers le fond. Le pignon (le petit côté) n'est "
-                    "vu que de biais, jamais de face.")
+        cotees = [o for o in ombrieres if o.get("longueur_m") and o.get("profondeur_m")]
+        faces = {o["longueur_m"] >= o["profondeur_m"] for o in cotees}
+        if len(faces) == 1:          # même point de vue pour toutes : une phrase
+            sujet = "les ombrières" if pluriel else "l'ombrière"
+            son, sa = ("leur", "leur") if pluriel else ("son", "sa")
+            if faces.pop():
+                pignon = ("Leurs pignons (les petits côtés) ne sont vus que de "
+                          "biais, jamais de face." if pluriel else
+                          "Son pignon (le petit côté) n'est vu que de biais, "
+                          "jamais de face.")
+                blocs.append(
+                    f"ORIENTATION. Tu regardes {sujet} par {sa} LONGUE FAÇADE : "
+                    f"{sa} plus grande dimension se déploie latéralement dans "
+                    f"l'image, en largeur, et {sa} profondeur s'enfonce vers le "
+                    f"fond. {pignon}")
             else:
-                vus.append(
-                    f"Tu regardes {rang} par son PIGNON : le petit côté "
-                    f"({_fmt(L)} m) fait face au spectateur et la structure "
-                    f"file vers le fond sur {_fmt(P)} m.")
-        if vus:
-            blocs.append("ORIENTATION. " + " ".join(vus))
+                blocs.append(
+                    f"ORIENTATION. Tu regardes {sujet} par {son} PIGNON : "
+                    f"{son} petit côté fait face au spectateur et la structure "
+                    "file vers le fond sur toute sa profondeur.")
+        elif cotees:                 # cas mixte : on précise ombrière par ombrière
+            vus = []
+            for i, o in enumerate(ombrieres, 1):
+                if o not in cotees:
+                    continue
+                large = o["longueur_m"] >= o["profondeur_m"]
+                vus.append(f"l'ombrière {i} est vue par "
+                           + ("sa longue façade" if large else "son pignon"))
+            blocs.append("ORIENTATION. " + ", ".join(vus)
+                         + ". Une façade se déploie latéralement dans l'image ; "
+                           "un pignon fait face au spectateur, la structure "
+                           "filant alors vers le fond.")
 
     refs = _reference_photos(projet)
     if refs:

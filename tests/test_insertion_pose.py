@@ -305,7 +305,7 @@ def test_hauteurs_suivent_le_type_de_chaque_ombriere(tmp_path, monkeypatch):
 
 
 def test_prompt_multi_decrit_chaque_ombriere(tmp_path, monkeypatch):
-    """Deux ombrières = deux descriptions cotées, dans l'ordre gauche->droite."""
+    """Deux ombrières = deux descriptions, dans l'ordre gauche->droite."""
     monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
     projet, _ = _projet_photo(tmp_path, ombrieres=[
         {"bord_avant": [[0.55, 0.6], [0.9, 0.6]], "famille": "START PLAINE Double",
@@ -316,9 +316,52 @@ def test_prompt_multi_decrit_chaque_ombriere(tmp_path, monkeypatch):
     p = insertion_ia.construire_prompt_pose(projet, pose=True)
     assert "2 ombrières" in p
     assert "Ombrière 1" in p and "Ombrière 2" in p
-    assert "12 m de long" in p and "30 m de long" in p
-    # la 1re (gauche) est la monopente, la 2e la double
-    assert p.index("12 m de long") < p.index("30 m de long")
+    # ordre gauche->droite : la 1re est la monopente, la 2e la double
+    assert p.index("Ombrière 1") < p.index("MONOPENTE") < p.index("Ombrière 2")
+    assert p.index("Ombrière 2") < p.index("DOUBLE")
+
+
+def test_prompt_avec_cadres_n_enonce_pas_les_cotes_au_sol(tmp_path, monkeypatch):
+    """Quand l'emprise est dessinée, la longueur et la profondeur sont portées
+    par la géométrie : les répéter en texte allonge le prompt et incite le
+    modèle à tracer des cotes. Les hauteurs, invisibles au sol, restent."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, ombrieres=[
+        {"bord_avant": [[0.2, 0.7], [0.8, 0.72]], "famille": "START PLAINE Bas",
+         "longueur_m": 20.0, "profondeur_m": 5.0}])
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "cadre" in p and "emprise au sol" in p
+    assert "m de long" not in p and "m de profondeur" not in p
+    assert "au point bas" in p and "au point haut" in p     # hauteurs conservées
+    # les poteaux sont rattachés au cadre, pas laissés au jugé
+    assert "le long du côté" in p
+
+
+def test_prompt_factorise_les_ombrieres_identiques(tmp_path, monkeypatch):
+    """Deux ombrières identiques : une seule description au lieu du copier-
+    coller intégral (un prompt plus court porte mieux ses consignes)."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    o = {"famille": "START PLAINE Double", "longueur_m": 20.0, "profondeur_m": 10.0}
+    projet, _ = _projet_photo(tmp_path, famille="START PLAINE Double", ombrieres=[
+        {**o, "bord_avant": [[0.05, 0.72], [0.45, 0.73]]},
+        {**o, "bord_avant": [[0.55, 0.70], [0.90, 0.71]]},
+    ])
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "Les 2 ombrières sont identiques" in p
+    assert p.count("de type DOUBLE") == 1          # décrit une seule fois
+    assert "Ombrière 2 (le 2e cadre" not in p
+    # accord correct au pluriel dans l'orientation
+    assert "par leur LONGUE FAÇADE" in p and "n'est vues" not in p
+
+
+def test_prompt_double_ancre_les_poteaux_sur_l_axe(tmp_path, monkeypatch):
+    """Type Double : la file centrale est située sur l'axe médian du cadre."""
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    projet, _ = _projet_photo(tmp_path, famille="START PLAINE Double", ombrieres=[
+        {"bord_avant": [[0.2, 0.7], [0.8, 0.72]], "famille": "START PLAINE Double",
+         "longueur_m": 20.0, "profondeur_m": 10.0}])
+    p = insertion_ia.construire_prompt_pose(projet, pose=True)
+    assert "AXE MÉDIAN" in p and "mi-profondeur" in p
 
 
 def test_preparer_requete_pose(tmp_path, monkeypatch):
