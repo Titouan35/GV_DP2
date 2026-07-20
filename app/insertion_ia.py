@@ -435,13 +435,18 @@ def _points_bord(o: dict, W: int, H: int):
 
 # ------------------------------------------------------------------ perspective
 
-def horizon_actif(projet: dict) -> float | None:
-    """Ordonnée d'horizon (0-1) enregistrée pour la photo active, ou None."""
+HAUTEUR_PRISE_VUE_DEFAUT = 1.6   # photo prise debout, appareil au niveau des yeux
+
+
+def _entree_pose(projet: dict) -> dict:
     ins = projet.get("insertion") or {}
     photo = ins.get("photo")
-    if not photo:
-        return None
-    v = ((ins.get("poses") or {}).get(photo) or {}).get("horizon")
+    return ((ins.get("poses") or {}).get(photo) or {}) if photo else {}
+
+
+def horizon_actif(projet: dict) -> float | None:
+    """Ordonnée d'horizon (0-1) enregistrée pour la photo active, ou None."""
+    v = _entree_pose(projet).get("horizon")
     try:
         v = float(v)
     except (TypeError, ValueError):
@@ -449,30 +454,140 @@ def horizon_actif(projet: dict) -> float | None:
     return v if 0.02 <= v <= 0.95 else None
 
 
+def hauteur_prise_vue(projet: dict) -> float:
+    """Hauteur de prise de vue déclarée (m), 1,6 m par défaut (debout)."""
+    v = _entree_pose(projet).get("hauteur_vue")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return HAUTEUR_PRISE_VUE_DEFAUT
+    return v if 0.3 <= v <= 120.0 else HAUTEUR_PRISE_VUE_DEFAUT
+
+
+def _index_reference(projet: dict, W: int, H: int) -> int | None:
+    """Index de l'ombrière étalon : le plus long bord avant coté.
+
+    On renvoie l'INDEX et non l'objet : `poses_actives` reconstruit ses dicts
+    à chaque appel, une comparaison par identité serait toujours fausse.
+    """
+    ombrieres = poses_actives(projet) or []
+    cotees = [(i, o) for i, o in enumerate(ombrieres) if o.get("longueur_m")]
+    if not cotees:
+        return None
+
+    def long_px(couple):
+        a, b = _points_bord(couple[1], W, H)
+        return math.hypot(b[0] - a[0], b[1] - a[1])
+
+    return max(cotees, key=long_px)[0]
+
+
+def _ombriere_reference(projet: dict, W: int, H: int) -> dict | None:
+    """Ombrière qui sert d'étalon (le plus long bord avant coté)."""
+    i = _index_reference(projet, W, H)
+    return (poses_actives(projet) or [])[i] if i is not None else None
+
+
 def _camera_photo(projet: dict, W: int, H: int, chemin_photo) -> "perspective.Camera | None":
     """Caméra calibrée pour la photo active, ou None (repli approximatif).
 
-    Horizon : valeur ajustée par l'utilisateur (poignée), sinon détection des
-    fuyantes, sinon défaut 0,42 x H (léger piqué vers le sol, typique d'une
-    photo de parking debout). Échelle : bord avant tracé le plus long qui
-    porte une longueur réelle.
+    Réglage INVERSÉ (19/07/2026) : c'est la HAUTEUR DE PRISE DE VUE qui pilote
+    (l'utilisateur sait toujours s'il a photographié debout), l'horizon en est
+    déduit. Un horizon ajusté à la main reste prioritaire s'il donne une
+    hauteur plausible. Échelle : le plus long bord avant coté.
     """
     from . import perspective
 
-    ombrieres = poses_actives(projet) or []
-    candidates = [o for o in ombrieres if o.get("longueur_m")]
-    if not candidates:
+    ref = _ombriere_reference(projet, W, H)
+    if not ref:
         return None
-    ref = max(candidates,
-              key=lambda o: math.hypot(*(b - a for a, b in
-                                         zip(*_points_bord(o, W, H)))))
-    y_h = horizon_actif(projet)
-    if y_h is None:
-        y_h = perspective.proposer_horizon(chemin_photo)
-    y_h_px = (y_h if y_h is not None else 0.42) * H
     f = perspective.focale_px(chemin_photo, W)
     a, b = _points_bord(ref, W, H)
-    return perspective.calibrer(W, H, y_h_px, f, a, b, ref["longueur_m"])
+    L = ref["longueur_m"]
+    h_vue = hauteur_prise_vue(projet)
+    h_max = max(perspective.HAUTEUR_CAM_MAX, h_vue * 1.5)
+
+    y_h = horizon_actif(projet)
+    if y_h is not None:                        # horizon forcé à la poignée
+        cam = perspective.calibrer(W, H, y_h * H, f, a, b, L, h_max=h_max)
+        if cam:
+            return cam
+    # sinon : l'horizon qui donne exactement la hauteur de prise de vue
+    y_h_px = perspective.horizon_pour_hauteur(W, H, f, a, b, L, h_vue)
+    if y_h_px is not None:
+        return perspective.Camera(W=W, H=H, f=f, y_h=y_h_px, h_cam=h_vue)
+    # dernier repli : détection des fuyantes, puis défaut historique
+    y_det = perspective.proposer_horizon(chemin_photo)
+    return perspective.calibrer(W, H, (y_det if y_det is not None else 0.42) * H,
+                                f, a, b, L, h_max=h_max)
+
+
+def diagnostic_pose(projet: dict, W: int, H: int, chemin_photo) -> dict:
+    """Cohérence de la prise de vue, pour l'alerte de l'UI.
+
+    Compare la hauteur de prise de vue DÉCLARÉE à celle qu'impliquerait
+    l'horizon courant : un écart franc signale une longueur de bord fausse
+    (cause n°1 des volumes aberrants, constatée sur Anse le 19/07/2026).
+    """
+    from . import perspective
+
+    ref = _ombriere_reference(projet, W, H)
+    if not ref:
+        return {"ok": False, "message": "Renseigne la longueur (L) d'au moins une ombrière."}
+    cam = _camera_photo(projet, W, H, chemin_photo)
+    if cam is None:
+        return {"ok": False,
+                "message": "Géométrie incohérente : vérifie la longueur (L) du tracé "
+                           "et la hauteur de prise de vue."}
+    h_vue = hauteur_prise_vue(projet)
+    a, b = _points_bord(ref, W, H)
+    dist = None
+    milieu = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+    sol = cam.image_vers_sol(*milieu)
+    if sol:
+        dist = round(math.hypot(sol[0], sol[1]), 1)
+    ecart = abs(cam.h_cam - h_vue) / max(h_vue, 0.1)
+    msg = ""
+    if ecart > 0.25:
+        msg = (f"La géométrie de ce tracé suppose une prise de vue à "
+               f"{cam.h_cam:.1f} m alors que tu as déclaré {h_vue:.1f} m : la "
+               "longueur (L) est probablement fausse.")
+
+    # CONTRÔLE CROISÉ : l'horizon étant déduit de la hauteur déclarée, la
+    # référence est cohérente par construction — seule la comparaison des
+    # AUTRES ombrières révèle une cote fausse. On mesure leur longueur réelle
+    # dans la perspective calibrée et on la confronte à la valeur saisie.
+    i_ref = _index_reference(projet, W, H)
+    incoherentes, hors_sol = [], []
+    for i, o in enumerate(poses_actives(projet) or []):
+        if i == i_ref:
+            continue
+        pa_, pb_ = (cam.image_vers_sol(*p) for p in _points_bord(o, W, H))
+        if not pa_ or not pb_:
+            hors_sol.append(str(i + 1))
+            continue
+        if not o.get("longueur_m"):
+            continue
+        mesuree = math.hypot(pb_[0] - pa_[0], pb_[1] - pa_[1])
+        if abs(mesuree - o["longueur_m"]) / o["longueur_m"] > 0.2:
+            incoherentes.append(f"l'ombrière {i + 1} mesure ~{mesuree:.0f} m dans "
+                                f"cette perspective (tu as saisi "
+                                f"{_fmt(o['longueur_m'])} m)")
+    if hors_sol and not msg:
+        msg = ("Ombrière" + ("s " if len(hors_sol) > 1 else " ")
+               + ", ".join(hors_sol) + " tracée" + ("s" if len(hors_sol) > 1 else "")
+               + " au-dessus de la ligne d'horizon : impossible de la poser au "
+                 "sol. Trace le bord avant plus bas, ou corrige la longueur de "
+                 "l'ombrière de référence.")
+    if incoherentes and not msg:
+        msg = ("Cotes incompatibles entre elles : " + " ; ".join(incoherentes)
+               + ". Corrige les longueurs, sinon les emprises seront fausses.")
+
+    return {"ok": not msg, "message": msg,
+            "hauteur_calculee": round(cam.h_cam, 2),
+            "hauteur_declaree": h_vue,
+            "distance_m": dist,
+            "horizon": round(cam.y_h / H, 4)}
 
 
 def volumes_poses(projet: dict, W: int, H: int, chemin_photo) -> list[dict | None]:
@@ -726,10 +841,40 @@ def construire_prompt_pose(projet: dict, affinage: str = "", pose: bool = True) 
             quoi = f"Le dessin technique joint est la coupe type {noms[0]}"
         foi = "Elles font foi" if len(coupes) > 1 else "Elle fait foi"
         blocs.append(
-            f"COUPE. {quoi}. {foi} pour la géométrie : silhouette vue de bout, "
-            "position des poteaux sous la toiture, inclinaison, porte-à-faux et "
-            "proportions. Respecte ce profil exactement. Ne recopie dans l'image "
-            "ni trait de cote, ni cartouche, ni texte de ces dessins.")
+            f"COUPE. {quoi}. {foi} pour la géométrie : proportions, position des "
+            "poteaux sous la toiture, inclinaison et porte-à-faux. Respecte ce "
+            "profil exactement. ATTENTION : cette coupe est un schéma vu de "
+            "bout, uniquement pour comprendre la structure — ne reproduis JAMAIS "
+            "ce point de vue dans l'image, l'ombrière doit garder l'orientation "
+            "de la photo. Ne recopie ni trait de cote, ni cartouche, ni texte de "
+            "ces dessins.")
+
+    # ORIENTATION : bloc ajouté le 19/07/2026 après un rendu « vu de côté »
+    # alors que le tracé était frontal. La coupe jointe (vue de bout) tirait
+    # le modèle vers le pignon : on lui impose le point de vue déduit de la
+    # géométrie réelle.
+    if pose and ombrieres:
+        vus = []
+        for i, o in enumerate(ombrieres, 1):
+            L = o.get("longueur_m")
+            P = o.get("profondeur_m")
+            if not (L and P):
+                continue
+            rang = f"l'ombrière {i}" if pluriel else "l'ombrière"
+            if L >= P:
+                vus.append(
+                    f"Tu regardes {rang} par sa LONGUE FAÇADE : sa plus grande "
+                    f"dimension ({_fmt(L)} m) se déploie latéralement dans "
+                    f"l'image, en largeur, et sa profondeur ({_fmt(P)} m) "
+                    "s'enfonce vers le fond. Le pignon (le petit côté) n'est "
+                    "vu que de biais, jamais de face.")
+            else:
+                vus.append(
+                    f"Tu regardes {rang} par son PIGNON : le petit côté "
+                    f"({_fmt(L)} m) fait face au spectateur et la structure "
+                    f"file vers le fond sur {_fmt(P)} m.")
+        if vus:
+            blocs.append("ORIENTATION. " + " ".join(vus))
 
     refs = _reference_photos(projet)
     if refs:

@@ -33,10 +33,15 @@ from PIL import Image, ImageOps
 # hauteur d'œil de référence pour la calibration (la vraie hauteur est
 # recalculée depuis la longueur réelle du bord avant, cf. calibrer)
 HAUTEUR_OEIL_M = 1.6
-# hauteur caméra plausible : à genoux -> léger surplomb (étage, talus).
-# Au-delà, le tracé ou l'horizon sont incohérents -> on refuse la géométrie.
+# hauteur caméra plausible pour une photo de terrain tenue à la main.
+# 19/07/2026 : la borne haute était à 30 m (drone), ce qui laissait passer
+# des calibrations aberrantes — constaté sur Anse, 6,3 m déduits pour une
+# photo prise debout, d'où un volume faux sans aucune alerte.
 HAUTEUR_CAM_MIN = 0.8
-HAUTEUR_CAM_MAX = 30.0
+HAUTEUR_CAM_MAX = 4.0
+# au-delà : prise de vue surélevée assumée (drone, étage), acceptée seulement
+# si l'utilisateur l'a déclarée explicitement
+HAUTEUR_CAM_MAX_DECLAREE = 60.0
 
 
 def focale_px(chemin_photo: Path, largeur_px: int) -> float:
@@ -105,18 +110,18 @@ class Camera:
         return (self.cx + self.f * X / fwd, self.cy - self.f * u_ax / fwd)
 
 
-def calibrer(W: int, H: int, y_h_px: float, f: float,
-             bord_a: tuple[float, float], bord_b: tuple[float, float],
-             longueur_m: float) -> Camera | None:
-    """Calibre la hauteur caméra pour que le bord avant tracé mesure
-    `longueur_m` au sol. Les coordonnées sol étant proportionnelles à h_cam,
-    une seule règle de trois suffit. None si géométrie incohérente.
+def hauteur_pour_horizon(W: int, H: int, y_h_px: float, f: float,
+                         bord_a: tuple[float, float], bord_b: tuple[float, float],
+                         longueur_m: float) -> float | None:
+    """Hauteur caméra impliquée par un horizon donné, SANS garde-fou.
+
+    Sert au diagnostic (« ta photo aurait été prise à 6,3 m ») et à la
+    recherche d'horizon par dichotomie. None si la géométrie est impossible.
     """
     if not longueur_m or longueur_m <= 0 or f <= 0:
         return None
-    # l'horizon doit être AU-DESSUS du tracé (le sol est sous l'horizon)
     if y_h_px >= min(bord_a[1], bord_b[1]) - 4:
-        return None
+        return None                     # l'horizon doit être AU-DESSUS du tracé
     cam = Camera(W=W, H=H, f=f, y_h=y_h_px, h_cam=HAUTEUR_OEIL_M)
     pa = cam.image_vers_sol(*bord_a)
     pb = cam.image_vers_sol(*bord_b)
@@ -125,8 +130,54 @@ def calibrer(W: int, H: int, y_h_px: float, f: float,
     d_ref = math.hypot(pb[0] - pa[0], pb[1] - pa[1])
     if d_ref <= 1e-6:
         return None
-    h_cam = HAUTEUR_OEIL_M * longueur_m / d_ref
-    if not (HAUTEUR_CAM_MIN <= h_cam <= HAUTEUR_CAM_MAX):
+    return HAUTEUR_OEIL_M * longueur_m / d_ref
+
+
+def horizon_pour_hauteur(W: int, H: int, f: float,
+                         bord_a: tuple[float, float], bord_b: tuple[float, float],
+                         longueur_m: float, h_cible: float) -> float | None:
+    """Ordonnée d'horizon (px) telle que la photo soit prise à `h_cible`.
+
+    Réglage INVERSÉ (19/07/2026) : l'horizon est un paramètre invisible que
+    l'utilisateur ne sait pas estimer, alors qu'il sait toujours s'il a
+    photographié debout, accroupi ou depuis un drone. On cherche donc
+    l'horizon par dichotomie ; la hauteur déduite décroît quand l'horizon
+    descend vers le tracé (fonction monotone), ce qui rend la recherche sûre.
+    None si aucune position d'horizon ne donne cette hauteur : c'est le signal
+    que la longueur déclarée est incompatible avec la prise de vue.
+    """
+    if h_cible <= 0:
+        return None
+    bas = min(bord_a[1], bord_b[1]) - 5      # horizon au plus près du tracé
+    haut = -2.0 * H                          # très au-dessus du cadre
+    h_bas = hauteur_pour_horizon(W, H, bas, f, bord_a, bord_b, longueur_m)
+    h_haut = hauteur_pour_horizon(W, H, haut, f, bord_a, bord_b, longueur_m)
+    if h_bas is None or h_haut is None:
+        return None
+    if not (min(h_bas, h_haut) <= h_cible <= max(h_bas, h_haut)):
+        return None                          # cible hors de portée
+    for _ in range(60):
+        mid = (bas + haut) / 2
+        h_mid = hauteur_pour_horizon(W, H, mid, f, bord_a, bord_b, longueur_m)
+        if h_mid is None:
+            return None
+        if (h_mid > h_cible) == (h_haut > h_cible):
+            haut, h_haut = mid, h_mid
+        else:
+            bas, h_bas = mid, h_mid
+    return (bas + haut) / 2
+
+
+def calibrer(W: int, H: int, y_h_px: float, f: float,
+             bord_a: tuple[float, float], bord_b: tuple[float, float],
+             longueur_m: float, h_max: float = HAUTEUR_CAM_MAX) -> Camera | None:
+    """Calibre la hauteur caméra pour que le bord avant tracé mesure
+    `longueur_m` au sol. Les coordonnées sol étant proportionnelles à h_cam,
+    une seule règle de trois suffit. None si la hauteur obtenue sort des
+    bornes plausibles (tracé ou horizon incohérents).
+    """
+    h_cam = hauteur_pour_horizon(W, H, y_h_px, f, bord_a, bord_b, longueur_m)
+    if h_cam is None or not (HAUTEUR_CAM_MIN <= h_cam <= h_max):
         return None
     return Camera(W=W, H=H, f=f, y_h=y_h_px, h_cam=h_cam)
 

@@ -385,11 +385,22 @@ def sauver_pose(projet_id: str, corps: dict = Body(...)):
             horizon = round(h, 4)
     except (TypeError, ValueError):
         horizon = None
+    # hauteur de prise de vue déclarée : c'est ELLE qui pilote la perspective
+    # (l'horizon en est déduit), sauf horizon forcé à la poignée
+    hauteur_vue = None
+    try:
+        hv = float(corps.get("hauteur_vue"))
+        if 0.3 <= hv <= 120.0:
+            hauteur_vue = round(hv, 2)
+    except (TypeError, ValueError):
+        hauteur_vue = None
 
     if ombrieres:
         entree = {"ombrieres": ombrieres}
         if horizon is not None:
             entree["horizon"] = horizon
+        if hauteur_vue is not None:
+            entree["hauteur_vue"] = hauteur_vue
         projet.insertion.poses[photo] = entree
     else:
         projet.insertion.poses.pop(photo, None)
@@ -409,6 +420,7 @@ def _volumes_reponse(projet) -> dict:
         W, H = insertion_ia._ouvrir_image(photo).size
         volumes = insertion_ia.volumes_poses(data, W, H, photo)
         cam = insertion_ia._camera_photo(data, W, H, photo)
+        diag = insertion_ia.diagnostic_pose(data, W, H, photo)
     except OSError:
         return {"disponible": False}
 
@@ -417,10 +429,12 @@ def _volumes_reponse(projet) -> dict:
 
     return {
         "disponible": any(volumes),
-        # horizon EFFECTIF (ajusté > détecté > défaut) : c'est lui que la
-        # poignée du canvas doit afficher, pas seulement la valeur enregistrée
+        # horizon EFFECTIF (déduit de la hauteur de prise de vue, ou forcé à
+        # la poignée) : c'est lui que le canvas doit afficher
         "horizon": round(cam.y_h / H, 4) if cam else insertion_ia.horizon_actif(data),
         "horizon_ajuste": insertion_ia.horizon_actif(data) is not None,
+        "hauteur_vue": insertion_ia.hauteur_prise_vue(data),
+        "diagnostic": diag,
         "volumes": [({"sol": norm(v["sol"]), "toit": norm(v["toit"])} if v else None)
                     for v in volumes],
     }

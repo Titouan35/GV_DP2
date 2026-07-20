@@ -1289,7 +1289,8 @@ function renderTypeSelector() {
 
 // ---- Placement « un geste » : un cliqué-glissé = une ombrière ----
 const poseUI = { img: null, dragging: false, a: null, b: null, ombrieres: [], planDims: [],
-                 volumes: [], horizon: null, horizonAjuste: false, dragHorizon: false };
+                 volumes: [], horizon: null, horizonAjuste: false, dragHorizon: false,
+                 hauteurVue: 1.6, diagnostic: null };
 
 function posePhoto() {
   return (state.projet.insertion || {}).photo || null;
@@ -1315,7 +1316,7 @@ function majEtatPose() {
 function sauverPose() {
   const photo = posePhoto();
   if (!photo) return;
-  const corps = { photo, ombrieres: poseUI.ombrieres };
+  const corps = { photo, ombrieres: poseUI.ombrieres, hauteur_vue: poseUI.hauteurVue };
   if (poseUI.horizonAjuste && poseUI.horizon != null) corps.horizon = poseUI.horizon;
   api(`/api/projets/${state.projet.id}/insertion/pose`, {
     method: "PUT", body: JSON.stringify(corps),
@@ -1335,7 +1336,30 @@ function sauverPose() {
 function appliquerVolumes(v) {
   poseUI.volumes = (v && v.volumes) || [];
   if (v && v.horizon != null) poseUI.horizon = v.horizon;
-  if (v) poseUI.horizonAjuste = !!v.horizon_ajuste;
+  if (v) {
+    poseUI.horizonAjuste = !!v.horizon_ajuste;
+    if (v.hauteur_vue != null) poseUI.hauteurVue = v.hauteur_vue;
+    poseUI.diagnostic = v.diagnostic || null;
+  }
+  majDiagnosticPose();
+}
+
+// alerte de cohérence : hauteur de prise de vue déclarée vs celle qu'implique
+// la géométrie. Un écart franc = longueur du tracé fausse (cause n°1 des
+// volumes aberrants, constatée le 19/07/2026).
+function majDiagnosticPose() {
+  const el = $("#p-diagnostic");
+  if (!el) return;
+  const d = poseUI.diagnostic;
+  if (!d) { el.innerHTML = ""; return; }
+  if (d.message) {
+    el.innerHTML = `<div class="alerte-pose">⚠ ${esc(d.message)}</div>`;
+  } else if (d.distance_m != null) {
+    el.innerHTML = `<span class="sub">Ombrière à ~${esc(String(d.distance_m))} m de l'objectif · `
+      + `prise de vue ${esc(String(d.hauteur_declaree))} m · cohérent.</span>`;
+  } else {
+    el.innerHTML = "";
+  }
 }
 
 async function chargerVolumes() {
@@ -1364,13 +1388,33 @@ async function renderPose() {
 
   body.innerHTML = `
     <div class="mesure-tools">
-      <span class="hint">Un cliqué-glissé = une ombrière · la ligne bleue = horizon (glisse-la si le volume semble faux)</span>
+      <span class="hint">Un cliqué-glissé = une ombrière</span>
+      <label class="hint" style="display:flex;align-items:center;gap:5px">Photo prise à
+        <select class="input mini-select" id="p-hauteur">
+          <option value="1.6">1,6 m (debout)</option>
+          <option value="1.2">1,2 m (accroupi)</option>
+          <option value="2.5">2,5 m (véhicule, escabeau)</option>
+          <option value="10">10 m (étage, talus)</option>
+          <option value="40">40 m (drone)</option>
+        </select>
+      </label>
       <span style="flex:1"></span>
       <button class="btn" id="p-annuler">Annuler la dernière</button>
       <button class="btn" id="p-effacer">Tout effacer</button>
     </div>
     <div class="mesure-canvas-wrap"><canvas id="p-canvas"></canvas></div>
+    <div id="p-diagnostic" style="margin:6px 2px"></div>
     <div id="p-tableau"></div>`;
+
+  const selHauteur = $("#p-hauteur");
+  selHauteur.value = String(poseUI.hauteurVue ?? 1.6);
+  selHauteur.addEventListener("change", () => {
+    poseUI.hauteurVue = parseFloat(selHauteur.value);
+    // la hauteur pilote la perspective : l'horizon est recalculé, on lève
+    // donc le verrouillage manuel éventuel
+    poseUI.horizonAjuste = false;
+    sauverPose();
+  });
 
   const canvas = $("#p-canvas");
   const img = new Image();
