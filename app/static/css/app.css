@@ -455,3 +455,12 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
   background: #FFF4E5; border: 1px solid #F3C892; border-radius: 8px;
   padding: 8px 12px; font-size: 13px; color: #7A4A05; line-height: 1.45;
 }
+
+/* bandeau de presence : un collegue a ce dossier ouvert (mode partage) */
+.presence {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #FFF4E5; border: 1px solid #F3C892; border-radius: 8px;
+  padding: 9px 14px; margin-bottom: 14px; font-size: 13.5px; color: #7A4A05;
+}
+.presence b { color: #5C3703; }
+.presence[hidden] { display: none; }

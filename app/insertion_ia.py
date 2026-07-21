@@ -61,10 +61,23 @@ def _compteur_chemin() -> Path:
 
 
 def compteur_global() -> int:
+    """Nombre d'images générées, tous projets et tous postes confondus.
+
+    En mode partagé, plusieurs serveurs incrémentent le même fichier : une
+    lecture-écriture concurrente peut perdre un incrément. Le journal, lui,
+    est en AJOUT SEUL donc fiable : on retient le maximum des deux, ce qui
+    rattrape automatiquement les pertes sans ralentir le cas courant.
+    """
     try:
-        return int(json.loads(_compteur_chemin().read_text(encoding="utf-8"))["images"])
+        compteur = int(json.loads(_compteur_chemin().read_text(encoding="utf-8"))["images"])
     except (OSError, ValueError, KeyError):
-        return 0
+        compteur = 0
+    try:
+        with open(_journal_chemin(), "rb") as f:
+            lignes = sum(1 for ligne in f if ligne.strip())
+    except OSError:
+        lignes = 0
+    return max(compteur, lignes)
 
 
 # le read-modify-write du compteur n'est pas atomique : deux générations
@@ -1752,7 +1765,8 @@ def apercu_prompt(projet: dict) -> str:
         return ""
 
 
-def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -> dict:
+def generer_image(projet: dict, affinage: str = "", prompt_override: str = "",
+                  utilisateur: str | None = None) -> dict:
     """Génère UNE insertion via Gemini (Nano Banana Pro), flux « un geste ».
 
     Photo repérée (bord avant + flèche de fuite) + photo de référence réelle du
@@ -1831,6 +1845,8 @@ def generer_image(projet: dict, affinage: str = "", prompt_override: str = "") -
     journaliser_generation({
         "date": datetime.now().isoformat(timespec="seconds"),
         "projet": projet.get("id"),
+        # qui a dépensé sur la clé Gemini commune (mode partagé)
+        "utilisateur": utilisateur or os.environ.get("USERNAME"),
         "modele": _modele(),
         "essais": essais,
         "cout_eur": round(essais * cout_image_eur(), 2),

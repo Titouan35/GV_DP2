@@ -11,14 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import config, insertion_ia
 from ..fiche_emprise import generer_fiche
 from ..insertion_ia import InsertionError
 from .routes_documents import lire_upload, normaliser_exif, signature_valide
-from .routes_projets import _charger, _ecrire, _sauver, verrou_projet
+from .routes_projets import _charger, _ecrire, _sauver, _utilisateur, verrou_projet
 
 router = APIRouter(prefix="/api/projets", tags=["insertion"])
 
@@ -229,11 +229,13 @@ _GENERATIONS: dict[str, dict] = {}
 _GENERATIONS_LOCK = threading.Lock()
 
 
-def _tache_generation(projet_id: str, affinage: str, prompt_override: str) -> None:
+def _tache_generation(projet_id: str, affinage: str, prompt_override: str,
+                      utilisateur: str | None = None) -> None:
     try:
         projet = _charger(projet_id)
         image = insertion_ia.generer_image(projet.model_dump(), affinage=affinage,
-                                           prompt_override=prompt_override)
+                                           prompt_override=prompt_override,
+                                           utilisateur=utilisateur)
         # recharger l'état le plus frais avant d'écrire (l'utilisateur a pu
         # modifier le projet pendant la génération) — TOUT sous le verrou du
         # projet, sinon un autosave glissé entre le _charger et l'écriture
@@ -258,7 +260,8 @@ def _tache_generation(projet_id: str, affinage: str, prompt_override: str) -> No
 
 
 @router.post("/{projet_id}/insertion/generer")
-def generer_insertion(projet_id: str, corps: dict = Body(default={})):
+def generer_insertion(projet_id: str, corps: dict = Body(default={}),
+                      request: Request = None):
     """Lance UNE génération Gemini en tâche de fond. 409 si déjà en cours."""
     _charger(projet_id)  # valide l'existence avant de démarrer quoi que ce soit
     if not insertion_ia.api_configuree():
@@ -273,8 +276,11 @@ def generer_insertion(projet_id: str, corps: dict = Body(default={})):
                                    "demarre": datetime.now().isoformat(timespec="seconds")}
     affinage = str(corps.get("affinage", "") or "")[:2000]
     prompt_override = str(corps.get("prompt", "") or "")[:8000]
+    # l'identité doit être capturée AVANT le thread : la requête n'existe plus
+    # ensuite, et le journal doit dire qui a dépensé sur la clé commune
+    qui = _utilisateur(request)
     threading.Thread(target=_tache_generation, daemon=True,
-                     args=(projet_id, affinage, prompt_override)).start()
+                     args=(projet_id, affinage, prompt_override, qui)).start()
     return {"etat": "en_cours"}
 
 

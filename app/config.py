@@ -66,7 +66,35 @@ def _charger_env() -> Path | None:
 # Chargé une fois à l'import : les modules lisant os.environ voient les clés.
 ENV_FILE_CHARGE = _charger_env()
 
-PROJETS_DIR = REPO_ROOT / "PROJETS"          # 1 dossier JSON par projet
+def _projets_dir() -> Path:
+    """Dossier des projets : local au repo par défaut, PARTAGEABLE en équipe.
+
+    Ordre de priorité (20/07/2026, mode multi-poste) :
+      1. variable d'environnement GVDP_PROJETS_DIR
+      2. clé "projets_dir" de gvdp.config.json, à la racine du repo
+      3. PROJETS/ dans le repo (comportement historique)
+
+    Le mode partagé pointe vers un dossier OneDrive/SharePoint commun : chaque
+    poste exécute son propre serveur mais tous lisent et écrivent les mêmes
+    dossiers. Le compteur de dépense IA et le journal des générations vivent
+    dans ce dossier, donc ils deviennent communs eux aussi.
+    """
+    env = os.environ.get("GVDP_PROJETS_DIR")
+    if env:
+        return Path(env).expanduser()
+    fichier = REPO_ROOT / "gvdp.config.json"
+    try:
+        if fichier.is_file():
+            import json
+            valeur = json.loads(fichier.read_text(encoding="utf-8")).get("projets_dir")
+            if valeur:
+                return Path(valeur).expanduser()
+    except (OSError, ValueError):
+        pass          # config illisible : on retombe sur le dossier local
+    return REPO_ROOT / "PROJETS"
+
+
+PROJETS_DIR = _projets_dir()                 # 1 dossier JSON par projet
 
 
 def assets_dir(projet_id: str):

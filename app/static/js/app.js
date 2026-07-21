@@ -278,6 +278,50 @@ async function ouvrirProjet(id) {
   state.suggestions = [];
   state.etape = 1;
   render();
+  signalerPresence(id, data.verrou);
+}
+
+// ---------------- présence sur un projet (mode partagé entre postes) -------
+// Chaque poste exécute son propre serveur sur des dossiers OneDrive communs :
+// aucun ne voit les verrous de l'autre. On dépose donc un fichier de présence,
+// comme Word sur SharePoint, pour éviter que deux personnes ne travaillent en
+// même temps sur le même dossier (OneDrive créerait une copie de conflit).
+let presenceTimer = null;
+
+async function signalerPresence(id, verrouConnu) {
+  clearInterval(presenceTimer);
+  let etat = verrouConnu;
+  try {
+    if (!etat || etat.a_moi) etat = await api(`/api/projets/${id}/verrou`, { method: "POST" });
+  } catch { return; }
+  afficherPresence(etat);
+  if (etat && etat.a_moi) {
+    // rafraîchit la présence : sans ça elle expire au bout de 15 min
+    presenceTimer = setInterval(() => {
+      if (state.projet?.id !== id) { clearInterval(presenceTimer); return; }
+      api(`/api/projets/${id}/verrou`, { method: "POST" }).catch(() => {});
+    }, 5 * 60 * 1000);
+  }
+}
+
+function afficherPresence(etat) {
+  const barre = $("#presence");
+  if (!barre) return;
+  if (!etat || etat.a_moi) { barre.hidden = true; barre.innerHTML = ""; return; }
+  const depuis = (etat.depuis || "").replace("T", " ").slice(11, 16);
+  barre.hidden = false;
+  barre.innerHTML = `<span>⚠ Dossier ouvert par <b>${esc(etat.detenteur || "un collègue")}</b>`
+    + (depuis ? ` depuis ${esc(depuis)}` : "")
+    + ` — évitez d'y travailler à deux, OneDrive ne saurait pas départager.</span>`
+    + `<button class="btn btn-sm" id="presence-forcer">Prendre la main</button>`;
+  $("#presence-forcer").addEventListener("click", async () => {
+    try {
+      const e = await api(`/api/projets/${state.projet.id}/verrou?forcer=1`, { method: "POST" });
+      afficherPresence(e);
+      toast("Tu as pris la main sur ce dossier.", "ok");
+      signalerPresence(state.projet.id, e);
+    } catch { /* message déjà affiché */ }
+  });
 }
 
 // ---------------- étape 1 : projet ----------------

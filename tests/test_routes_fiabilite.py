@@ -166,7 +166,7 @@ def _projet_avec_photo(client) -> str:
 def test_generation_fond_bout_en_bout(client, monkeypatch, tmp_path):
     monkeypatch.setenv("GEMINI_API_KEY", "test")
 
-    def faux_generer(projet, affinage="", prompt_override=""):
+    def faux_generer(projet, affinage="", prompt_override="", utilisateur=None):
         return {"fichier": "x.png", "date": "2026-07-19T10:00:00",
                 "etiquette": "visuel IA", "modele": "test", "prompt": "p",
                 "controle": {"couverture": 0.9, "verdict": "ok"}, "essais": 1}
@@ -193,7 +193,7 @@ def test_generation_fond_409_si_deja_en_cours(client, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test")
     feu_vert = threading.Event()
 
-    def generer_bloquant(projet, affinage="", prompt_override=""):
+    def generer_bloquant(projet, affinage="", prompt_override="", utilisateur=None):
         feu_vert.wait(timeout=10)
         return {"fichier": "y.png", "date": "d", "etiquette": "visuel IA",
                 "modele": "test", "prompt": "p", "controle": None, "essais": 1}
@@ -214,7 +214,7 @@ def test_generation_fond_409_si_deja_en_cours(client, monkeypatch):
 def test_generation_fond_erreur_visible(client, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test")
 
-    def generer_rate(projet, affinage="", prompt_override=""):
+    def generer_rate(projet, affinage="", prompt_override="", utilisateur=None):
         raise insertion_ia.InsertionError("Quota Gemini atteint")
 
     monkeypatch.setattr(insertion_ia, "generer_image", generer_rate)

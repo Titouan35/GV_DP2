@@ -17,7 +17,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .. import config, regles
+from .. import config, regles, verrou
 from ..models import Projet
 
 router = APIRouter(prefix="/api/projets", tags=["projets"])
@@ -133,9 +133,18 @@ def creer_projet(projet: Projet, request: Request = None):
 
 
 @router.get("/{projet_id}")
-def lire_projet(projet_id: str):
+def lire_projet(projet_id: str, request: Request = None):
     projet = _charger(projet_id)
-    return {"projet": projet, "evaluation": regles.evaluer(projet)}
+    # présence d'un collègue sur ce projet (mode partagé) : informatif, le
+    # client décide d'avertir ou non
+    presence = verrou.lire(projet_id)
+    moi = _utilisateur(request)
+    return {"projet": projet, "evaluation": regles.evaluer(projet),
+            "verrou": ({"detenteur": presence.get("utilisateur"),
+                        "machine": presence.get("machine"),
+                        "depuis": presence.get("depuis"),
+                        "a_moi": presence.get("utilisateur") == moi}
+                       if presence else None)}
 
 
 @router.put("/{projet_id}")
@@ -210,6 +219,30 @@ def nettoyer_projet(projet_id: str):
             "mo_liberes": round(libere / 1_048_576, 1)}
 
 
+@router.post("/{projet_id}/verrou")
+def prendre_verrou(projet_id: str, request: Request = None, forcer: int = 0):
+    """Signale que ce poste ouvre le projet (mode partagé entre collègues).
+
+    Rafraîchi périodiquement par le client. `forcer=1` reprend la main sur un
+    collègue, à sa demande explicite.
+    """
+    if not _chemin(projet_id).exists():
+        # sans ce contrôle, un identifiant fantaisiste créait un .lock orphelin
+        raise HTTPException(status_code=404, detail="Projet introuvable.")
+    qui = _utilisateur(request)
+    etat = (verrou.forcer(projet_id, qui) if forcer
+            else verrou.poser(projet_id, qui))
+    return etat
+
+
+@router.delete("/{projet_id}/verrou")
+def liberer_verrou(projet_id: str, request: Request = None):
+    """Libère la présence en quittant le projet."""
+    _chemin(projet_id)
+    verrou.liberer(projet_id, _utilisateur(request))
+    return {"ok": True}
+
+
 @router.delete("/{projet_id}")
 def supprimer_projet(projet_id: str):
     chemin = _chemin(projet_id)
@@ -219,4 +252,5 @@ def supprimer_projet(projet_id: str):
     # le dossier .assets (uploads, exports, caches) part avec le projet :
     # avant, il restait orphelin sur le disque et dans la synchro OneDrive
     shutil.rmtree(config.PROJETS_DIR / f"{projet_id}.assets", ignore_errors=True)
+    (config.PROJETS_DIR / f"{projet_id}.lock").unlink(missing_ok=True)
     return {"ok": True}
