@@ -2,21 +2,29 @@
 title GV_DP
 cd /d "%~dp0"
 
-REM Environnement Python : local au poste en priorite (installe par
-REM "Installer GV_DP.bat", hors OneDrive), sinon le .venv du dossier (poste de
-REM developpement). Ne JAMAIS lancer avec --reload : le watcher scannerait
-REM tout le dossier OneDrive synchronise.
-set "PYEXE=%LOCALAPPDATA%\GV_DP\.venv\Scripts\python.exe"
-if not exist "%PYEXE%" set "PYEXE=.venv\Scripts\python.exe"
+REM Moteur Python, par ordre de preference :
+REM   1. runtime\ : Python PORTABLE embarque dans le dossier OneDrive partage
+REM      -> RIEN a installer, un double-clic suffit (poste d'un collegue)
+REM   2. l'installation locale posee par "Installer GV_DP.bat"
+REM   3. le .venv du repo (poste de developpement)
+REM Ne JAMAIS lancer avec --reload : le watcher scannerait tout OneDrive.
+set "PYEXE=%~dp0runtime\python.exe"
+if not exist "%PYEXE%" set "PYEXE=%LOCALAPPDATA%\GV_DP\.venv\Scripts\python.exe"
+if not exist "%PYEXE%" set "PYEXE=%~dp0.venv\Scripts\python.exe"
 
 if not exist "%PYEXE%" (
   echo.
-  echo   GV_DP n'est pas encore installe sur ce poste.
-  echo   Lance d'abord "Installer GV_DP.bat" ^(une seule fois^).
+  echo   Aucun moteur Python trouve.
+  echo   Si le dossier vient d'etre partage avec toi, attends la fin de la
+  echo   synchronisation OneDrive du sous-dossier "runtime" puis relance.
   echo.
   pause
   exit /b 1
 )
+
+REM Chaque poste execute le runtime partage : interdire l'ecriture des .pyc,
+REM sinon chaque lancement polluerait OneDrive de fichiers compiles locaux.
+set PYTHONDONTWRITEBYTECODE=1
 
 echo.
 echo   GV_DP - Generateur de Declaration Prealable ^(ombrieres PV^)

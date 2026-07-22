@@ -1,32 +1,28 @@
-# GV_DP — Installation sur ton poste
+# GV_DP — Démarrer sur ton poste
 
 Outil interne du bureau d'études : on saisit les informations d'un projet
 d'ombrière photovoltaïque de parking, il produit le dossier de Déclaration
 Préalable prêt à déposer (Cerfa, pièces DP1 à DP11, notice, assemblage PPTX/PDF).
 
-L'installation se fait **une seule fois**, en deux étapes, sans droits
-administrateur.
+**Il n'y a rien à installer.** Le moteur est inclus dans le dossier partagé.
 
 ---
 
-## 1. Installer Python (une fois, ~3 minutes)
+## Démarrer (2 minutes)
 
-1. Ouvre le **Microsoft Store**
-2. Cherche **« Python 3.13 »** (éditeur : Python Software Foundation)
-3. Clique sur **Installer**
+1. Ouvre le dossier OneDrive **`Innovation\OUTILS\DP\GV_DP`**
+2. La première fois : clic droit sur le dossier → **« Toujours conserver sur
+   cet appareil »**, puis laisse OneDrive finir de tout télécharger (~450 Mo,
+   pastille verte pleine ✓ sur le dossier). C'est le seul temps d'attente.
+3. Double-clique sur **`Lancer GV_DP.bat`**
 
-> Pourquoi le Store ? Le site python.org est bloqué par le réseau de
-> l'entreprise. La version du Store s'installe sans droits administrateur.
+Une fenêtre noire s'ouvre, puis ton navigateur sur `http://localhost:8420`.
+Astuce : clic droit sur `Lancer GV_DP.bat` → Envoyer vers → Bureau, pour avoir
+un raccourci.
 
-## 2. Installer GV_DP (une fois, ~5 minutes)
-
-Dans le dossier OneDrive `Innovation\OUTILS\DP\GV_DP`, double-clique sur
-
-**`Installer GV_DP.bat`**
-
-Le script vérifie Python, installe les composants nécessaires et crée un
-raccourci **GV_DP** sur ton Bureau. Laisse-le aller jusqu'au message
-« Installation terminée ».
+> En cas de souci avec ce mode (antivirus, lenteur), le plan B est une
+> installation locale classique : installe « Python 3.13 » depuis le Microsoft
+> Store, puis lance `Installer GV_DP.bat`. Tout le reste est identique.
 
 ---
 

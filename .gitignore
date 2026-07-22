@@ -1,5 +1,7 @@
 # Environnement Python (propre à chaque machine, cf. README)
 .venv/
+# Runtime portable partagé via OneDrive (binaire, ~400 Mo : jamais dans git)
+runtime/
 __pycache__/
 *.pyc
 .pytest_cache/
