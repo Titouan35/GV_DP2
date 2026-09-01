@@ -11,15 +11,20 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile
 from PIL import Image, ImageOps
 
-from .. import config, lecture_plan, regles
+from .. import config, lecture_fve, lecture_plan, regles
 from .routes_projets import _charger, _sauver
 
 router = APIRouter(prefix="/api/projets", tags=["documents"])
 
 # "photo_site" est parti avec le module Insertion (01/09/2026) : la photo
 # du parking actuel est désormais la pièce DP7, déjà demandée au BE.
-CODES_UPLOAD = {"dp2", "dp3", "dp6", "dp7", "dp8"}
-EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
+CODES_UPLOAD = {"dp2", "dp3", "dp6", "dp7", "dp8", "fve"}
+EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".pptx"}
+
+# La FVE (Fiche de Validation d'Emprises) n'est PAS une pièce du dossier : c'est
+# un document source du BE, dont on tire des valeurs et le photomontage. Elle
+# n'entre donc pas dans regles.PIECES_DP et ne compte pas dans la complétude.
+CODE_FVE = "fve"
 TAILLE_MAX = 40 * 1024 * 1024  # 40 Mo
 
 # en-têtes (magic bytes) attendus par extension : un fichier renommé .pdf qui
@@ -36,6 +41,36 @@ def signature_valide(ext: str, contenu: bytes) -> bool:
     if not contenu.startswith(attendu):
         return False
     return ext != ".webp" or contenu[8:12] == b"WEBP"
+
+
+def _proposer_images_fve(projet, projet_id: str, lecture: dict) -> list[str]:
+    """Dépose le photomontage de la FVE en DP6, et la photo du site en DP7.
+
+    Ne remplace JAMAIS une pièce déjà fournie : le bureau d'études reste
+    l'auteur du dossier, la FVE ne fait que proposer ce qui manque. Renvoie
+    les codes réellement déposés, pour que l'interface le dise.
+    """
+    correspondances = [("insertion", "dp6"), ("source", "dp7")]
+    deposees: list[str] = []
+    for role, code_piece in correspondances:
+        blob = (lecture.get("images") or {}).get(role)
+        if not blob or code_piece in (projet.documents or {}):
+            continue
+        # signature_valide compare l'en-tête du fichier à son extension :
+        # on s'en sert ici pour DEDUIRE l'extension du contenu.
+        ext = ".png" if signature_valide(".png", blob) else ".jpg"
+        chemin = config.assets_dir(projet_id) / "uploads" / f"{code_piece}{ext}"
+        chemin.parent.mkdir(parents=True, exist_ok=True)
+        chemin.write_bytes(blob)
+        projet.documents[code_piece] = {
+            "nom_fichier": f"FVE — {role}{ext}",
+            "fichier": str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/"),
+            "date": datetime.now().isoformat(timespec="seconds"),
+            "taille": len(blob),
+            "origine": "fve",      # traçabilité : valeur non fournie par le BE
+        }
+        deposees.append(code_piece)
+    return deposees
 
 
 async def lire_upload(fichier: UploadFile, taille_max: int) -> bytes:
@@ -121,15 +156,24 @@ async def uploader(projet_id: str, code: str, fichier: UploadFile):
 
     # plan de masse : lecture du cartouche -> pré-remplissage des champs vides
     champs_proposes: list[str] = []
+    fve_images: list[str] = []
     if code == "dp2":
         lecture = lecture_plan.lire_plan_masse(chemin)
         if lecture:
             champs_proposes = lecture_plan.appliquer_lecture(projet, lecture)
 
+    # FVE du BE : mêmes règles que le plan de masse (on PROPOSE, on n'impose
+    # pas), plus le photomontage d'insertion offert comme pièce DP6.
+    if code == CODE_FVE:
+        lecture = lecture_fve.lire_fve(chemin)
+        champs_proposes = lecture_fve.appliquer_lecture(projet, lecture)
+        fve_images = _proposer_images_fve(projet, projet_id, lecture)
+
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {"projet": projet, "evaluation": regles.evaluer(projet),
-            "plan_champs_proposes": champs_proposes}
+            "plan_champs_proposes": champs_proposes,
+            "fve_images": fve_images}
 
 
 @router.delete("/{projet_id}/documents/{code}")

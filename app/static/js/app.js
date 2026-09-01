@@ -930,6 +930,11 @@ function appliquerLecturePlan(lecture) {
 }
 
 // ---------------- étape 3 : pièces du BE (uploads, glisser-déposer) ----------------
+// La FVE n'est PAS une pièce du dossier : document source du BE, elle ne
+// compte pas dans la complétude (voir CODE_FVE dans routes_documents.py).
+const PIECE_FVE = { code: "fve", titre: "FVE · Fiche de validation d'emprises",
+                    note: "PowerPoint du BE : pré-remplit l'étape 3 et fournit la DP6" };
+
 const PIECES_UPLOAD = [
   { code: "dp2", titre: "DP2 · Plan de masse", note: "" },
   { code: "dp3", titre: "DP3 · Coupe du projet", note: "coupe cotée fournie par le BE" },
@@ -947,7 +952,14 @@ async function uploaderPieceBE(code, file) {
   if (!resp.ok) { toast((await resp.json()).detail || "Échec de l'envoi.", "err"); return; }
   const data = await resp.json();
   state.projet = data.projet; state.evaluation = data.evaluation;
-  if (data.plan_champs_proposes?.length) {
+  const deposees = data.fve_images || [];
+  if (code === "fve") {
+    const bits = [];
+    if (data.plan_champs_proposes?.length) bits.push(`${data.plan_champs_proposes.length} champs pré-remplis`);
+    if (deposees.length) bits.push(`${deposees.map((c) => c.toUpperCase()).join(" et ")} déposée${deposees.length > 1 ? "s" : ""}`);
+    toast(bits.length ? `FVE lue : ${bits.join(", ")}. À relire.` : "FVE enregistrée, aucune valeur reconnue.",
+          bits.length ? "ok" : "warn");
+  } else if (data.plan_champs_proposes?.length) {
     toast(`Plan lu : ${data.plan_champs_proposes.length} champs pré-remplis à l'étape 3.`, "ok");
   } else {
     toast("Pièce enregistrée.", "ok");
@@ -959,6 +971,14 @@ function renderEtapePieces(main) {
   main.innerHTML = `
     <div class="crumb">Étape 2 / 5</div>
     <h1>Pièces du bureau d'études</h1>
+
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:4px 0 8px">Fiche de validation d'emprises</h2>
+    <div class="sub" style="margin-bottom:10px">Le PowerPoint du BE. Il pré-remplit les
+      caractéristiques et fournit le photomontage d'insertion. Ce n'est pas une pièce du
+      dossier : rien n'est imposé, tout reste modifiable.</div>
+    <div class="home-list" id="slot-fve"></div>
+
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:24px 0 8px">Pièces du dossier</h2>
     <div class="home-list" id="slots"></div>
 
     <div class="actionsrow">
@@ -966,7 +986,7 @@ function renderEtapePieces(main) {
     </div>`;
   const box = $("#slots");
   $("#btn-suivant-pieces").addEventListener("click", () => allerEtape(3));
-  for (const piece of PIECES_UPLOAD) {
+  for (const piece of [PIECE_FVE, ...PIECES_UPLOAD]) {
     const doc = state.projet.documents?.[piece.code];
     const div = document.createElement("div");
     div.className = "card upload-slot dropzone-slot";
@@ -979,9 +999,9 @@ function renderEtapePieces(main) {
         ${doc ? `<a class="btn" href="/api/projets/${state.projet.id}/documents/${piece.code}" target="_blank">Voir</a>
                  <button class="btn" data-del="${piece.code}">Retirer</button>` : ""}
         <label class="btn navy" style="cursor:pointer">${doc ? "Remplacer" : "Téléverser"}
-          <input type="file" accept=".pdf,.png,.jpg,.jpeg" data-code="${piece.code}" hidden /></label>
+          <input type="file" accept=".pdf,.png,.jpg,.jpeg,.pptx" data-code="${piece.code}" hidden /></label>
       </div>`;
-    box.appendChild(div);
+    (piece.code === "fve" ? $("#slot-fve") : box).appendChild(div);
   }
   box.querySelectorAll("input[type=file]").forEach((inp) => {
     inp.addEventListener("change", () => { if (inp.files.length) uploaderPieceBE(inp.dataset.code, inp.files[0]); });
