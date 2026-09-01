@@ -96,6 +96,9 @@ def _getmap(couche: str, bbox: tuple, w_px: int, h_px: int) -> Image.Image:
         "BBOX": ",".join(f"{v:.2f}" for v in bbox),
         "WIDTH": int(w_px * facteur), "HEIGHT": int(h_px * facteur),
         "FORMAT": "image/png",
+        # Sans TRANSPARENT, certains serveurs remplissent le hors-couche.
+        # On le demande explicitement, et surtout on CONSERVE l'alpha ci-dessous.
+        "TRANSPARENT": "TRUE",
     }
     try:
         with httpx.Client(timeout=40.0) as client:
@@ -105,7 +108,16 @@ def _getmap(couche: str, bbox: tuple, w_px: int, h_px: int) -> Image.Image:
     if resp.status_code != 200 or "image" not in resp.headers.get("content-type", ""):
         raise GeoApiError("WMS Géoplateforme", f"HTTP {resp.status_code} ({couche})",
                           status=resp.status_code)
-    img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    # Le Parcellaire Express est une SURCOUCHE semi-transparente : son
+    # remplissage de parcelle est un orange à 20 % d'opacité (255,130,0,51),
+    # destiné à être composité sur un fond. `convert("RGB")` jetait l'alpha,
+    # ce qui transformait ce voile en APLAT ORANGE OPAQUE recouvrant toute la
+    # planche : le plan cadastral sortait illisible (constaté le 01/09/2026).
+    # On compose donc sur blanc. Sans effet sur les couches opaques (ortho,
+    # plan IGN), dont l'alpha vaut 255 partout.
+    img = Image.open(io.BytesIO(resp.content)).convert("RGBA")
+    fond_blanc = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    img = Image.alpha_composite(fond_blanc, img).convert("RGB")
     if facteur < 1.0:
         img = img.resize((w_px, h_px), Image.LANCZOS)
     return img

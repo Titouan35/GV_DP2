@@ -59,10 +59,8 @@ TEMPLATES: dict[str, str] = {
         "Au document d'urbanisme, le terrain relève du {{zonage}}. {{abf}} {{risques}} {{regime}}"
     ),
     "acces_reseaux": (
-        "Les accès et circulations du parking sont conservés. L'électricité produite est injectée "
-        "sur le réseau public de distribution (Enedis) via un point de livraison à proximité, les "
-        "câbles cheminant sous les ombrières puis en souterrain. La demande de raccordement sera "
-        "déposée en parallèle de l'instruction."
+        "Les accès et circulations du parking sont conservés. {{raccordement}} Les câbles "
+        "cheminent sous les ombrières puis en souterrain."
     ),
     "chantier": (
         "Les travaux (massifs de fondation, montage de la charpente, pose des modules, câblage) "
@@ -73,6 +71,33 @@ TEMPLATES: dict[str, str] = {
 }
 
 # Ordre des balises à surligner : les plus longues d'abord (évite les recouvrements).
+# Destination de l'électricité produite : phrase de la notice et libellé porté
+# au Cerfa. Le texte affirmait auparavant l'injection réseau pour tout projet.
+DESTINATIONS = {
+    "autoconsommation_totale": {
+        "libelle": "Autoconsommation totale",
+        "notice": ("L'électricité produite est intégralement autoconsommée par le site ; "
+                   "aucune injection sur le réseau public de distribution n'est prévue."),
+    },
+    "autoconsommation_surplus": {
+        "libelle": "Autoconsommation avec vente du surplus",
+        "notice": ("L'électricité produite est autoconsommée par le site, le surplus étant "
+                   "injecté sur le réseau public de distribution (Enedis) via un point de "
+                   "livraison à proximité. La demande de raccordement sera déposée en "
+                   "parallèle de l'instruction."),
+    },
+    "vente_totale": {
+        "libelle": "Vente totale de l'électricité produite",
+        "notice": ("L'électricité produite est intégralement injectée sur le réseau public de "
+                   "distribution (Enedis) via un point de livraison à proximité. La demande de "
+                   "raccordement sera déposée en parallèle de l'instruction."),
+    },
+}
+
+RACCORDEMENT_A_PRECISER = ("La destination de l'électricité produite (autoconsommation, vente) "
+                           "reste à préciser.")
+
+
 CLES_SURLIGNE = [
     "raison_sociale", "representant", "adresse", "parcelles", "zonage",
     "surface", "coupe", "dimensions", "trame", "longueur", "largeur",
@@ -200,6 +225,8 @@ def _valeurs(projet: dict) -> dict[str, str]:
         "nb_places": str(omb["nb_places"]) if omb.get("nb_places") else "—",
         "module_puissance": num(omb.get("module_puissance_wc"), " Wc"),
         "module_dimensions": (omb.get("module_dimensions") or "—"),
+        "raccordement": (DESTINATIONS.get(omb.get("destination_energie"), {})
+                         .get("notice") or RACCORDEMENT_A_PRECISER),
         "zonage": zonage,
         "abf": abf_txt,
         "risques": risques_txt,

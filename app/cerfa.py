@@ -173,10 +173,15 @@ def _champs_projet(projet: dict) -> tuple[dict, list[str]]:
         "À compléter à la main : puissance électrique nécessaire au "
         "raccordement (cadre 4.2.1) — l'outil ne la connaît pas."
     )
-    trous.append(
-        "À compléter à la main : destination principale de l'énergie produite "
-        "(vente totale, autoconsommation...) — l'outil ne la connaît pas."
-    )
+    from .notice import DESTINATIONS
+    destination = DESTINATIONS.get(omb.get("destination_energie"))
+    if destination:
+        champs["C2ZR1_destination"] = destination["libelle"][:70]
+    else:
+        trous.append(
+            "À compléter : destination principale de l'énergie produite "
+            "(cadre 4.2.1) — à choisir à l'étape 3."
+        )
 
     # stationnement inchangé avant / après travaux
     if omb.get("nb_places"):

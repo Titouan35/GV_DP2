@@ -143,3 +143,75 @@ def test_un_projet_ordinaire_reste_en_declaration_prealable():
     texte = section(projet(), "reglementaire")
     assert "relève de la déclaration préalable" in texte
     assert "R.421-9" in texte
+
+
+# --------------------------------------------- destination de l'électricité
+
+def test_en_autoconsommation_totale_la_notice_n_annonce_aucune_injection():
+    """Signalé par Florent le 01/09/2026 sur le projet Montréal-la-Cluse : la
+    notice affirmait l'injection réseau pour TOUS les projets, y compris ceux
+    en autoconsommation totale, où il n'y a précisément aucune injection."""
+    # Arrange
+    p = projet()
+    p["ombriere"]["destination_energie"] = "autoconsommation_totale"
+
+    # Act
+    texte = section(p, "acces_reseaux")
+
+    # Assert
+    assert "intégralement autoconsommée" in texte
+    assert "aucune injection" in texte
+    assert "est injectée sur le réseau" not in texte
+
+
+def test_en_autoconsommation_avec_surplus_l_injection_est_mentionnee():
+    p = projet()
+    p["ombriere"]["destination_energie"] = "autoconsommation_surplus"
+    texte = section(p, "acces_reseaux")
+    assert "surplus" in texte and "Enedis" in texte
+
+
+def test_en_vente_totale_l_injection_est_integrale():
+    p = projet()
+    p["ombriere"]["destination_energie"] = "vente_totale"
+    texte = section(p, "acces_reseaux")
+    assert "intégralement injectée" in texte
+
+
+def test_sans_destination_choisie_rien_n_est_affirme():
+    """Doctrine « brouillon avec trous signalés » : ne pas deviner."""
+    texte = section(projet(), "acces_reseaux")
+    assert "reste à préciser" in texte
+    assert "Enedis" not in texte
+
+
+def test_les_cles_de_l_interface_correspondent_a_celles_de_la_notice():
+    """Le sélecteur de l'étape 3 et DESTINATIONS doivent rester alignés :
+    une clé qui diverge produirait une notice muette, sans erreur visible."""
+    # Arrange
+    import re, pathlib
+    js = pathlib.Path("app/static/js/app.js").read_text(encoding="utf-8")
+    cles_js = set(re.findall(r'\{ cle: "(\w+)", libelle:', js))
+
+    # Assert
+    assert cles_js == set(notice.DESTINATIONS), cles_js ^ set(notice.DESTINATIONS)
+
+
+def test_la_destination_alimente_aussi_le_cerfa(tmp_path, monkeypatch):
+    """La même donnée remplit la case « destination principale de l'énergie
+    produite » du cadre 4.2.1, qui était laissée vide."""
+    # Arrange
+    from app import cerfa, config
+    from pypdf import PdfReader
+    monkeypatch.setattr(config, "PROJETS_DIR", tmp_path)
+    p = projet()
+    p["id"] = "destination-cerfa"
+    p["ombriere"]["destination_energie"] = "autoconsommation_totale"
+
+    # Act
+    chemin, _, avertissements = cerfa.preremplir(p)
+
+    # Assert
+    lus = PdfReader(str(chemin)).get_fields()
+    assert lus["C2ZR1_destination"].get("/V") == "Autoconsommation totale"
+    assert not any("destination" in a.lower() for a in avertissements)

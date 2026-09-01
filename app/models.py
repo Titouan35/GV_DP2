@@ -63,8 +63,13 @@ class Ombriere(BaseModel):
     type_module: Optional[str] = None            # legacy (remplacé par puissance + dimensions)
     puissance_kwc: Optional[float] = None
     nb_places: Optional[int] = None
-    # calibrage de l'outil de mesure sur le plan de masse (px/m)
-    echelle_plan_px_par_m: Optional[float] = None
+    # Destination de l'électricité produite. Détermine le texte de la section
+    # « Accès, réseaux et raccordement » de la notice, et remplit la case
+    # « destination principale de l'énergie produite » du Cerfa (cadre 4.2.1).
+    # Le texte de la notice affirmait l'injection réseau pour TOUS les projets,
+    # y compris en autoconsommation totale (signalé par Florent le 01/09/2026).
+    # Valeurs : autoconsommation_totale | autoconsommation_surplus | vente_totale
+    destination_energie: Optional[str] = None
 
 
 class Urbanisme(BaseModel):

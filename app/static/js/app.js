@@ -827,6 +827,15 @@ function renderTypeSelector() {
   }));
 }
 
+// Destination de l'électricité produite. Les clés DOIVENT rester alignées sur
+// DESTINATIONS dans app/notice.py : elles pilotent la phrase de la notice et la
+// case « destination de l'énergie » du Cerfa.
+const DESTINATIONS_ENERGIE = [
+  { cle: "autoconsommation_totale", libelle: "Autoconsommation totale" },
+  { cle: "autoconsommation_surplus", libelle: "Autoconsommation avec vente du surplus" },
+  { cle: "vente_totale", libelle: "Vente totale" },
+];
+
 // ---------------- étape 2 : caractéristiques ----------------
 // (la coupe du projet = pièce DP3 déposée par le BE, plus de coupe type)
 function renderEtapeCaracteristiques(main) {
@@ -856,10 +865,25 @@ function renderEtapeCaracteristiques(main) {
       ${champ("Nombre de places couvertes", "ombriere.nb_places", { type: "number", step: "1" })}
     </div>
 
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:22px 0 8px">Destination de l'électricité</h2>
+    <select class="input" id="omb-destination" style="max-width:420px">
+      <option value="">— à choisir —</option>
+      ${DESTINATIONS_ENERGIE.map((d) => `<option value="${esc(d.cle)}"
+        ${state.projet.ombriere?.destination_energie === d.cle ? "selected" : ""}>${esc(d.libelle)}</option>`).join("")}
+    </select>
+    ${state.projet.ombriere?.destination_energie ? "" :
+      `<div class="note" style="margin-top:8px">Tant qu'elle n'est pas choisie, la notice
+        et le Cerfa laisseront ce point à préciser plutôt que d'affirmer une injection réseau.</div>`}
+
     <div class="actionsrow">
       <button class="btn navy" id="btn-suivant">Continuer vers la notice</button>
     </div>`;
   renderTypeSelector();
+  $("#omb-destination")?.addEventListener("change", (e) => {
+    state.projet.ombriere = state.projet.ombriere || {};
+    state.projet.ombriere.destination_energie = e.target.value || null;
+    sauvegarderBientot();
+  });
   brancherChamps(main);
   marquerChampsProposes(main, proposes);
   $("#btn-plan-appliquer")?.addEventListener("click", () => appliquerLecturePlan(lecture));
@@ -905,163 +929,6 @@ function appliquerLecturePlan(lecture) {
   if (n) { sauvegarderBientot(); toast(`${n} champs appliqués depuis le plan.`, "ok"); }
 }
 
-// ---- outil de mesure sur le plan de masse (calibrage + tracé) ----
-const mesure = { mode: null, img: null, s: 1, pxPerM: null, seg: {}, pts: [], zoom: 1, pan: { x: 0, y: 0 }, drag: null };
-
-function renderMesure() {
-  const body = $("#mesure-body");
-  if (!body) return;
-  const dp2 = state.projet.documents?.dp2;
-  if (!dp2) {
-    body.innerHTML = `
-      <div class="dropzone" id="mesure-drop">
-        <input type="file" id="mesure-file" accept=".pdf,.png,.jpg,.jpeg" hidden />
-        <b>Importe le plan de masse (DP2)</b><span>pour mesurer dessus (déposer ou cliquer)</span>
-      </div>`;
-    const drop = $("#mesure-drop"), inp = $("#mesure-file");
-    drop.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => { if (inp.files.length) uploaderPlanMesure(inp.files[0]); });
-    ["dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
-    ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-    drop.addEventListener("drop", (e) => { const f = e.dataTransfer?.files?.[0]; if (f) uploaderPlanMesure(f); });
-    return;
-  }
-  mesure.pxPerM = state.projet.ombriere?.echelle_plan_px_par_m || null;
-  body.innerHTML = `
-    <div class="mesure-tools">
-      <button class="btn" data-mode="cal">Calibrer l'échelle</button>
-    </div>
-    <div class="mesure-status" id="mesure-status"></div>
-    <div class="mesure-canvas-wrap"><canvas id="mesure-canvas"></canvas></div>
-    <p class="sub" style="margin:8px 0 0">Molette = zoom · glisser = déplacer · 2 points d'une distance connue (une place = 2,50 m).</p>`;
-
-  const canvas = $("#mesure-canvas");
-  const img = new Image();
-  img.onload = () => {
-    const maxW = 760;
-    mesure.s = Math.min(1, maxW / img.naturalWidth);
-    canvas.width = Math.round(img.naturalWidth * mesure.s);
-    canvas.height = Math.round(img.naturalHeight * mesure.s);
-    mesure.img = img;
-    mesure.zoom = 1; mesure.pan = { x: 0, y: 0 };
-    dessinerMesure();
-    majStatutMesure();
-  };
-  img.src = `/api/projets/${state.projet.id}/documents/dp2/image?t=${Date.now()}`;
-
-  body.querySelectorAll("[data-mode]").forEach((b) => b.addEventListener("click", () => {
-    mesure.mode = b.dataset.mode; mesure.pts = [];
-    body.querySelectorAll("[data-mode]").forEach((x) => x.classList.toggle("primary", x === b));
-    majStatutMesure();
-  }));
-  // clic = point de mesure · glisser = déplacer · molette = zoom
-  canvas.addEventListener("mousedown", (e) => {
-    mesure.drag = { x: e.clientX, y: e.clientY, px: mesure.pan.x, py: mesure.pan.y, moved: false };
-  });
-  canvas.addEventListener("mousemove", (e) => {
-    if (!mesure.drag) return;
-    const dx = e.clientX - mesure.drag.x, dy = e.clientY - mesure.drag.y;
-    if (Math.abs(dx) + Math.abs(dy) > 4) mesure.drag.moved = true;
-    if (mesure.drag.moved) { mesure.pan.x = mesure.drag.px + dx; mesure.pan.y = mesure.drag.py + dy; dessinerMesure(); }
-  });
-  const finDrag = (e) => {
-    if (!mesure.drag) return;
-    const moved = mesure.drag.moved; mesure.drag = null;
-    if (!moved) clicMesure(e);  // clic simple = point de mesure
-  };
-  canvas.addEventListener("mouseup", finDrag);
-  canvas.addEventListener("mouseleave", () => { mesure.drag = null; });
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const r = canvas.getBoundingClientRect();
-    const cx = (e.clientX - r.left) * (canvas.width / r.width);
-    const cy = (e.clientY - r.top) * (canvas.height / r.height);
-    const nz = Math.max(1, Math.min(8, mesure.zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-    const ratio = nz / mesure.zoom;
-    mesure.pan.x = cx - (cx - mesure.pan.x) * ratio;
-    mesure.pan.y = cy - (cy - mesure.pan.y) * ratio;
-    mesure.zoom = nz;
-    if (mesure.zoom === 1) { mesure.pan.x = 0; mesure.pan.y = 0; }
-    dessinerMesure();
-  }, { passive: false });
-}
-
-async function uploaderPlanMesure(file) {
-  const fd = new FormData();
-  fd.append("fichier", file);
-  let resp;
-  try { resp = await fetch(`/api/projets/${state.projet.id}/documents/dp2`, { method: "POST", body: fd }); }
-  catch { toast("Serveur injoignable.", "err"); return; }
-  if (!resp.ok) { toast((await resp.json()).detail || "Échec.", "err"); return; }
-  const data = await resp.json();
-  state.projet = data.projet; state.evaluation = data.evaluation;
-  toast("Plan de masse importé.", "ok");
-  renderMesure();
-}
-
-function naturel(e) {
-  const canvas = $("#mesure-canvas");
-  const r = canvas.getBoundingClientRect();
-  const cx = (e.clientX - r.left) * (canvas.width / r.width);
-  const cy = (e.clientY - r.top) * (canvas.height / r.height);
-  const k = mesure.s * mesure.zoom;
-  return { x: (cx - mesure.pan.x) / k, y: (cy - mesure.pan.y) / k };
-}
-
-function distN(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
-
-function clicMesure(e) {
-  if (!mesure.mode) { toast("Clique d'abord « Calibrer l'échelle ».", ""); return; }
-  mesure.pts.push(naturel(e));
-  if (mesure.pts.length === 2) {
-    const [a, b] = mesure.pts;
-    const rep = window.prompt("Distance réelle entre les 2 points, en mètres :", "2.5");
-    const m = parseFloat((rep || "").replace(",", "."));
-    if (m > 0) {
-      mesure.pxPerM = distN(a, b) / m;
-      state.projet.ombriere.echelle_plan_px_par_m = mesure.pxPerM;
-      mesure.seg.cal = [a, b];
-      sauvegarderBientot();
-    }
-    mesure.pts = [];
-    dessinerMesure(); majStatutMesure();
-  } else {
-    dessinerMesure();
-  }
-}
-
-function dessinerMesure() {
-  const canvas = $("#mesure-canvas");
-  if (!canvas || !mesure.img) return;
-  const ctx = canvas.getContext("2d");
-  const k = mesure.s * mesure.zoom;
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(mesure.img, mesure.pan.x, mesure.pan.y,
-                mesure.img.naturalWidth * k, mesure.img.naturalHeight * k);
-  const sx = (p) => mesure.pan.x + p.x * k, sy = (p) => mesure.pan.y + p.y * k;
-  const seg = (pts, color) => {
-    if (!pts) return;
-    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(sx(pts[0]), sy(pts[0])); ctx.lineTo(sx(pts[1]), sy(pts[1])); ctx.stroke();
-    for (const p of pts) { ctx.beginPath(); ctx.arc(sx(p), sy(p), 5, 0, 7); ctx.fill(); }
-  };
-  seg(mesure.seg.cal, "#E53935");
-  if (mesure.pts.length === 1) {
-    const p = mesure.pts[0];
-    ctx.fillStyle = "#002455";
-    ctx.beginPath(); ctx.arc(sx(p), sy(p), 5, 0, 7); ctx.fill();
-  }
-}
-
-function majStatutMesure() {
-  const el = $("#mesure-status");
-  if (!el) return;
-  const bits = [];
-  bits.push(mesure.pxPerM ? `Échelle : <b>${mesure.pxPerM.toFixed(1)} px/m</b>` : `<span class="warn-txt">Échelle non calibrée</span>`);
-  if (mesure.mode === "cal") bits.push(`<span class="hint">cliquez 2 points d'une distance connue</span>`);
-  el.innerHTML = bits.join(" &nbsp;·&nbsp; ");
-}
-
 // ---------------- étape 3 : pièces du BE (uploads, glisser-déposer) ----------------
 const PIECES_UPLOAD = [
   { code: "dp2", titre: "DP2 · Plan de masse", note: "" },
@@ -1094,17 +961,11 @@ function renderEtapePieces(main) {
     <h1>Pièces du bureau d'études</h1>
     <div class="home-list" id="slots"></div>
 
-    <details class="foldable" id="fold-mesure" style="margin-top:18px">
-      <summary>Calibrer l'échelle sur le plan de masse</summary>
-      <div class="bd" id="mesure-body"></div>
-    </details>
-
     <div class="actionsrow">
       <button class="btn navy" id="btn-suivant-pieces">Continuer vers les caractéristiques</button>
     </div>`;
   const box = $("#slots");
   $("#btn-suivant-pieces").addEventListener("click", () => allerEtape(3));
-  renderMesure();
   for (const piece of PIECES_UPLOAD) {
     const doc = state.projet.documents?.[piece.code];
     const div = document.createElement("div");
