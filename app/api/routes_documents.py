@@ -16,7 +16,9 @@ from .routes_projets import _charger, _sauver
 
 router = APIRouter(prefix="/api/projets", tags=["documents"])
 
-CODES_UPLOAD = {"dp2", "dp3", "dp6", "dp7", "dp8", "photo_site"}
+# "photo_site" est parti avec le module Insertion (01/09/2026) : la photo
+# du parking actuel est désormais la pièce DP7, déjà demandée au BE.
+CODES_UPLOAD = {"dp2", "dp3", "dp6", "dp7", "dp8"}
 EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
 TAILLE_MAX = 40 * 1024 * 1024  # 40 Mo
 
@@ -82,7 +84,7 @@ def _verifier_code(code: str):
 
 
 def _chemin_confine(relatif: str) -> Path:
-    """Chemin résolu, confiné à PROJETS/ (même garde que routes_insertion)."""
+    """Chemin résolu, confiné à PROJETS/ (garde contre la traversée de dossier)."""
     cible = (config.PROJETS_DIR / relatif).resolve()
     if config.PROJETS_DIR.resolve() not in cible.parents:
         raise HTTPException(status_code=404, detail="Fichier introuvable.")

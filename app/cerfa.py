@@ -11,6 +11,7 @@ avant dépôt (aucune case à risque n'est cochée automatiquement).
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from pypdf import PdfReader, PdfWriter
@@ -35,13 +36,52 @@ def _champs_demandeur(projet: dict) -> dict:
         champs["D2S_siret"] = (mo.get("siret") or "").replace(" ", "")
         champs["D2J_type"] = mo.get("type") or ""
         champs["D2N_nom"] = mo.get("representant") or ""
-    # adresse du demandeur : non structurée chez nous → tout dans « voie »
-    champs["D3V_voie"] = mo.get("adresse") or ""
+    champs.update(_adresse_demandeur(mo.get("adresse")))
     champs["D3T_telephone"] = mo.get("telephone") or ""
     if mo.get("email"):
         champs["D5GE1_email"] = mo["email"]
-        champs["D5A_acceptation"] = COCHE  # accepte l'échange par voie électronique
+        # D5A_acceptation (accepter les actes par voie électronique) N'EST PLUS
+        # cochée : c'est un consentement qui engage juridiquement le déclarant.
+        # Le module promettait dans son en-tête de ne cocher aucune case à
+        # risque, et cochait celle-là. Elle reste à la main du déclarant.
     return champs
+
+
+# Le formulaire découpe l'adresse du demandeur en cases distinctes, avec des
+# longueurs contraintes : numéro (10), voie (40), code postal (5), localité (60).
+# L'outil, lui, ne stocke qu'un texte libre. Tout déverser dans « Voie » la
+# tronquait à 40 caractères (« Immeuble Le Danica, 21 avenue Georges Pompid »)
+# et laissait le code postal et la localité vides, alors que l'information
+# était là. Défaut relevé par la relecture du 01/09/2026.
+_RE_ADRESSE = re.compile(
+    r"^\s*(?P<numero>\d{1,4}\s*(?:bis|ter|quater)?)?\s*"
+    r"(?P<voie>.*?)\s*,?\s*"
+    r"(?P<cp>\d{5})\s+(?P<localite>[^,]+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _adresse_demandeur(adresse: str | None) -> dict:
+    """Découpe au mieux l'adresse libre du demandeur dans les cases du Cerfa.
+
+    Si le découpage échoue, on ne perd rien : le texte part dans « Voie »,
+    tronqué à la longueur du champ, ce que faisait déjà l'ancien code.
+    """
+    adresse = (adresse or "").strip()
+    if not adresse:
+        return {}
+    m = _RE_ADRESSE.match(adresse)
+    if not m:
+        return {"D3V_voie": adresse[:40]}
+    champs = {
+        "D3V_voie": (m.group("voie") or "")[:40],
+        "D3C_code": m.group("cp"),
+        "D3L_localite": (m.group("localite") or "")[:60],
+    }
+    numero = (m.group("numero") or "").strip()
+    if numero:
+        champs["D3N_numero"] = numero[:10]
+    return {k: v for k, v in champs.items() if v}
 
 
 def _champs_terrain(projet: dict) -> dict:
@@ -62,44 +102,87 @@ def _champs_terrain(projet: dict) -> dict:
     return champs
 
 
-def _champs_projet(projet: dict) -> dict:
+def _champs_projet(projet: dict) -> tuple[dict, list[str]]:
+    """Cadre « projet » du formulaire. Renvoie (champs, trous signalés).
+
+    Cartographie relevée sur le gabarit officiel (page 7), qui donne le sens
+    exact de chaque case et corrige une inversion présente jusqu'au 01/09/2026 :
+
+        C2ZP1_crete        « Indiquez sa puissance crête : ___ kW »
+        C2ZR1_destination  « et la destination principale de l'énergie »
+        C2ZE1_puissance    « la puissance électrique nécessaire à votre projet »
+
+    Le code écrivait la hauteur hors tout dans la puissance crête, et la
+    puissance crête dans la puissance de raccordement.
+    """
     omb = projet.get("ombriere") or {}
+    trous: list[str] = []
     if not omb.get("famille") and not omb.get("puissance_kwc"):
-        return {}
-    p = parametres_effectifs(omb)
-    # les dimensions ne sont affirmées que si elles ont été SAISIES : les
-    # défauts fabriqués (4 travées x 5 m = 20 m) n'ont rien à faire dans un
-    # formulaire officiel (« aucune donnée inventée », plan §13)
-    dims = (f"{p['longueur_m']:g} m x {p['profondeur_m']:g} m, ".replace(".", ",")
-            if p["saisis"]["longueur"] else
-            f"{p['profondeur_m']:g} m de profondeur, ".replace(".", ","))
-    desc = (
-        f"Installation d'ombrières photovoltaïques sur le parking existant : "
-        f"structure {p['famille']} en acier galvanisé, "
-        f"{dims}"
-        f"hauteur hors tout {p['h_haut_m']:.2f} m".replace(".", ",")
-        + f", pente {p['pente_deg']:g} degrés".replace(".", ",")
-        + ", modules photovoltaïques full black"
-    )
+        return {}, ["À compléter : aucune caractéristique d'ombrière n'est saisie."]
+
+    desc = "Installation d'ombrières photovoltaïques sur le parking existant"
+
+    # Les cotes du catalogue ne sont affirmées QUE si un type a été choisi.
+    # Sans famille, catalogue.py retombe silencieusement sur START PLAINE Bas :
+    # ses cotes n'ont rien à faire dans un formulaire officiel.
+    if omb.get("famille"):
+        p = parametres_effectifs(omb)
+        dims = (f"{p['longueur_m']:g} m x {p['profondeur_m']:g} m, ".replace(".", ",")
+                if p["saisis"]["longueur"] else
+                f"{p['profondeur_m']:g} m de profondeur, ".replace(".", ","))
+        desc += (
+            f" : structure {p['famille']} en acier galvanisé, "
+            f"{dims}"
+            f"hauteur hors tout {p['h_haut_m']:.2f} m".replace(".", ",")
+            + f", pente {p['pente_deg']:g} degrés".replace(".", ",")
+        )
+    else:
+        trous.append(
+            "À compléter : aucun type d'ombrière n'est choisi (étape 3). "
+            "Les dimensions et la hauteur ne sont donc pas portées au formulaire."
+        )
+
+    desc += ", modules photovoltaïques full black"
     if omb.get("module_puissance_wc"):
         desc += f" de {omb['module_puissance_wc']:g} Wc".replace(".", ",")
     if omb.get("puissance_kwc"):
         desc += f", puissance {omb['puissance_kwc']:g} kWc".replace(".", ",")
     if omb.get("nb_places"):
         desc += f", {omb['nb_places']} places couvertes"
-    desc += ". Conforme à l'obligation de la loi APER (art. L.171-4 CCH)."
+    desc += "."
+    # La conformité à la loi APER est une CONCLUSION JURIDIQUE, pas un fait
+    # mesuré. Elle était affirmée en dur sans le moindre test. Elle appartient
+    # au déclarant, qui signe : l'outil ne la met plus dans sa bouche.
+
     champs = {
         "C2ZD1_description": desc,
         "C2ZA1_nouvelle": COCHE,  # une ombrière est une construction nouvelle
     }
+
+    # puissance crête, en kW, dans la case qui la demande. Virgule décimale :
+    # le formulaire est français, et le reste du descriptif l'emploie déjà.
     if omb.get("puissance_kwc"):
-        champs["C2ZE1_puissance"] = f"{omb['puissance_kwc']:g}"
-    champs["C2ZP1_crete"] = f"{p['h_haut_m']:.2f} m".replace(".", ",")
+        champs["C2ZP1_crete"] = f"{omb['puissance_kwc']:g}".replace(".", ",")
+    else:
+        trous.append("À compléter : la puissance crête (kW) n'est pas renseignée.")
+
+    # La puissance électrique nécessaire au raccordement et la destination de
+    # l'énergie produite ne sont pas des données de l'outil. On les laisse
+    # vides plutôt que d'y recopier une valeur voisine.
+    trous.append(
+        "À compléter à la main : puissance électrique nécessaire au "
+        "raccordement (cadre 4.2.1) — l'outil ne la connaît pas."
+    )
+    trous.append(
+        "À compléter à la main : destination principale de l'énergie produite "
+        "(vente totale, autoconsommation...) — l'outil ne la connaît pas."
+    )
+
     # stationnement inchangé avant / après travaux
     if omb.get("nb_places"):
         champs["S1A_stationnementavant"] = str(omb["nb_places"])
         champs["S1M_stationnementapres"] = str(omb["nb_places"])
-    return champs
+    return champs, trous
 
 
 def _champs_engagement(projet: dict) -> dict:
@@ -107,7 +190,10 @@ def _champs_engagement(projet: dict) -> dict:
     loc = projet.get("localisation") or {}
     return {
         "E1L_lieu": loc.get("commune") or "",
-        "E1D_date": date.today().strftime("%d/%m/%Y"),
+        # champ « peigne » de 8 cases (MaxLen=8, drapeau comb) : les séparateurs
+        # sont déjà imprimés. « 01/09/2026 » y entrait sur 10 caractères, ce qui
+        # doublait les séparateurs et tronquait l'année.
+        "E1D_date": date.today().strftime("%d%m%Y"),
     }
 
 
@@ -142,10 +228,13 @@ def preremplir(projet: dict):
             "libre — la notice les mentionne toutes."
         )
 
+    champs_projet, trous = _champs_projet(projet)
+    avertissements.extend(trous)
+
     champs = {
         **_champs_demandeur(projet),
         **_champs_terrain(projet),
-        **_champs_projet(projet),
+        **champs_projet,
         **_champs_engagement(projet),
     }
     champs = {k: v for k, v in champs.items() if v}

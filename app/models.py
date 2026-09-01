@@ -80,40 +80,10 @@ class Notice(BaseModel):
     sections: dict[str, str] = Field(default_factory=dict)  # 7 sections
     genere_par_ia: bool = False
     valide_humain: bool = False
-
-
-class Insertion(BaseModel):
-    """Insertion IA — génération directe via l'API Gemini (flux 17/07/2026).
-
-    Les insertions sélectionnées (`dans_dossier`) entrent au dossier DP en
-    planches « visuel d'illustration » ; le photomontage DP6 du BE, s'il est
-    fourni, garde la priorité sur la planche avant/après.
-    """
-    photo: Optional[str] = None            # photo du site active (base de génération)
-    photos: list[str] = Field(default_factory=list)  # photos du site déposées (multi)
-    consignes: str = ""                    # consignes libres pour le prompt
-    affinage: str = ""                     # dernières corrections demandées
-    # (repère d'échelle textuel retiré le 19/07/2026 : l'échelle vient de la
-    #  perspective calibrée — longueur du bord tracé + hauteur de prise de vue.
-    #  Les anciens projets portant ces clés se chargent sans erreur.)
-    prompt: Optional[str] = None           # dernier prompt envoyé (traçabilité)
-    images: list[dict] = Field(default_factory=list)  # images générées {fichier, date, etiquette, modele}
-    retenue: Optional[str] = None          # image retenue (fiche d'emprise)
-    dans_dossier: list[str] = Field(default_factory=list)  # images incluses au dossier DP
-    nb_images_generees: int = 0            # compteur de dépense locale (projet)
-    # poses « un geste », PLUSIEURS ombrières par photo (18/07/2026).
-    # Chaque ombrière = un bord avant tracé d'un cliqué-glissé (coordonnées 0-1,
-    # gauche -> droite du bord bas), son propre type, et ses cotes réelles
-    # (pré-remplies depuis le plan de masse, modifiables) :
-    # {photo: {"ombrieres": [{"bord_avant": [[x,y], [x,y]],
-    #                         "famille": "START PLAINE Bas",
-    #                         "longueur_m": 20.0, "profondeur_m": 5.0}, ...]}}
-    # Les hauteurs et la pente viennent du type (catalogue).
-    poses: dict[str, Any] = Field(default_factory=dict)
-    # legacy (flux scaffold multi-lignes / vue aérienne, remplacé) — conservés
-    # pour ne pas casser les projets déjà enregistrés :
-    guides: dict[str, Any] = Field(default_factory=dict)
-    aerienne: dict[str, Any] = Field(default_factory=dict)
+    # Valeurs du projet au moment de la rédaction (app/notice.py:CLES_ANCRAGE).
+    # Permet de dire si le texte a divergé des données, sans le deviner par
+    # recherche de chaîne. Vide pour les notices écrites avant le 01/09/2026.
+    valeurs: dict[str, str] = Field(default_factory=dict)
 
 
 class Projet(BaseModel):
@@ -129,7 +99,6 @@ class Projet(BaseModel):
     ombriere: Ombriere = Field(default_factory=Ombriere)
     urbanisme: Urbanisme = Field(default_factory=Urbanisme)
     notice: Notice = Field(default_factory=Notice)
-    insertion: Insertion = Field(default_factory=Insertion)
     # Uploads BE : {code_piece: {nom_fichier, chemin, date}}
     documents: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)

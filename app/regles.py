@@ -7,7 +7,7 @@ Références (PLAN_OUTIL_DP.md §2 et §4) :
 """
 from __future__ import annotations
 
-from . import config
+from . import coherence, config
 from .models import Projet
 
 REGIME_DP = "DP"
@@ -34,6 +34,17 @@ PIECES_DP = [
 # 13/07/2026 sur entreprendre.service-public.gouv.fr, fiche R2028).
 CERFA_DP = "16702*03"
 CERFA_PC = "16700 (à vérifier)"
+
+# Numéros des étapes du parcours, source unique de vérité.
+# Le passage de 6 à 5 étapes (retrait du module Insertion, 01/09/2026) avait
+# laissé « étape 6 » et « étape 7 » dans des messages affichés à l'utilisateur,
+# et trois fichiers donnaient trois numéros différents pour la notice. Ces
+# constantes doivent rester alignées sur STEPS dans app/static/js/app.js.
+ETAPE_LOCALISATION = 1
+ETAPE_PIECES = 2
+ETAPE_CARACTERISTIQUES = 3
+ETAPE_NOTICE_CERFA = 4
+ETAPE_EXPORT = 5
 
 
 def determiner_regime(puissance_kwc: float | None, secteur_abf: bool | None) -> dict:
@@ -79,10 +90,10 @@ def _statut_piece(piece: dict, projet: Projet) -> dict:
                 else:
                     statut, detail = "a_completer", "brouillon à relire et valider"
             else:
-                statut, detail = "a_generer", "brouillon à générer (étape 6)"
+                statut, detail = "a_generer", f"brouillon à générer (étape {ETAPE_NOTICE_CERFA})"
         else:  # cerfa
             statut = "a_generer"
-            detail = "à pré-remplir (étape 7)"
+            detail = f"à pré-remplir (étape {ETAPE_NOTICE_CERFA})"
         return {**piece, "statut": statut, "detail": detail}
 
     # mixte (DP2) et be : pièce attendue du bureau d'études
@@ -97,8 +108,18 @@ def completude(projet: Projet) -> dict:
 
 
 def evaluer(projet: Projet) -> dict:
-    """Évaluation réglementaire complète d'un projet (régime + checklist)."""
+    """Évaluation complète : régime, checklist des pièces, cohérence.
+
+    Les anomalies de cohérence (app/coherence.py) accompagnent la checklist
+    depuis le 01/09/2026 : une pièce peut être « prête » alors que la donnée
+    qu'elle porte est fausse. Compter les pièces ne suffit pas à dire qu'un
+    dossier est bon.
+    """
     regime = determiner_regime(
         projet.ombriere.puissance_kwc, projet.urbanisme.secteur_abf
     )
-    return {"regime": regime, "completude": completude(projet)}
+    return {
+        "regime": regime,
+        "completude": completude(projet),
+        "coherence": coherence.controler(projet.model_dump()),
+    }

@@ -1,4 +1,4 @@
-"""Notice, Cerfa, assemblage du dossier et statut du module Insertion IA."""
+"""Notice, Cerfa et assemblage du dossier."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import config, insertion_ia, notice, regles
+from .. import coherence, config, notice, regles
 from ..assemblage import generer_dossier
 from ..cerfa import NUMERO_CERFA, preremplir
 from ..export_pdf import exporter_pdf
@@ -24,6 +24,9 @@ def generer_notice(projet_id: str, force: int = 0):
         if force or not (projet.notice.sections.get(cle) or "").strip():
             projet.notice.sections[cle] = texte
     projet.notice.genere_par_ia = False  # gabarit déterministe (pas de LLM)
+    # empreinte des valeurs portées par le texte : c'est elle qui permettra de
+    # dire plus tard si la notice a divergé des données du projet
+    projet.notice.valeurs = notice.valeurs_ancrage(data)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {
@@ -83,6 +86,16 @@ def assembler_dossier(projet_id: str, depot: int = 0):
     on assemble et on signale les manques en avertissements."""
     projet = _charger(projet_id)
     if depot:
+        # Deux refus distincts. L'incohérence passe en premier : un dossier
+        # complet dont les données se contredisent est plus dangereux qu'un
+        # dossier visiblement incomplet, parce que rien n'alerte le déposant.
+        incoherences = coherence.bloquantes(projet.model_dump())
+        if incoherences:
+            raise HTTPException(
+                status_code=409,
+                detail="Dossier incohérent pour un dépôt : "
+                       + " ; ".join(a["message"] for a in incoherences),
+            )
         manquantes = [
             f"{p['titre']} ({p['detail']})"
             for p in regles.completude(projet)["pieces"] if p["statut"] != "prete"
@@ -130,9 +143,3 @@ def telecharger_dossier_pdf(projet_id: str):
     if not chemin.exists():
         raise HTTPException(status_code=404, detail="PDF non généré.")
     return FileResponse(chemin, filename=chemin.name, media_type="application/pdf")
-
-
-@router.get("/insertion/statut")
-def statut_insertion():
-    """Descriptif générique du module Insertion IA (sans projet)."""
-    return insertion_ia.apercu()

@@ -38,6 +38,13 @@ def _env_candidates():
         yield ancetre / "CLAUDE" / ".env"
 
 
+# Variables qu'un fichier .env n'a PAS le droit de définir. Le .env du repo vit
+# dans le dossier OneDrive partagé avec le bureau d'études : n'importe qui
+# pouvant y déposer un fichier pourrait désarmer l'authentification à distance.
+# Ces variables doivent venir de l'environnement réel du serveur.
+CLES_INTERDITES_EN_ENV = frozenset({"GVDP_AUTH_DELEGUEE", "GVDP_COMPTES"})
+
+
 def _charger_env() -> Path | None:
     """Charge le premier .env trouvé dans os.environ (sans écraser l'existant)."""
     for chemin in _env_candidates():
@@ -57,6 +64,8 @@ def _charger_env() -> Path | None:
             cle, _, val = ligne.partition("=")
             cle = cle.strip()
             val = val.strip().strip('"').strip("'")
+            if cle in CLES_INTERDITES_EN_ENV:
+                continue          # jamais depuis un fichier, voir ci-dessus
             if cle and cle not in os.environ:  # l'env système garde la priorité
                 os.environ[cle] = val
         return chemin
@@ -109,11 +118,6 @@ DP_DIR = REPO_ROOT.parent                     # Innovation/OUTILS/DP
 _COUPES_EXTERNE = DP_DIR / "COUPES"
 _COUPES_BUNDLE = REPO_ROOT / "app" / "gabarits" / "coupes"
 COUPES_DIR = _COUPES_EXTERNE if _COUPES_EXTERNE.exists() else _COUPES_BUNDLE
-
-# Photos de référence d'ombrières (structure/perspective) envoyées à Gemini
-# comme cible de réalisme dans le module Insertion. Remplaçables par de vraies
-# photos d'installations GV (mêmes noms de fichiers).
-REFERENCES_DIR = REPO_ROOT / "app" / "gabarits" / "references"
 
 APP_NAME = "GV_DP"
 APP_TITLE = "Déclaration Préalable · Ombrières"

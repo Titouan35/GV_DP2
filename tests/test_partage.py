@@ -124,28 +124,3 @@ def test_lock_ne_pollue_pas_la_liste_des_projets(client):
     client.post(f"/api/projets/{pid}/verrou")
     projets = client.get("/api/projets").json()["projets"]
     assert len(projets) == 1 and projets[0]["id"] == pid
-
-
-# ------------------------------------------------------------------ dépense
-
-def test_compteur_rattrape_les_pertes_via_le_journal(client, monkeypatch):
-    """Plusieurs postes incrémentent le même fichier : un incrément peut se
-    perdre. Le journal étant en ajout seul, il fait autorité."""
-    from app import insertion_ia
-
-    config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
-    (config.PROJETS_DIR / "_compteur_ia.json").write_text(
-        json.dumps({"images": 3}), encoding="utf-8")
-    for i in range(5):
-        insertion_ia.journaliser_generation({"date": f"d{i}", "utilisateur": "marc"})
-    assert insertion_ia.compteur_global() == 5        # 5 lignes > compteur 3
-
-
-def test_journal_trace_l_auteur(client, monkeypatch):
-    from app import insertion_ia
-
-    insertion_ia.journaliser_generation({"date": "x", "utilisateur": "sophie",
-                                         "projet": "p", "cout_eur": 0.13})
-    ligne = json.loads((config.PROJETS_DIR / "_journal_ia.jsonl")
-                       .read_text(encoding="utf-8").splitlines()[-1])
-    assert ligne["utilisateur"] == "sophie" and ligne["cout_eur"] == 0.13
