@@ -127,7 +127,12 @@ def test_cerfa_remplit_le_socle_des_champs_attendus(projets_temporaires):
     # Assert
     assert CHAMPS_SOCLE.issubset(set(champs)), CHAMPS_SOCLE - set(champs)
     assert champs == sorted(champs)
-    assert avertissements == []      # 1 seule parcelle : rien à signaler
+    # Doctrine « brouillon avec trous signalés » (01/09/2026) : le Cerfa signale
+    # toujours ce qu'il laisse volontairement vide (puissance de raccordement,
+    # destination de l'énergie). On vérifie donc l'absence d'avertissement de
+    # PARCELLES, pas l'absence totale d'avertissement.
+    assert not [a for a in avertissements if "parcelle" in a.lower()]
+    assert all(a.startswith("À compléter") for a in avertissements), avertissements
 
 
 def test_cerfa_relit_les_valeurs_saisies(projets_temporaires):
@@ -274,28 +279,24 @@ def test_cerfa_sans_famille_dombriere_ne_plante_pas(projets_temporaires):
     # Assert
     assert chemin.exists()
     assert "C2ZD1_description" in champs
-    assert avertissements == []
+    # Doctrine « brouillon avec trous signalés » (01/09/2026) : le Cerfa signale
+    # toujours ce qu'il laisse volontairement vide (puissance de raccordement,
+    # destination de l'énergie). On vérifie donc l'absence d'avertissement de
+    # PARCELLES, pas l'absence totale d'avertissement.
+    assert not [a for a in avertissements if "parcelle" in a.lower()]
+    assert all(a.startswith("À compléter") for a in avertissements), avertissements
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="DÉFAUT CONNU (catalogue.py:81) : sans famille saisie, "
-           "CATALOGUE.get(famille, CATALOGUE['START PLAINE Bas']) retombe "
-           "silencieusement sur le type Mono Bas, et le Cerfa affirme alors "
-           "ses cotes (5 m de profondeur, 3,50 m hors tout) alors que RIEN "
-           "n'a été saisi. La doctrine retenue est « brouillon avec trous "
-           "signalés » : l'absence de type doit produire un trou et un "
-           "avertissement, pas une cote de catalogue. Ce comportement devra "
-           "donc changer, et ce test passera au vert quand ce sera fait.",
-)
-def test_cerfa_sans_famille_ne_devrait_pas_affirmer_de_cotes_catalogue(
+def test_cerfa_sans_famille_n_affirme_pas_de_cotes_catalogue(
     projets_temporaires,
 ):
-    """Documente le repli silencieux du catalogue SANS le bénir.
+    """Défaut corrigé le 01/09/2026.
 
-    On écrit ici le comportement VOULU, pas le comportement actuel : le
-    marquer xfail laisse la trace du défaut dans la suite sans le verrouiller
-    par un assert, ce qui reviendrait à interdire la correction.
+    Ce test était marqué xfail : sans famille saisie, catalogue.py retombait
+    silencieusement sur START PLAINE Bas et le Cerfa affirmait ses cotes (5 m
+    de profondeur, 3,50 m hors tout) alors que RIEN n'avait été saisi.
+    Le descriptif ne porte désormais les cotes que si un type a été choisi, et
+    l'absence de type produit un avertissement.
     """
     # Arrange : aucune famille, aucune cote, seulement une puissance
     projet = {**PROJET, "ombriere": {"puissance_kwc": 500}}

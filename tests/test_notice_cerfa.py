@@ -63,14 +63,25 @@ def test_cerfa_prerempli(tmp_path, monkeypatch):
     chemin, champs, avertissements = preremplir(PROJET)
     assert chemin.exists()
     assert len(champs) >= 12
-    assert avertissements == []   # 1 parcelle : rien à signaler
+    # Doctrine « brouillon avec trous signalés » (01/09/2026) : le Cerfa signale
+    # toujours ce qu'il laisse volontairement vide (puissance de raccordement,
+    # destination de l'énergie). On vérifie donc l'absence d'avertissement de
+    # PARCELLES, pas l'absence totale d'avertissement.
+    assert not [a for a in avertissements if "parcelle" in a.lower()]
+    assert all(a.startswith("À compléter") for a in avertissements), avertissements
 
     lus = PdfReader(chemin).get_fields()
     assert lus["D2D_denomination"].get("/V") == "Greenvolt Next France"
     assert lus["T2S_section"].get("/V") == "30"
     assert lus["T2N_numero"].get("/V") == "0464"
     assert lus["T2T_superficie"].get("/V") == "30201"
-    assert lus["C2ZE1_puissance"].get("/V") == "500"
+    # Corrigé le 01/09/2026 : cette assertion VERROUILLAIT une inversion. Sur le
+    # gabarit officiel, C2ZP1_crete est « Indiquez sa puissance crête : ___ kW »
+    # et C2ZE1_puissance « la puissance électrique nécessaire à votre projet ».
+    # La puissance crête allait dans la seconde, et la hauteur hors tout dans la
+    # première.
+    assert lus["C2ZP1_crete"].get("/V") == "500"
+    assert not lus["C2ZE1_puissance"].get("/V")   # raccordement : inconnu de l'outil
     desc = lus["C2ZD1_description"].get("/V") or ""
     assert "START PLAINE Double" in desc
     # nb_travees + entraxe saisis : la longueur (6 x 5 = 30 m) est affirmée
