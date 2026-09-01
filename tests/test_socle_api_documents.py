@@ -159,18 +159,24 @@ def test_depot_dp6_marque_la_piece_prete_dans_la_completude(client):
     assert evaluation["completude"]["pretes"] == pretes_avant + 1
 
 
-def test_depot_dp6_ne_modifie_pas_le_bloc_insertion(client):
-    """Preuve d'indépendance : la DP6 déposée n'écrit rien dans projet.insertion.
-    Le jour où ce bloc disparaît, l'upload doit continuer à fonctionner."""
+def test_le_projet_ne_porte_plus_de_bloc_insertion(client):
+    """Le module Insertion a été retiré le 01/09/2026.
+
+    Ce test remplace test_depot_dp6_ne_modifie_pas_le_bloc_insertion, écrit la
+    veille pour prouver que l'upload de la DP6 ne dépendait pas du bloc
+    insertion. Il vérifie maintenant que ce bloc a bien disparu du modèle, et
+    surtout qu'il ne réapparaît pas par un chemin détourné : une clé fantôme
+    resurgirait silencieusement dans tous les JSON de projet.
+    """
     # Arrange
     pid = _creer_projet(client)
-    insertion_avant = client.get(f"/api/projets/{pid}").json()["projet"]["insertion"]
 
-    # Act
+    # Act : la DP6 est désormais une pièce déposée comme les autres
     projet = _deposer(client, pid).json()["projet"]
 
     # Assert
-    assert projet["insertion"] == insertion_avant
+    assert "insertion" not in projet
+    assert projet["documents"]["dp6"]["nom_fichier"]
 
 
 def test_photo_deposee_est_redressee_selon_son_tag_exif(client):
@@ -524,3 +530,78 @@ def test_suppression_projet_emporte_les_pieces_deposees(client):
     assert r.status_code == 200
     assert not uploads.exists()
     assert client.get(f"/api/projets/{pid}").status_code == 404
+
+
+# ------------------------------------ type d'ombrière (route relocalisée)
+
+def test_choisir_le_type_ecrit_la_famille_et_les_cotes_du_catalogue(client):
+    """PUT /ombriere/type est le SEUL écrivain de `ombriere.famille`.
+
+    Cette route vivait dans le module Insertion (PUT /insertion/type) et en a
+    été sortie le 01/09/2026 avec son retrait. Sans elle, plus rien n'écrit la
+    famille : le catalogue retomberait silencieusement sur START PLAINE Bas et
+    le Cerfa affirmerait des cotes jamais saisies. D'où ce test.
+    """
+    # Arrange
+    pid = _creer_projet(client)
+
+    # Act
+    r = client.put(f"/api/projets/{pid}/ombriere/type",
+                   json={"famille": "START PLAINE Double"})
+
+    # Assert
+    assert r.status_code == 200
+    omb = r.json()["projet"]["ombriere"]
+    assert omb["famille"] == "START PLAINE Double"
+    # les hauteurs vides sont initialisées depuis le catalogue
+    assert omb["garde_au_sol_m"] is not None
+    assert omb["hauteur_hors_tout_m"] is not None
+    # la route rend aussi l'évaluation, dont dépend le panneau de complétude
+    assert "evaluation" in r.json()
+
+
+def test_choisir_le_type_n_ecrase_pas_une_cote_relevee_sur_la_coupe(client):
+    """Une hauteur saisie par le BE prime toujours sur le catalogue.
+
+    C'est la garantie qui permet de faire confiance au Cerfa : une cote lue sur
+    la coupe du constructeur ne doit jamais être remplacée par une valeur
+    théorique au détour d'un changement de type.
+    """
+    # Arrange : projet dont la hauteur hors tout a été saisie
+    pid = _creer_projet(client)
+    projet = client.get(f"/api/projets/{pid}").json()["projet"]
+    projet["ombriere"]["hauteur_hors_tout_m"] = 4.5
+    assert client.put(f"/api/projets/{pid}", json=projet).status_code == 200
+
+    # Act
+    r = client.put(f"/api/projets/{pid}/ombriere/type",
+                   json={"famille": "START PLAINE Double"})
+
+    # Assert
+    assert r.json()["projet"]["ombriere"]["hauteur_hors_tout_m"] == 4.5
+
+
+def test_type_inconnu_refuse(client):
+    # Arrange
+    pid = _creer_projet(client)
+
+    # Act
+    r = client.put(f"/api/projets/{pid}/ombriere/type", json={"famille": "PERGOLA XXL"})
+
+    # Assert
+    assert r.status_code == 400
+    assert "inconnu" in r.json()["detail"].lower()
+
+
+def test_aucun_type_par_defaut_a_la_creation(client):
+    """Un projet neuf n'a PAS de type d'ombrière.
+
+    Doctrine retenue avec Florent le 01/09/2026 : brouillon avec trous
+    signalés. Un type présélectionné ferait entrer des cotes catalogue dans un
+    formulaire officiel sans que personne ne les ait choisies.
+    """
+    # Arrange / Act
+    pid = _creer_projet(client)
+
+    # Assert
+    assert not client.get(f"/api/projets/{pid}").json()["projet"]["ombriere"]["famille"]

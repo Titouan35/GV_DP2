@@ -16,7 +16,6 @@ from .api import (
     routes_documents,
     routes_dossier,
     routes_geo,
-    routes_insertion,
     routes_planches,
     routes_projets,
 )
@@ -28,7 +27,6 @@ app.include_router(routes_projets.router)
 app.include_router(routes_planches.router)
 app.include_router(routes_documents.router)
 app.include_router(routes_dossier.router)
-app.include_router(routes_insertion.router)
 
 STATIC_DIR = config.REPO_ROOT / "app" / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -42,7 +40,6 @@ def sante():
         "projets_dir": str(config.PROJETS_DIR),
         "coupes_dir_existe": config.COUPES_DIR.exists(),
         "env_charge": str(config.ENV_FILE_CHARGE) if config.ENV_FILE_CHARGE else None,
-        "insertion": "api_gemini",
     }
 
 

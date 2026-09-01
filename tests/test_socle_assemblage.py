@@ -10,10 +10,10 @@ PROJETS_DIR redirigé vers tmp_path par monkeypatch (jamais d'écriture dans le
 vrai dossier PROJETS/), générateurs de cartes DP1 neutralisés (ils appellent
 l'IGN, aucun test ne doit dépendre du réseau).
 
-Les tests suffixés COMPORTEMENT_ACTUEL dépendent de la clé `insertion` du
-projet : ce sont EXACTEMENT ceux qui devront changer quand le module Insertion
-partira. Tous les autres sont écrits sans cette clé et doivent survivre tels
-quels.
+Le module Insertion a été retiré le 01/09/2026. Les tests qui dépendaient de
+la clé `insertion` ont été réécrits sur la nouvelle règle de la planche DP6 :
+l'état existant vient de la pièce DP7, l'état projeté de la pièce DP6 déposée
+par le bureau d'études. Aucun test de ce fichier ne dépend plus de cette clé.
 """
 import hashlib
 
@@ -576,81 +576,92 @@ def test_notice_repartie_en_deux_colonnes(socle):
     assert not any("Notice descriptive" in a for a in avertissements)
 
 
-# ---------------------------------------------- insertion (chemin voué à partir)
+# ---------------------------------------------- planche DP6 avant / après
 
-def test_dp6_avant_vient_de_l_insertion_COMPORTEMENT_ACTUEL(socle):
-    """L'image « avant » de la DP6 est lue dans projet['insertion']['photo'].
+def test_dp6_avant_vient_de_la_piece_dp7(socle):
+    """L'état existant est la photo du parking actuel, c'est-à-dire la DP7.
 
-    app/assemblage.py:521-522. Ce chemin DISPARAÎT avec le module Insertion :
-    il faudra décider d'où vient l'état existant (pièce DP7 ?) et réécrire ce
-    test. Aucune autre planche ne dépend de cette clé.
+    Réécrit le 01/09/2026 avec le retrait du module Insertion. Avant, l'image
+    « avant » était lue dans projet['insertion']['photo'], une photo déposée
+    dans l'écran Insertion ; le texte de l'emplacement réservé promettait déjà
+    un repli sur la DP7, mais ce repli n'existait pas dans le code. Il est
+    maintenant le chemin normal, et il évite de demander deux fois la même
+    photo au bureau d'études.
     """
     # Arrange
-    chemin_photo, _ = deposer_image(socle, "site.png", couleur=(120, 120, 120))
-    projet = projet_socle(insertion={"photo": f"{ID_PROJET}.assets/site.png"})
+    chemin7, doc7 = deposer_image(socle, "dp7.png", couleur=(120, 120, 120))
+    projet = projet_socle(documents={"dp7": doc7})
 
     # Act
     chemin, _ = assemblage.generer_dossier(projet)
 
-    # Assert
+    # Assert : la DP7 alimente l'avant, l'après reste réservé
     insertion = planche(planches(chemin), "Insertion paysagère")
-    assert empreintes_contenu(insertion) == [empreinte(chemin_photo)]
-    assert "État projeté" in textes(insertion)   # l'après reste vide
+    assert empreintes_contenu(insertion) == [empreinte(chemin7)]
+    assert "État projeté" in textes(insertion)
 
 
-def test_dp6_apres_utilise_l_insertion_ia_retenue_COMPORTEMENT_ACTUEL(socle):
-    """Sans photomontage BE, l'insertion IA cochée occupe l'état projeté.
+def test_dp6_apres_vient_de_la_piece_dp6_deposee(socle):
+    """L'état projeté est le photomontage déposé par le bureau d'études.
 
-    Règle Florent du 18/07/2026. Elle est étiquetée « visuel d'illustration »
-    et ne crée PAS de planche isolée supplémentaire. Tout ce test disparaît
-    avec le module Insertion.
-    """
-    # Arrange
-    dossier_ia = socle / f"{ID_PROJET}.assets" / "insertion"
-    dossier_ia.mkdir(parents=True)
-    fichier_ia = dossier_ia / "insertion_0.png"
-    Image.new("RGB", (320, 180), (40, 60, 80)).save(fichier_ia)
-    projet = projet_socle(insertion={
-        "dans_dossier": [f"{ID_PROJET}.assets/insertion/insertion_0.png"]})
-
-    # Act
-    chemin, _ = assemblage.generer_dossier(projet)
-
-    # Assert
-    slides = planches(chemin)
-    assert len(slides) == 8                       # pas de planche isolée
-    insertion = planche(slides, "Insertion paysagère")
-    assert empreintes_contenu(insertion) == [empreinte(fichier_ia)]
-    assert "Visuel d'illustration (IA)" in textes(insertion)
-
-
-def test_photomontage_dp6_du_be_prime_sur_l_insertion_ia_COMPORTEMENT_ACTUEL(socle):
-    """La pièce réglementaire garde la priorité sur l'image générée.
-
-    L'insertion IA non utilisée pour l'après part alors sur sa propre planche
-    « visuel d'illustration », intercalée avant les photographies.
+    C'est désormais la SEULE source possible : la pièce réglementaire.
     """
     # Arrange
     chemin6, doc6 = deposer_image(socle, "photomontage.png", couleur=(90, 170, 60))
-    dossier_ia = socle / f"{ID_PROJET}.assets" / "insertion"
-    dossier_ia.mkdir(parents=True)
-    fichier_ia = dossier_ia / "insertion_0.png"
-    Image.new("RGB", (320, 180), (40, 60, 80)).save(fichier_ia)
-    projet = projet_socle(
-        documents={"dp6": doc6},
-        insertion={"dans_dossier": [f"{ID_PROJET}.assets/insertion/insertion_0.png"]})
+    projet = projet_socle(documents={"dp6": doc6})
+
+    # Act
+    chemin, _ = assemblage.generer_dossier(projet)
+
+    # Assert : la DP6 alimente l'après, l'avant reste réservé
+    insertion = planche(planches(chemin), "Insertion paysagère")
+    assert empreintes_contenu(insertion) == [empreinte(chemin6)]
+    assert "État existant" in textes(insertion)
+
+
+def test_dp6_complete_montre_la_dp7_puis_la_dp6_sans_planche_isolee(socle):
+    """Les deux pièces présentes : une seule planche de comparaison.
+
+    Le module Insertion ajoutait des planches « visuel d'illustration » pour
+    les images IA non retenues. Elles ont disparu : le dossier garde ses 8
+    planches quoi qu'il arrive.
+    """
+    # Arrange
+    chemin7, doc7 = deposer_image(socle, "dp7.png", couleur=(120, 120, 120))
+    chemin6, doc6 = deposer_image(socle, "photomontage.png", couleur=(90, 170, 60))
+    projet = projet_socle(documents={"dp6": doc6, "dp7": doc7})
 
     # Act
     chemin, _ = assemblage.generer_dossier(projet)
 
     # Assert
     slides = planches(chemin)
-    assert len(slides) == 9
-    assert empreintes_contenu(planche(slides, "Insertion paysagère", 0)) == [empreinte(chemin6)]
-    illustration = planche(slides, "Insertion paysagère", 1)
-    assert badge(illustration) == "Insertion"
-    assert empreintes_contenu(illustration) == [empreinte(fichier_ia)]
-    assert [titre(s) for s in slides][-1] == "Photographies du terrain"
+    assert len(slides) == 8
+    insertion = planche(slides, "Insertion paysagère")
+    # ordre imposé : avant (DP7) à gauche, après (DP6) à droite
+    assert empreintes_contenu(insertion) == [empreinte(chemin7), empreinte(chemin6)]
+    assert badge(insertion) == "DP6"
+    assert "Visuel d'illustration" not in " ".join(textes(insertion))
+
+
+def test_la_dp7_alimente_a_la_fois_l_avant_et_la_planche_photographies(socle):
+    """La même photo sert deux planches, sans être demandée deux fois.
+
+    Conséquence assumée du choix de la DP7 comme état existant : on vérifie
+    qu'elle apparaît bien aux deux endroits, pour que personne ne prenne cela
+    pour un doublon accidentel.
+    """
+    # Arrange
+    chemin7, doc7 = deposer_image(socle, "dp7.png", couleur=(120, 120, 120))
+    projet = projet_socle(documents={"dp7": doc7})
+
+    # Act
+    chemin, _ = assemblage.generer_dossier(projet)
+
+    # Assert
+    slides = planches(chemin)
+    assert empreintes_contenu(planche(slides, "Insertion paysagère")) == [empreinte(chemin7)]
+    assert empreinte(chemin7) in empreintes_contenu(planche(slides, "Photographies du terrain"))
 
 
 def test_dp6_sans_photo_ni_photomontage_montre_deux_emplacements_reserves(socle):

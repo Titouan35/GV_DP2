@@ -1,4 +1,4 @@
-"""Routes documents / insertion (job de fond) / projets (verrou, purge) + export PDF.
+"""Routes documents / projets (verrou, purge) + export PDF.
 
 Trous de couverture comblés le 19/07/2026 : jusqu'ici aucune route d'upload,
 de génération ni l'export PDF n'était testée.
@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from app import config, export_pdf, insertion_ia
+from app import config, export_pdf
 from app.main import app
 
 
@@ -111,21 +111,30 @@ def test_nettoyer_purge_les_caches(client):
     assert not (assets / "embed_photo.jpg").exists()
 
 
-def test_nettoyer_garde_les_references(client):
-    """Les images de la galerie et les photos du site ne sont pas purgées."""
+def test_nettoyer_purge_l_heritage_du_module_insertion(client):
+    """Le dossier insertion/ des anciens projets n'a plus aucun référent.
+
+    Le module Insertion a été retiré le 01/09/2026. Ce test remplace
+    test_nettoyer_garde_les_references, qui vérifiait qu'on épargnait les
+    images référencées dans le modèle : ces références n'existent plus, et
+    la purge est le seul moyen de récupérer la place occupée dans OneDrive.
+    """
+    # Arrange : un projet portant un dossier insertion/ hérité
     pid = _creer_projet(client)
     assets = config.assets_dir(pid)
     dossier_ins = assets / "insertion"
     dossier_ins.mkdir()
-    (dossier_ins / "insertion_gardee.png").write_bytes(_png_bytes())
+    (dossier_ins / "ancienne_insertion.png").write_bytes(_png_bytes())
     (dossier_ins / "site_photo.jpg").write_bytes(_png_bytes())
-    p = client.get(f"/api/projets/{pid}").json()["projet"]
-    p["insertion"]["images"] = [{"fichier": f"{pid}.assets/insertion/insertion_gardee.png"}]
-    p["insertion"]["photos"] = [f"{pid}.assets/insertion/site_photo.jpg"]
-    assert client.put(f"/api/projets/{pid}", json=p).status_code == 200
-    client.post(f"/api/projets/{pid}/nettoyer")
-    assert (dossier_ins / "insertion_gardee.png").exists()
-    assert (dossier_ins / "site_photo.jpg").exists()
+
+    # Act
+    r = client.post(f"/api/projets/{pid}/nettoyer")
+
+    # Assert
+    assert r.status_code == 200
+    assert not (dossier_ins / "ancienne_insertion.png").exists()
+    assert not (dossier_ins / "site_photo.jpg").exists()
+    assert r.json()["fichiers_supprimes"] == 2
 
 
 def test_suppression_projet_emporte_les_assets(client):
@@ -151,90 +160,6 @@ def test_depot_refuse_dossier_incomplet(client):
     r = client.post(f"/api/projets/{pid}/dossier?depot=1")
     assert r.status_code == 409
     assert "incomplet" in r.json()["detail"]
-
-
-# ------------------------------------------------------------------ génération en fond
-
-def _projet_avec_photo(client) -> str:
-    pid = _creer_projet(client)
-    r = client.post(f"/api/projets/{pid}/insertion/photos",
-                    files=[("fichiers", ("site.png", _png_bytes(400, 300), "image/png"))])
-    assert r.status_code == 200
-    return pid
-
-
-def test_generation_fond_bout_en_bout(client, monkeypatch, tmp_path):
-    monkeypatch.setenv("GEMINI_API_KEY", "test")
-
-    def faux_generer(projet, affinage="", prompt_override="", utilisateur=None):
-        return {"fichier": "x.png", "date": "2026-07-19T10:00:00",
-                "etiquette": "visuel IA", "modele": "test", "prompt": "p",
-                "controle": {"couverture": 0.9, "verdict": "ok"}, "essais": 1}
-
-    monkeypatch.setattr(insertion_ia, "generer_image", faux_generer)
-    pid = _projet_avec_photo(client)
-    r = client.post(f"/api/projets/{pid}/insertion/generer", json={})
-    assert r.status_code == 200 and r.json()["etat"] == "en_cours"
-
-    for _ in range(100):   # le job tourne dans un thread : on attend la fin
-        s = client.get(f"/api/projets/{pid}/insertion/generer/statut").json()
-        if s["etat"] != "en_cours":
-            break
-        time.sleep(0.05)
-    assert s["etat"] == "prete"
-    assert s["image"]["fichier"] == "x.png"
-    projet = client.get(f"/api/projets/{pid}").json()["projet"]
-    assert projet["insertion"]["images"][0]["fichier"] == "x.png"
-    assert projet["insertion"]["retenue"] == "x.png"
-    assert projet["insertion"]["nb_images_generees"] == 1
-
-
-def test_generation_fond_409_si_deja_en_cours(client, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test")
-    feu_vert = threading.Event()
-
-    def generer_bloquant(projet, affinage="", prompt_override="", utilisateur=None):
-        feu_vert.wait(timeout=10)
-        return {"fichier": "y.png", "date": "d", "etiquette": "visuel IA",
-                "modele": "test", "prompt": "p", "controle": None, "essais": 1}
-
-    monkeypatch.setattr(insertion_ia, "generer_image", generer_bloquant)
-    pid = _projet_avec_photo(client)
-    assert client.post(f"/api/projets/{pid}/insertion/generer", json={}).status_code == 200
-    # pendant que le job est bloqué : un 2e lancement est refusé (double dépense)
-    r2 = client.post(f"/api/projets/{pid}/insertion/generer", json={})
-    assert r2.status_code == 409
-    feu_vert.set()
-    for _ in range(100):
-        if client.get(f"/api/projets/{pid}/insertion/generer/statut").json()["etat"] != "en_cours":
-            break
-        time.sleep(0.05)
-
-
-def test_generation_fond_erreur_visible(client, monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test")
-
-    def generer_rate(projet, affinage="", prompt_override="", utilisateur=None):
-        raise insertion_ia.InsertionError("Quota Gemini atteint")
-
-    monkeypatch.setattr(insertion_ia, "generer_image", generer_rate)
-    pid = _projet_avec_photo(client)
-    client.post(f"/api/projets/{pid}/insertion/generer", json={})
-    for _ in range(100):
-        s = client.get(f"/api/projets/{pid}/insertion/generer/statut").json()
-        if s["etat"] != "en_cours":
-            break
-        time.sleep(0.05)
-    assert s["etat"] == "erreur"
-    assert "Quota" in s["erreur"]
-
-
-def test_generation_sans_cle_refusee(client, monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    pid = _projet_avec_photo(client)
-    r = client.post(f"/api/projets/{pid}/insertion/generer", json={})
-    assert r.status_code == 400
-    assert "GEMINI_API_KEY" in r.json()["detail"]
 
 
 # ------------------------------------------------------------------ export PDF

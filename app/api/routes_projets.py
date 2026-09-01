@@ -15,7 +15,7 @@ import unicodedata
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request
 
 from .. import config, regles, verrou
 from ..models import Projet
@@ -199,17 +199,14 @@ def nettoyer_projet(projet_id: str):
             f.unlink(missing_ok=True)
             fichiers += 1
 
-    # insertions orphelines : fichiers du dossier insertion/ ni dans la
-    # galerie, ni dans les photos du site
-    references = {im.get("fichier") for im in projet.insertion.images}
-    references |= set(projet.insertion.photos or [])
+    # héritage du module Insertion retiré le 01/09/2026 : le dossier
+    # insertion/ des projets antérieurs n'a plus aucun référent dans le
+    # modèle. On le purge entièrement, c'est le seul moyen de récupérer la
+    # place qu'il occupe dans OneDrive (48 Mo orphelins constatés).
     dossier_ins = assets / "insertion"
     if dossier_ins.exists():
         for f in dossier_ins.iterdir():
             if not f.is_file():
-                continue
-            rel = str(f.relative_to(config.PROJETS_DIR)).replace("\\", "/")
-            if rel in references:
                 continue
             libere += f.stat().st_size
             f.unlink(missing_ok=True)
@@ -217,6 +214,38 @@ def nettoyer_projet(projet_id: str):
 
     return {"fichiers_supprimes": fichiers, "octets_liberes": libere,
             "mo_liberes": round(libere / 1_048_576, 1)}
+
+
+@router.put("/{projet_id}/ombriere/type")
+def choisir_type_ombriere(projet_id: str, corps: dict = Body(...)):
+    """Type d'ombrière du projet : Mono Bas, Mono Haut ou Double.
+
+    Cette route vivait dans le module Insertion (PUT /insertion/type). Elle en
+    a été SORTIE lors du retrait de ce module (01/09/2026), parce qu'elle était
+    le seul endroit du code écrivant `ombriere.famille`. Sans elle, le
+    catalogue retombe silencieusement sur START PLAINE Bas et le Cerfa se met à
+    affirmer des cotes qui n'ont jamais été saisies. Elle n'avait donc rien à
+    faire dans l'insertion : le type d'ombrière est une caractéristique du
+    projet, pas un paramètre de visuel.
+
+    Les hauteurs ne sont initialisées depuis le catalogue que si elles sont
+    VIDES : une cote relevée sur la coupe du BE n'est jamais écrasée.
+    """
+    from ..catalogue import CATALOGUE
+
+    projet = _charger(projet_id)
+    famille = corps.get("famille")
+    if famille not in CATALOGUE:
+        raise HTTPException(status_code=400, detail="Type d'ombrière inconnu.")
+    projet.ombriere.famille = famille
+    entree = CATALOGUE[famille]
+    if projet.ombriere.garde_au_sol_m is None:
+        projet.ombriere.garde_au_sol_m = entree["h_bas_m"]
+    if projet.ombriere.hauteur_hors_tout_m is None:
+        projet.ombriere.hauteur_hors_tout_m = entree["h_haut_m"]
+    projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    _sauver(projet)
+    return {"projet": projet, "evaluation": regles.evaluer(projet)}
 
 
 @router.post("/{projet_id}/verrou")

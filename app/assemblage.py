@@ -470,47 +470,38 @@ def _slide_notice(prs, projet, assets):
     return slide
 
 
-def _insertions_selectionnees(projet: dict) -> list[Path]:
-    """Chemins des insertions IA cochées « inclure au dossier » (existants)."""
-    ins = projet.get("insertion") or {}
-    chemins = []
-    for rel in ins.get("dans_dossier") or []:
-        chemin = config.PROJETS_DIR / rel
-        if chemin.exists():
-            chemins.append(chemin)
-    return chemins
-
-
 def _insertion_pour_apres(projet, assets):
-    """Ce qui illustre l'état projeté sur la planche avant/après.
+    """Ce qui illustre l'état projeté sur la planche avant / après.
 
-    Règle (Florent, 18/07/2026) : l'insertion IA retenue occupe l'après, pour
-    qu'elle apparaisse sur la planche de comparaison plutôt que sur une planche
-    isolée. Exception : un VRAI photomontage DP6 du bureau d'études garde la
-    priorité, car c'est la pièce réglementaire. On ne le considère comme réel
-    que s'il diffère de la photo « avant » : quand la DP6 déposée EST la photo
-    du site reprise pour l'insertion, l'avant et l'après montraient deux fois
-    la même image.
-    Renvoie (chemin_apres, est_une_insertion_ia).
+    Depuis le retrait du module Insertion (01/09/2026), il n'y a plus qu'une
+    seule source possible : le photomontage DP6 déposé par le bureau d'études.
+    C'est la pièce réglementaire, et c'était déjà elle qui primait.
+
+    Renvoie le chemin, ou None si la pièce n'a pas encore été déposée.
     """
-    photo = (projet.get("insertion") or {}).get("photo")
-    doc6 = (projet.get("documents") or {}).get("dp6") or {}
-    dp6_est_la_photo = bool(doc6.get("fichier")) and doc6["fichier"] == photo
-
     pages = _pages_document(projet, "dp6", assets)
-    ia = _insertions_selectionnees(projet)
-    if ia and (not pages or dp6_est_la_photo):
-        return ia[0], True
-    if pages:
-        return pages[0], False
-    return None, False
+    return pages[0] if pages else None
 
 
-def _slide_dp6(prs, projet, assets, apres, apres_ia):
-    """Insertion paysagère avant / après (cf. _insertion_pour_apres).
+def _photo_pour_avant(projet, assets):
+    """Ce qui illustre l'état existant sur la planche avant / après.
 
-    `apres`/`apres_ia` sont calculés UNE fois par l'appelant : recalculer ici
-    re-rendait les pages PDF de la DP6 à chaque planche.
+    C'est la pièce DP7 (photo de l'environnement proche), c'est-à-dire la
+    photo du parking actuel. Avant le retrait du module Insertion, l'« avant »
+    venait de `insertion.photo`, une photo déposée dans l'écran Insertion, et
+    le texte de l'emplacement réservé promettait déjà un repli sur la DP7 qui
+    n'existait pas dans le code. Ce repli est désormais le chemin normal, et
+    il évite de redemander deux fois la même photo au BE.
+    """
+    pages = _pages_document(projet, "dp7", assets)
+    return pages[0] if pages else None
+
+
+def _slide_dp6(prs, projet, assets, avant, apres):
+    """Insertion paysagère avant / après.
+
+    `avant` et `apres` sont calculés UNE fois par l'appelant : les recalculer
+    ici re-rendait les pages PDF à chaque planche.
     """
     slide = _slide(prs)
     _entete(slide, "Insertion paysagère")
@@ -518,18 +509,16 @@ def _slide_dp6(prs, projet, assets, apres, apres_ia):
     z_avant = (ZONE[0], ZONE[1], demi, ZONE[3])
     z_apres = (ZONE[0] + demi + 24, ZONE[1], demi, ZONE[3])
 
-    # avant : photo du site (module insertion) si dispo
-    photo = (projet.get("insertion") or {}).get("photo")
-    chemin_avant = config.PROJETS_DIR / photo if photo else None
-    if chemin_avant and chemin_avant.exists():
+    # avant : la photo du parking actuel, pièce DP7
+    if avant:
         _rect(slide, *z_avant, fill=BLANC, ligne=GRIS_LIGNE, epaisseur=1)
-        _image_zone(slide, _optimiser(chemin_avant, assets), z_avant)
+        _image_zone(slide, _optimiser(avant, assets), z_avant)
     else:
         _placeholder_zone(slide, "État existant",
-                          "Photo du parking actuel (étape Insertion ou pièce DP7).", z_avant)
+                          "Photo du parking actuel (pièce DP7, étape 2).", z_avant)
     _pastille(slide, z_avant[0] + 14, z_avant[1] + 14, "Avant", NAVY, BLANC)
 
-    # après : insertion IA retenue en priorité, vrai photomontage DP6 sinon
+    # après : le photomontage d'insertion du bureau d'études, pièce DP6
     if apres:
         _rect(slide, *z_apres, fill=BLANC, ligne=GRIS_LIGNE, epaisseur=1)
         _image_zone(slide, _optimiser(apres, assets), z_apres)
@@ -538,8 +527,6 @@ def _slide_dp6(prs, projet, assets, apres, apres_ia):
                           "Photomontage d'insertion fourni par le bureau d'études (pièce DP6, étape 2).",
                           z_apres)
     _pastille(slide, z_apres[0] + 14, z_apres[1] + 14, "Après", VERT, NAVY)
-    if apres_ia:
-        _pastille(slide, z_apres[0] + 96, z_apres[1] + 14, "Visuel d'illustration (IA)", VIOLET, BLANC)
     _cartouche(slide, projet, "DP6")
     return slide
 
@@ -664,18 +651,10 @@ def _generer_dossier_verrouille(projet: dict, projet_id: str) -> tuple[Path, lis
                              "(pièce DP3, étape 2).", "Pièce DP3"))
 
     _slide_notice(prs, projet, assets)
-    # avant/après calculé UNE fois : servait aussi à dédupliquer les planches
-    # d'illustration, mais chaque appel re-rendait les pages PDF de la DP6
-    apres, apres_ia = _insertion_pour_apres(projet, assets)
-    _slide_dp6(prs, projet, assets, apres, apres_ia)
-
-    # insertions IA sélectionnées : planches « visuel d'illustration » pour
-    # celles qui ne sont PAS déjà montrées dans l'avant/après (sinon la planche
-    # isolée faisait doublon avec la comparaison — remarque Florent 18/07).
-    ia = _insertions_selectionnees(projet)
-    for chemin in [c for c in ia if c != apres]:
-        _slide_piece_image(prs, projet, assets, "Insertion paysagère", "Insertion",
-                           image=chemin, pastille="Visuel d'illustration (IA)")
+    # avant/après calculés UNE fois : chaque appel re-rend les pages PDF
+    avant = _photo_pour_avant(projet, assets)
+    apres = _insertion_pour_apres(projet, assets)
+    _slide_dp6(prs, projet, assets, avant, apres)
 
     _slide_photos(prs, projet, assets)
     # Cerfa et checklist retirés du PPTX (Florent) : le Cerfa pré-rempli reste

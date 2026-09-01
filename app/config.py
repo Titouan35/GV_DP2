@@ -110,11 +110,6 @@ _COUPES_EXTERNE = DP_DIR / "COUPES"
 _COUPES_BUNDLE = REPO_ROOT / "app" / "gabarits" / "coupes"
 COUPES_DIR = _COUPES_EXTERNE if _COUPES_EXTERNE.exists() else _COUPES_BUNDLE
 
-# Photos de référence d'ombrières (structure/perspective) envoyées à Gemini
-# comme cible de réalisme dans le module Insertion. Remplaçables par de vraies
-# photos d'installations GV (mêmes noms de fichiers).
-REFERENCES_DIR = REPO_ROOT / "app" / "gabarits" / "references"
-
 APP_NAME = "GV_DP"
 APP_TITLE = "Déclaration Préalable · Ombrières"
 VERSION = "0.1.0"

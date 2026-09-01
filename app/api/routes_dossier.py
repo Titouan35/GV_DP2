@@ -1,4 +1,4 @@
-"""Notice, Cerfa, assemblage du dossier et statut du module Insertion IA."""
+"""Notice, Cerfa et assemblage du dossier."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import config, insertion_ia, notice, regles
+from .. import config, notice, regles
 from ..assemblage import generer_dossier
 from ..cerfa import NUMERO_CERFA, preremplir
 from ..export_pdf import exporter_pdf
@@ -130,9 +130,3 @@ def telecharger_dossier_pdf(projet_id: str):
     if not chemin.exists():
         raise HTTPException(status_code=404, detail="PDF non généré.")
     return FileResponse(chemin, filename=chemin.name, media_type="application/pdf")
-
-
-@router.get("/insertion/statut")
-def statut_insertion():
-    """Descriptif générique du module Insertion IA (sans projet)."""
-    return insertion_ia.apercu()
