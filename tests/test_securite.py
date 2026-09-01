@@ -173,29 +173,29 @@ def test_l_utilisateur_authentifie_devient_l_auteur(client, monkeypatch):
     """La traçabilité des modifications suit l'identité réelle, pas le compte
     Windows du serveur : en hébergé, tout le monde partagerait le même."""
     # Arrange
-    monkeypatch.setenv("GVDP_COMPTES", f"hajar:{securite.empreinte('secret')}")
+    monkeypatch.setenv("GVDP_COMPTES", f"agent-be:{securite.empreinte('secret')}")
 
     # Act
     r = client.post("/api/projets", json={"nom": "Projet BE"},
-                    headers=entete_basic("hajar", "secret"))
+                    headers=entete_basic("agent-be", "secret"))
 
     # Assert
-    assert r.json()["projet"]["modifie_par"] == "hajar"
+    assert r.json()["projet"]["modifie_par"] == "agent-be"
 
 
 def test_un_entete_utilisateur_falsifie_est_ecrase(client, monkeypatch):
     """Un client ne doit pas pouvoir s'attribuer une autre identité en
     envoyant lui-même X-Utilisateur."""
     # Arrange
-    monkeypatch.setenv("GVDP_COMPTES", f"hajar:{securite.empreinte('secret')}")
+    monkeypatch.setenv("GVDP_COMPTES", f"agent-be:{securite.empreinte('secret')}")
 
     # Act
     r = client.post("/api/projets", json={"nom": "Projet BE"},
-                    headers={**entete_basic("hajar", "secret"),
+                    headers={**entete_basic("agent-be", "secret"),
                              "X-Utilisateur": "florent"})
 
     # Assert
-    assert r.json()["projet"]["modifie_par"] == "hajar"
+    assert r.json()["projet"]["modifie_par"] == "agent-be"
 
 
 # ------------------------------------------- détection de l'adresse d'écoute
@@ -288,10 +288,10 @@ def test_en_mode_delegue_l_identite_de_l_hebergeur_est_reprise(client, monkeypat
 
     # Act
     r = client.post("/api/projets", json={"nom": "Projet BE"},
-                    headers={"X-Ms-Client-Principal-Name": "hajar@greenvolt.fr"})
+                    headers={"X-Ms-Client-Principal-Name": "agent.be@exemple.fr"})
 
     # Assert
-    assert r.json()["projet"]["modifie_par"] == "hajar@greenvolt.fr"
+    assert r.json()["projet"]["modifie_par"] == "agent.be@exemple.fr"
 
 
 def test_en_mode_delegue_l_identite_ne_peut_pas_etre_usurpee(client, monkeypatch):
@@ -311,6 +311,6 @@ def test_en_mode_delegue_l_identite_ne_peut_pas_etre_usurpee(client, monkeypatch
 def test_en_mode_delegue_l_entete_de_l_hebergeur_prime_sur_celui_du_client(client, monkeypatch):
     monkeypatch.setenv("GVDP_AUTH_DELEGUEE", "1")
     r = client.post("/api/projets", json={"nom": "Projet BE"},
-                    headers={"X-Ms-Client-Principal-Name": "hajar@greenvolt.fr",
+                    headers={"X-Ms-Client-Principal-Name": "agent.be@exemple.fr",
                              "X-Utilisateur": "florent"})
-    assert r.json()["projet"]["modifie_par"] == "hajar@greenvolt.fr"
+    assert r.json()["projet"]["modifie_par"] == "agent.be@exemple.fr"

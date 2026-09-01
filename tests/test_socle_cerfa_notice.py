@@ -416,7 +416,7 @@ def _creer_projet(client, **surcharges) -> dict:
     charge = {
         "nom": "Socle notice",
         "mo": {"type": "Société", "raison_sociale": "Greenvolt Next France",
-               "representant": "Florent Guillemin"},
+               "representant": "Prenom Nom"},
         "localisation": {"adresse": "Allée du Golf", "commune": "Soufflenheim",
                          "code_postal": "67620", "code_insee": "67472"},
         "ombriere": {"famille": "START PLAINE Double", "puissance_kwc": 500},

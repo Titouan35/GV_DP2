@@ -67,7 +67,7 @@ python -m app.securite
 Puis les déclarer, séparées par des virgules :
 
 ```bash
-az containerapp secret set -n $APP -g $RG   --secrets gvdp-comptes="florent:<empreinte>,hajar:<empreinte>"
+az containerapp secret set -n $APP -g $RG   --secrets gvdp-comptes="prenom1:<empreinte>,prenom2:<empreinte>"
 az containerapp update -n $APP -g $RG   --set-env-vars GVDP_COMPTES=secretref:gvdp-comptes
 ```
 

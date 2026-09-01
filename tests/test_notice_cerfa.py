@@ -12,7 +12,7 @@ PROJET = {
     "mo": {
         "type": "Société",
         "raison_sociale": "Greenvolt Next France",
-        "representant": "Florent Guillemin",
+        "representant": "Prenom Nom",
         "siret": "12345678900012",
         "adresse": "1 rue de l'Énergie, 69000 Lyon",
     },

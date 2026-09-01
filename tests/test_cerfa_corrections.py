@@ -28,7 +28,7 @@ PROJET_BASE = {
     "id": "cerfa-corrections",
     "nom": "Parking test",
     "mo": {"type": "societe", "raison_sociale": "GREENVOLT NEXT FRANCE",
-           "representant": "Florent Guillemin", "siret": "123 456 789 00012",
+           "representant": "Prenom Nom", "siret": "123 456 789 00012",
            "adresse": "79 rue centrale 01500 Ambérieu", "email": "f@example.fr"},
     "localisation": {
         "adresse": "68 Rue du Jura", "commune": "Montréal-la-Cluse",
