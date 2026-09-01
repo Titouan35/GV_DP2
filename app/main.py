@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config
+from . import config, securite
 from .api import (
     routes_documents,
     routes_dossier,
@@ -20,7 +20,13 @@ from .api import (
     routes_projets,
 )
 
+# Contrôle de démarrage : l'application refuse de servir si elle est joignable
+# au-delà de cette machine sans authentification. Voir app/securite.py — les
+# dossiers contiennent des données personnelles de maîtres d'ouvrage.
+MODE_AUTH = securite.verifier_configuration()
+
 app = FastAPI(title=config.APP_TITLE, version=config.VERSION)
+app.add_middleware(securite.Authentification)
 
 app.include_router(routes_geo.router)
 app.include_router(routes_projets.router)
@@ -40,6 +46,7 @@ def sante():
         "projets_dir": str(config.PROJETS_DIR),
         "coupes_dir_existe": config.COUPES_DIR.exists(),
         "env_charge": str(config.ENV_FILE_CHARGE) if config.ENV_FILE_CHARGE else None,
+        "authentification": MODE_AUTH,
     }
 
 

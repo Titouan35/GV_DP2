@@ -4,12 +4,15 @@ Cible : héberger l'outil pour toute l'équipe BE (tenant Microsoft Greenvolt).
 Même code qu'en local ; l'image conteneur ajoute **LibreOffice** pour la
 conversion PPTX → PDF côté Linux (le poste Windows utilise PowerPoint).
 
-> **Secret à provisionner : `GEMINI_API_KEY`** — l'étape Insertion IA appelle
-> l'API Gemini côté serveur (flux 17/07/2026). Sans la clé, l'outil fonctionne
-> mais l'atelier de génération reste désactivé (message clair dans l'UI).
-> Optionnels : `GVDP_GEMINI_MODEL` (défaut `gemini-3-pro-image`),
-> `GVDP_COUT_IMAGE_EUR` (défaut 0,13), `GVDP_AUTO_RETRY=0` pour couper la
-> relance automatique.
+> **L'image REFUSE de démarrer sans authentification.** Ce n'est pas une
+> panne : c'est voulu. Le conteneur écoute sur `0.0.0.0`, donc au-delà de la
+> machine, et les dossiers contiennent des données personnelles de maîtres
+> d'ouvrage (nom, adresse électronique, téléphone, SIRET). Une des routes
+> efface un dossier client complet. Voir le §1 bis ci-dessous.
+
+> **Le module Insertion IA a été retiré le 01/09/2026.** Aucune clé d'API
+> n'est plus nécessaire : `GEMINI_API_KEY` et les variables associées ne
+> servent plus à rien et peuvent être supprimées de la configuration.
 
 ## 0. Prérequis
 
@@ -27,6 +30,69 @@ ENVI=gvdp-env
 APP=gvdp
 IMG=$ACR.azurecr.io/gvdp:1.0
 ```
+
+## 1 bis. Authentification (obligatoire, l'application le vérifie)
+
+Deux options, à trancher avec la DSI.
+
+### Option A, recommandée : authentification déléguée à Azure (Entra ID)
+
+Container Apps sait authentifier en amont de l'application (EasyAuth). Les
+comptes Greenvolt existants sont utilisés, aucun mot de passe n'est géré par
+l'outil, et les départs sont traités par la DSI comme pour n'importe quelle
+application interne.
+
+```bash
+az containerapp auth microsoft update -n $APP -g $RG   --client-id <APP_ID> --tenant-id <TENANT_ID> --yes
+az containerapp auth update -n $APP -g $RG   --unauthenticated-client-action RedirectToLoginPage
+```
+
+Puis déclarer à l'application que l'authentification est faite en amont :
+
+```bash
+az containerapp update -n $APP -g $RG --set-env-vars GVDP_AUTH_DELEGUEE=1
+```
+
+### Option B, dépannage : comptes gérés par l'application
+
+Utile pour une mise à disposition rapide au BE sans attendre la DSI. Les mots
+de passe ne sont JAMAIS stockés en clair : on ne dépose que des empreintes
+salées (PBKDF2-SHA256, 200 000 itérations).
+
+Générer une empreinte par personne, depuis le dossier GV_DP :
+
+```bash
+python -m app.securite
+```
+
+Puis les déclarer, séparées par des virgules :
+
+```bash
+az containerapp secret set -n $APP -g $RG   --secrets gvdp-comptes="florent:<empreinte>,hajar:<empreinte>"
+az containerapp update -n $APP -g $RG   --set-env-vars GVDP_COMPTES=secretref:gvdp-comptes
+```
+
+### Ce que l'application garantit
+
+- Elle refuse de démarrer si elle écoute au-delà de `127.0.0.1` sans l'une des
+  deux options ci-dessus. Le message dit quoi configurer.
+- `/api/sante` reste joignable sans authentification, pour la sonde de
+  l'hébergeur. Elle ne divulgue aucune donnée de projet.
+- L'utilisateur authentifié devient l'auteur des modifications (champ
+  `modifie_par`), et un client ne peut pas usurper une identité en envoyant
+  lui-même l'en-tête `X-Utilisateur`.
+- En usage local au poste (écoute sur `127.0.0.1`), rien ne change : aucune
+  authentification n'est demandée.
+
+### Ce que l'application NE garantit PAS, et qui reste à arbitrer
+
+- Il n'y a pas de rôles : toute personne authentifiée voit et modifie tous les
+  projets, y compris la suppression. Pour un bureau d'études de quelques
+  personnes, c'est un choix défendable ; il doit être explicite.
+- Les verrous de génération sont des verrous de processus : l'hébergement doit
+  rester à **une seule réplique** (`--min-replicas 1 --max-replicas 1`).
+- Le stockage des dossiers clients doit être tranché avec la DSI (Azure Files
+  dans le tenant Greenvolt, chiffrement, sauvegarde, durée de conservation).
 
 ## 2. Build de l'image (managé par Azure, pas besoin de Docker local)
 
