@@ -231,3 +231,86 @@ def test_par_defaut_l_ecoute_est_locale(monkeypatch):
     monkeypatch.setattr(securite.sys, "argv", ["pytest"])
     assert securite.hote_effectif() == "127.0.0.1"
     assert securite.ecoute_locale()
+
+
+# ------------------------------------------- corrections du 01/09 (relecture)
+
+def test_un_fichier_env_ne_peut_pas_desarmer_l_authentification(tmp_path, monkeypatch):
+    """Le .env du dépôt vit dans le dossier OneDrive partagé avec le BE.
+
+    Quiconque peut y déposer un fichier pourrait sinon désarmer
+    l'authentification à distance en écrivant GVDP_AUTH_DELEGUEE=1.
+    """
+    # Arrange
+    from app import config
+    fichier = tmp_path / ".env"
+    fichier.write_text("GVDP_AUTH_DELEGUEE=1\nGVDP_COMPTES=pirate:x\nAUTRE_CLE=valeur\n",
+                       encoding="utf-8")
+    monkeypatch.setenv("GVDP_ENV_FILE", str(fichier))
+    monkeypatch.delenv("AUTRE_CLE", raising=False)
+
+    # Act
+    config._charger_env()
+
+    # Assert : les clés de sécurité sont ignorées, les autres passent
+    import os
+    assert "GVDP_AUTH_DELEGUEE" not in os.environ
+    assert "GVDP_COMPTES" not in os.environ
+    assert os.environ.get("AUTRE_CLE") == "valeur"
+
+
+def test_un_identifiant_inconnu_coute_le_meme_temps_qu_un_connu(client, monkeypatch):
+    """Sortir tôt sur un identifiant inconnu créait un oracle d'énumération :
+    24 ms contre 97 ms pour un compte existant. Mesuré par la relecture."""
+    import time
+
+    # Arrange
+    monkeypatch.setenv("GVDP_COMPTES", f"florent:{securite.empreinte('secret')}")
+
+    def duree(nom):
+        debut = time.perf_counter()
+        client.get("/api/projets", headers=entete_basic(nom, "faux"))
+        return time.perf_counter() - debut
+
+    # Act : on prend le minimum, moins bruité que la moyenne
+    connu = min(duree("florent") for _ in range(3))
+    inconnu = min(duree("jamais-vu") for _ in range(3))
+
+    # Assert : l'écart doit rester dans le bruit, pas dans un facteur 4
+    assert inconnu > connu * 0.5, f"connu={connu:.3f}s inconnu={inconnu:.3f}s"
+
+
+def test_en_mode_delegue_l_identite_de_l_hebergeur_est_reprise(client, monkeypatch):
+    """Azure Container Apps injecte X-MS-CLIENT-PRINCIPAL-NAME, qu'aucun code
+    ne lisait : tout le monde était anonyme en mode hébergé."""
+    # Arrange
+    monkeypatch.setenv("GVDP_AUTH_DELEGUEE", "1")
+
+    # Act
+    r = client.post("/api/projets", json={"nom": "Projet BE"},
+                    headers={"X-Ms-Client-Principal-Name": "hajar@greenvolt.fr"})
+
+    # Assert
+    assert r.json()["projet"]["modifie_par"] == "hajar@greenvolt.fr"
+
+
+def test_en_mode_delegue_l_identite_ne_peut_pas_etre_usurpee(client, monkeypatch):
+    """Sans l'en-tête de l'hébergeur, un client ne doit pas pouvoir se déclarer
+    qui il veut en envoyant lui-même X-Utilisateur."""
+    # Arrange
+    monkeypatch.setenv("GVDP_AUTH_DELEGUEE", "1")
+
+    # Act
+    r = client.post("/api/projets", json={"nom": "Projet BE"},
+                    headers={"X-Utilisateur": "florent"})
+
+    # Assert : l'en-tête falsifié est écarté, on retombe sur le compte du serveur
+    assert r.json()["projet"]["modifie_par"] != "florent"
+
+
+def test_en_mode_delegue_l_entete_de_l_hebergeur_prime_sur_celui_du_client(client, monkeypatch):
+    monkeypatch.setenv("GVDP_AUTH_DELEGUEE", "1")
+    r = client.post("/api/projets", json={"nom": "Projet BE"},
+                    headers={"X-Ms-Client-Principal-Name": "hajar@greenvolt.fr",
+                             "X-Utilisateur": "florent"})
+    assert r.json()["projet"]["modifie_par"] == "hajar@greenvolt.fr"

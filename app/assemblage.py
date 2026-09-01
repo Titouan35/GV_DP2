@@ -410,7 +410,8 @@ def _slide_notice(prs, projet, assets):
     _entete(slide, "Notice descriptive")
     if not any((sections.get(c) or "").strip() for c in TITRES):
         _placeholder_zone(slide, "Notice à générer",
-                          "Générez et relisez la notice à l'étape 5 de l'outil avant l'export.")
+                          f"Générez et relisez la notice à l'étape {regles.ETAPE_NOTICE_CERFA} "
+                          "de l'outil avant l'export.")
         _cartouche(slide, projet, "Notice", VIOLET, BLANC)
         return slide
 

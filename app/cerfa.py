@@ -11,6 +11,7 @@ avant dépôt (aucune case à risque n'est cochée automatiquement).
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from pypdf import PdfReader, PdfWriter
@@ -35,8 +36,7 @@ def _champs_demandeur(projet: dict) -> dict:
         champs["D2S_siret"] = (mo.get("siret") or "").replace(" ", "")
         champs["D2J_type"] = mo.get("type") or ""
         champs["D2N_nom"] = mo.get("representant") or ""
-    # adresse du demandeur : non structurée chez nous → tout dans « voie »
-    champs["D3V_voie"] = mo.get("adresse") or ""
+    champs.update(_adresse_demandeur(mo.get("adresse")))
     champs["D3T_telephone"] = mo.get("telephone") or ""
     if mo.get("email"):
         champs["D5GE1_email"] = mo["email"]
@@ -45,6 +45,43 @@ def _champs_demandeur(projet: dict) -> dict:
         # Le module promettait dans son en-tête de ne cocher aucune case à
         # risque, et cochait celle-là. Elle reste à la main du déclarant.
     return champs
+
+
+# Le formulaire découpe l'adresse du demandeur en cases distinctes, avec des
+# longueurs contraintes : numéro (10), voie (40), code postal (5), localité (60).
+# L'outil, lui, ne stocke qu'un texte libre. Tout déverser dans « Voie » la
+# tronquait à 40 caractères (« Immeuble Le Danica, 21 avenue Georges Pompid »)
+# et laissait le code postal et la localité vides, alors que l'information
+# était là. Défaut relevé par la relecture du 01/09/2026.
+_RE_ADRESSE = re.compile(
+    r"^\s*(?P<numero>\d{1,4}\s*(?:bis|ter|quater)?)?\s*"
+    r"(?P<voie>.*?)\s*,?\s*"
+    r"(?P<cp>\d{5})\s+(?P<localite>[^,]+?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _adresse_demandeur(adresse: str | None) -> dict:
+    """Découpe au mieux l'adresse libre du demandeur dans les cases du Cerfa.
+
+    Si le découpage échoue, on ne perd rien : le texte part dans « Voie »,
+    tronqué à la longueur du champ, ce que faisait déjà l'ancien code.
+    """
+    adresse = (adresse or "").strip()
+    if not adresse:
+        return {}
+    m = _RE_ADRESSE.match(adresse)
+    if not m:
+        return {"D3V_voie": adresse[:40]}
+    champs = {
+        "D3V_voie": (m.group("voie") or "")[:40],
+        "D3C_code": m.group("cp"),
+        "D3L_localite": (m.group("localite") or "")[:60],
+    }
+    numero = (m.group("numero") or "").strip()
+    if numero:
+        champs["D3N_numero"] = numero[:10]
+    return {k: v for k, v in champs.items() if v}
 
 
 def _champs_terrain(projet: dict) -> dict:

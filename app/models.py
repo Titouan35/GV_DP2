@@ -80,6 +80,10 @@ class Notice(BaseModel):
     sections: dict[str, str] = Field(default_factory=dict)  # 7 sections
     genere_par_ia: bool = False
     valide_humain: bool = False
+    # Valeurs du projet au moment de la rédaction (app/notice.py:CLES_ANCRAGE).
+    # Permet de dire si le texte a divergé des données, sans le deviner par
+    # recherche de chaîne. Vide pour les notices écrites avant le 01/09/2026.
+    valeurs: dict[str, str] = Field(default_factory=dict)
 
 
 class Projet(BaseModel):

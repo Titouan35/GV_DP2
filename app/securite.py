@@ -49,7 +49,22 @@ from starlette.responses import Response
 # doit répondre avant qu'un utilisateur ne soit connecté.
 CHEMINS_LIBRES = frozenset({"/api/sante"})
 
+# En-tetes d'identite injectes par les hebergeurs en mode delegue, par ordre de
+# preference. Azure Container Apps (EasyAuth) utilise les deux premiers ; les
+# reverse proxies d'entreprise le troisieme.
+ENTETES_IDENTITE_AMONT = (
+    "x-ms-client-principal-name",
+    "x-ms-client-principal-id",
+    "x-forwarded-user",
+)
+
 ITERATIONS = 200_000
+
+
+# Empreinte d'un mot de passe qui n'existe pas : sert a faire durer une
+# tentative sur un identifiant inconnu aussi longtemps que sur un identifiant
+# connu (voir _authentifier).
+_LEURRE = ("0" * 32) + "$" + ("0" * 64)
 
 
 class ConfigurationDangereuse(RuntimeError):
@@ -165,7 +180,13 @@ class Authentification(BaseHTTPMiddleware):
 
         definis = comptes()
         if not definis:
-            # mode local ou délégué : verifier_configuration a déjà tranché
+            if auth_deleguee():
+                # L'hebergeur authentifie en amont. Il injecte l'identite dans
+                # SES en-tetes, que l'application ne lisait pas : tout le monde
+                # etait donc anonyme, et n'importe qui pouvait s'attribuer
+                # l'identite d'un collegue via X-Utilisateur.
+                return await self._suivre_identite_amont(request, call_next)
+            # mode local : verifier_configuration a deja tranche
             return await call_next(request)
 
         utilisateur = self._authentifier(request, definis)
@@ -184,6 +205,22 @@ class Authentification(BaseHTTPMiddleware):
         entetes.append((b"x-utilisateur", utilisateur.encode("utf-8")))
         return await call_next(request)
 
+    async def _suivre_identite_amont(self, request, call_next):
+        """Reprend l'identite injectee par l'hebergeur, et interdit l'usurpation."""
+        identite = None
+        for entete in ENTETES_IDENTITE_AMONT:
+            valeur = (request.headers.get(entete) or "").strip()
+            if valeur:
+                identite = valeur[:80]
+                break
+        request.scope["headers"] = [
+            (cle, valeur) for cle, valeur in request.scope["headers"]
+            if cle != b"x-utilisateur"
+        ]
+        if identite:
+            request.scope["headers"].append((b"x-utilisateur", identite.encode("utf-8")))
+        return await call_next(request)
+
     @staticmethod
     def _authentifier(request, definis: dict[str, str]) -> str | None:
         entete = request.headers.get("authorization") or ""
@@ -195,10 +232,14 @@ class Authentification(BaseHTTPMiddleware):
         except (binascii.Error, UnicodeDecodeError):
             return None
         nom, _, mot_de_passe = decode.partition(":")
-        attendu = definis.get(nom)
-        if not attendu or not _verifier(mot_de_passe, attendu):
-            return None
-        return nom
+        # Sortir tot sur un identifiant inconnu creait un oracle : 24 ms pour un
+        # inconnu contre 97 ms pour un compte existant (mesure de la relecture
+        # du 01/09/2026). On deroule donc toujours un calcul de meme cout, avec
+        # une empreinte leurre. Cela ferme aussi le levier de saturation CPU par
+        # identifiant devine.
+        attendu = definis.get(nom) or _LEURRE
+        valide = _verifier(mot_de_passe, attendu)
+        return nom if (valide and nom in definis) else None
 
 
 # --------------------------------------------------------- outil en ligne de commande

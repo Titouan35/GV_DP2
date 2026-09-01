@@ -368,17 +368,23 @@ def test_notice_projet_minimal_marque_les_trous_sans_inventer():
 def test_notice_dit_explicitement_labsence_de_donnee_urbanisme():
     """Zonage, ABF et risques absents : la notice le dit, elle ne se tait pas.
 
-    Une notice muette laisserait croire que le point a été vérifié. Ces trois
-    phrases sont la formulation opposable devant l'instructeur.
+    Corrigé le 01/09/2026 après relecture adversariale. Ce test exigeait
+    auparavant les phrases « aucun périmètre de protection patrimoniale » et
+    « Aucun risque majeur » alors que RIEN n'avait été interrogé : c'étaient
+    des affirmations fausses, sur lesquelles un instructeur peut s'appuyer.
+    La notice dit maintenant que le point reste à vérifier. Voir
+    tests/test_notice_affirmations.py pour le détail des trois cas.
     """
-    # Act
+    # Act : étape urbanisme jamais lancée
     sections = generer_sections({"nom": "X", "localisation": {"commune": "Y"}})
 
     # Assert
     texte = sections["reglementaire"]
     assert "non couvert par le GPU" in texte
-    assert "aucun périmètre de protection patrimoniale" in texte
-    assert "Aucun risque majeur" in texte
+    assert "reste à vérifier" in texte        # ABF : non interrogé
+    assert "restent à vérifier" in texte      # risques : non interrogés
+    assert "aucun périmètre de protection patrimoniale" not in texte
+    assert "Aucun risque majeur" not in texte
     assert "R.421-9" in texte     # base réglementaire de la DP
 
 

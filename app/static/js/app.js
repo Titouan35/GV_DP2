@@ -812,6 +812,12 @@ function renderTypeSelector() {
     </button>`).join("");
   box.querySelectorAll("[data-type]").forEach((b) => b.addEventListener("click", async () => {
     if (b.dataset.type === cur) return;
+    // La route renvoie le projet RELU DU DISQUE. Sans cette sauvegarde
+    // préalable, une valeur en cours de frappe dans le formulaire juste
+    // au-dessus (l'autosave n'ayant pas encore couru, il attend 900 ms)
+    // disparaissait à l'écran au clic sur une vignette. Ce risque n'existait
+    // pas quand le sélecteur vivait sur un écran isolé.
+    if (state.dirty) { try { await sauvegarder(); } catch (e) { return; } }
     const d = await api(`/api/projets/${state.projet.id}/ombriere/type`, {
       method: "PUT", body: JSON.stringify({ famille: b.dataset.type }),
     });

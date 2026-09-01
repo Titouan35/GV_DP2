@@ -57,7 +57,10 @@ if not exist "%PYEXE%" (
 )
 
 REM --- 2. Deja demarre ? On ouvre le navigateur au lieu d'echouer sur le port.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try{$null=Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri $env:URL; exit 0}catch{exit 1}" >nul 2>&1
+REM     On interroge /api/sante et on verifie que c'est bien GV_DP qui repond :
+REM     n'importe quel autre outil ecoutant sur 8420 faisait ouvrir le navigateur
+REM     dessus et abandonner le lancement (releve le 01/09/2026).
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try{$r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri ($env:URL + '/api/sante'); if(($r.Content | ConvertFrom-Json).app -eq 'GV_DP'){exit 0}else{exit 1}}catch{exit 1}" >nul 2>&1
 if not errorlevel 1 (
   echo.
   echo   GV_DP tourne deja. Ouverture du navigateur sur %URL%
@@ -65,6 +68,20 @@ if not errorlevel 1 (
   start "" "%URL%"
   timeout /t 3 >nul
   exit /b 0
+)
+
+REM --- 2 bis. Port pris par un AUTRE programme : le dire, plutot que de laisser
+REM     uvicorn echouer sur un message de socket incomprehensible.
+netstat -ano | findstr /R /C:"LISTENING" | findstr /C:":%PORT% " >nul 2>&1
+if not errorlevel 1 (
+  echo.
+  echo   [X] Le port %PORT% est deja utilise par un autre programme
+  echo       ^(ce n'est pas GV_DP : la verification vient d'echouer^).
+  echo.
+  echo   Ferme ce programme, ou previens Florent pour changer de port.
+  echo.
+  pause
+  exit /b 1
 )
 
 REM --- 3. Interdire l'ecriture des .pyc : le runtime est partage par OneDrive,

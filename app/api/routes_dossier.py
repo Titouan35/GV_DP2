@@ -24,6 +24,9 @@ def generer_notice(projet_id: str, force: int = 0):
         if force or not (projet.notice.sections.get(cle) or "").strip():
             projet.notice.sections[cle] = texte
     projet.notice.genere_par_ia = False  # gabarit déterministe (pas de LLM)
+    # empreinte des valeurs portées par le texte : c'est elle qui permettra de
+    # dire plus tard si la notice a divergé des données du projet
+    projet.notice.valeurs = notice.valeurs_ancrage(data)
     projet.date_modification = datetime.now().isoformat(timespec="seconds")
     _sauver(projet)
     return {

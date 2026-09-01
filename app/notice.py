@@ -56,9 +56,7 @@ TEMPLATES: dict[str, str] = {
         "d'insertion (pièce DP6) illustre le projet avant et après travaux depuis l'espace public."
     ),
     "reglementaire": (
-        "Au document d'urbanisme, le terrain relève du {{zonage}}. {{abf}} {{risques}} Compte "
-        "tenu de ses caractéristiques, le projet relève de la déclaration préalable (article "
-        "R.421-9 du code de l'urbanisme)."
+        "Au document d'urbanisme, le terrain relève du {{zonage}}. {{abf}} {{risques}} {{regime}}"
     ),
     "acces_reseaux": (
         "Les accès et circulations du parking sont conservés. L'électricité produite est injectée "
@@ -92,7 +90,12 @@ def _valeurs(projet: dict) -> dict[str, str]:
     parcelles = loc.get("parcelles") or []
     surface = sum(p.get("contenance_m2") or 0 for p in parcelles) or None
     refs = ", ".join(f"{p.get('section')} {p.get('numero')}" for p in parcelles) or "—"
-    p = parametres_effectifs(omb) if (omb.get("famille") or omb.get("puissance_kwc")) else None
+    # Cotes du catalogue : UNIQUEMENT si un type d'ombrière a été choisi.
+    # Avec la seule puissance, parametres_effectifs retombe silencieusement sur
+    # START PLAINE Bas et la notice affirmait ses cotes (5 m de profondeur,
+    # 3,50 m hors tout) alors que rien n'avait été saisi. C'est exactement le
+    # défaut corrigé dans le Cerfa le 01/09/2026, qui vivait encore ici.
+    p = parametres_effectifs(omb) if omb.get("famille") else None
 
     zones = ((urb.get("zonage") or {}).get("zones")) or []
     zonage = (
@@ -100,21 +103,33 @@ def _valeurs(projet: dict) -> dict[str, str]:
         if zones else
         "document d'urbanisme non couvert par le GPU à la date de constitution du dossier"
     )
+    # « Aucun risque recensé » et « aucun périmètre de protection » sont des
+    # AFFIRMATIONS. Elles n'ont le droit d'être écrites que si les APIs ont
+    # réellement répondu. Tant qu'elles n'ont pas été interrogées, la notice
+    # dit qu'il reste à vérifier, elle ne rassure pas à tort.
+    risques_interroges = urb.get("risques") is not None
     risques = ((urb.get("risques") or {}).get("risques")) or []
-    risques_txt = (
-        "Des risques sont recensés sur la commune (Géorisques) : "
-        + ", ".join(r.get("libelle", "") for r in risques) + "."
-        if risques else
-        "Aucun risque majeur n'est recensé sur la commune dans Géorisques à la date de "
-        "constitution du dossier."
-    )
-    abf_txt = (
-        "Le terrain est situé en secteur protégé au titre des abords des monuments historiques "
-        "ou d'un site, l'avis de l'architecte des Bâtiments de France est requis."
-        if urb.get("secteur_abf") else
-        "Le terrain n'est situé dans aucun périmètre de protection patrimoniale identifié "
-        "(abords de monument historique, site, SPR)."
-    )
+    if risques:
+        risques_txt = ("Des risques sont recensés sur la commune (Géorisques) : "
+                       + ", ".join(r.get("libelle", "") for r in risques) + ".")
+    elif risques_interroges:
+        risques_txt = ("Aucun risque majeur n'est recensé sur la commune dans Géorisques à la "
+                       "date de constitution du dossier.")
+    else:
+        risques_txt = ("Les risques recensés sur la commune restent à vérifier auprès de "
+                       "Géorisques.")
+
+    abf = urb.get("secteur_abf")
+    if abf:
+        abf_txt = ("Le terrain est situé en secteur protégé au titre des abords des monuments "
+                   "historiques ou d'un site, l'avis de l'architecte des Bâtiments de France "
+                   "est requis.")
+    elif abf is False:
+        abf_txt = ("Le terrain n'est situé dans aucun périmètre de protection patrimoniale "
+                   "identifié (abords de monument historique, site, SPR).")
+    else:
+        abf_txt = ("La présence d'un périmètre de protection patrimoniale (abords de monument "
+                   "historique, site, SPR) reste à vérifier.")
     double = bool(p and p.get("double"))
     toiture = ("toiture à double pente (structure en T)" if double else "toiture monopente")
     md = ", ".join(filter(None, [
@@ -145,6 +160,20 @@ def _valeurs(projet: dict) -> dict[str, str]:
     else:
         trame = "une trame de poteaux régulière"
 
+    # Le régime était affirmé en dur : « le projet relève de la déclaration
+    # préalable ». La notice le disait même pour un projet que le moteur classe
+    # en permis de construire (au-delà de 3 MWc, ou en secteur ABF), pendant que
+    # le Cerfa, lui, refusait de se générer. On lit désormais le moteur.
+    from . import regles          # local : évite un cycle d'import
+    reg = regles.determiner_regime(omb.get("puissance_kwc"), urb.get("secteur_abf"))
+    if reg["regime"] == regles.REGIME_DP:
+        regime_txt = ("Compte tenu de ses caractéristiques, le projet relève de la déclaration "
+                      "préalable (article R.421-9 du code de l'urbanisme).")
+    else:
+        regime_txt = ("Compte tenu de ses caractéristiques (" + " ; ".join(reg["raisons"])
+                      + "), le projet relève du permis de construire et non de la déclaration "
+                      "préalable.")
+
     return {
         "dimensions": dimensions,
         "trame": trame,
@@ -174,7 +203,29 @@ def _valeurs(projet: dict) -> dict[str, str]:
         "zonage": zonage,
         "abf": abf_txt,
         "risques": risques_txt,
+        "regime": regime_txt,
     }
+
+
+# Valeurs qui, une fois écrites dans la notice, la rendent FAUSSE si elles
+# changent ensuite. Enregistrées à la génération (voir routes_dossier) pour que
+# app/coherence.py compare des faits au lieu de deviner par recherche de texte.
+# Deviner produisait les deux erreurs : une notice reformulée par le BE était
+# déclarée périmée, et une notice citant la bonne commune ET l'ancienne passait
+# au vert.
+CLES_ANCRAGE = [
+    "adresse", "commune", "code_postal", "code_insee", "parcelles", "surface",
+    "raison_sociale", "representant", "siret",
+    "coupe", "dimensions", "trame", "pente", "hauteur_max", "hauteur_bas",
+    "puissance_kwc", "nb_places", "module_puissance", "module_dimensions",
+    "zonage", "abf", "risques", "regime",
+]
+
+
+def valeurs_ancrage(projet: dict) -> dict[str, str]:
+    """Empreinte des valeurs portées par le texte de la notice."""
+    vals = _valeurs(projet)
+    return {cle: vals.get(cle, "") for cle in CLES_ANCRAGE}
 
 
 def _remplir(tpl: str, vals: dict[str, str]) -> str:

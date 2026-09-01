@@ -133,9 +133,12 @@ def test_notice_redigee_avec_une_autre_commune_signalee():
     # Act
     anomalies = coherence.controler(projet)
 
-    # Assert
-    assert "notice_perimee_commune" in codes(anomalies)
-    assert "notice_perimee_adresse" in codes(anomalies)
+    # Assert : sans empreinte (notice d'avant le 01/09/2026), le contrôle
+    # retombe sur la recherche de texte. C'est une heuristique, donc elle
+    # AVERTIT sans bloquer le dépôt.
+    assert "notice_peut_etre_perimee_commune" in codes(anomalies)
+    assert "notice_peut_etre_perimee_adresse" in codes(anomalies)
+    assert all(a["gravite"] == coherence.SERIEUSE for a in anomalies)
 
 
 def test_notice_a_jour_ne_declenche_rien():
@@ -302,3 +305,121 @@ def test_note_de_travail_trop_courte_n_est_pas_jugee():
 
     # Act / Assert
     assert coherence.controler(projet) == []
+
+
+# ------------------------------------------- notice : comparaison par empreinte
+
+def test_notice_avec_empreinte_detecte_une_valeur_qui_a_change():
+    """Depuis le 01/09/2026 la notice enregistre les valeurs qui la portent.
+
+    On compare donc des faits au lieu de chercher une chaîne. La recherche de
+    chaîne se trompait dans les deux sens, et ne couvrait que 2 des 23 valeurs.
+    """
+    # Arrange : notice rédigée quand la puissance valait 250 kWc
+    from app import notice as mod_notice
+    projet = projet_coherent()
+    empreinte = mod_notice.valeurs_ancrage(projet)
+    projet["notice"] = {"sections": {"presentation": "Texte relu par le BE."},
+                        "valeurs": empreinte}
+    projet["ombriere"]["puissance_kwc"] = 999      # la puissance change après coup
+
+    # Act
+    anomalies = coherence.controler(projet)
+
+    # Assert
+    anomalie = next(a for a in anomalies if a["code"] == "notice_perimee")
+    assert anomalie["gravite"] == coherence.BLOQUANTE
+    assert "puissance" in anomalie["message"]
+    # le message donne les DEUX valeurs, sinon on ne sait pas quoi corriger
+    assert "999" in anomalie["message"]
+
+
+def test_notice_reformulee_a_la_main_n_est_pas_declaree_perimee():
+    """Faux positif relevé par la relecture : une notice relue et reformulée
+    par le bureau d'études ne répète pas forcément l'adresse mot pour mot. La
+    déclarer périmée poussait à la régénérer, donc à détruire la relecture."""
+    # Arrange : texte entièrement réécrit, mais données inchangées
+    from app import notice as mod_notice
+    projet = projet_coherent()
+    projet["notice"] = {
+        "sections": {"presentation": "Le parking du magasin, en entrée de ville, "
+                                     "accueille un projet d'ombrières."},
+        "valeurs": mod_notice.valeurs_ancrage(projet),
+    }
+
+    # Act / Assert
+    assert coherence.controler(projet) == []
+
+
+def test_notice_citant_la_bonne_commune_ET_l_ancienne_est_detectee():
+    """Faux négatif relevé par la relecture : le test de sous-chaîne passait au
+    vert dès que la bonne commune apparaissait quelque part, même si l'ancienne
+    restait dans une autre section."""
+    # Arrange : la notice porte l'empreinte du temps où le projet était à Anse
+    from app import notice as mod_notice
+    ancien_projet = projet_coherent()
+    ancien_projet["localisation"] = {**ancien_projet["localisation"],
+                                     "commune": "Anse", "code_insee": "69009"}
+    empreinte = mod_notice.valeurs_ancrage(ancien_projet)
+
+    projet = projet_coherent()
+    projet["notice"] = {
+        "sections": {"presentation": "Projet à Montréal-la-Cluse.",
+                     "etat_initial": "Le terrain se situe sur la commune de Anse."},
+        "valeurs": empreinte,
+    }
+
+    # Act / Assert
+    assert "notice_perimee" in codes(coherence.controler(projet))
+
+
+# --------------------------------------------------------- typographie
+
+def test_une_commune_collee_depuis_word_ne_declenche_pas_de_faux_positif():
+    """Word remplace l'apostrophe droite par une apostrophe courbe. Sans
+    normalisation, « L'Arbresle » et « L’Arbresle » sont deux communes, et le
+    contrôle bloquait un dépôt légitime."""
+    # Arrange
+    projet = projet_coherent()
+    projet["localisation"] = {**projet["localisation"], "commune": "L'Arbresle",
+                              "adresse": "1 rue de L'Arbresle", "code_insee": "69010",
+                              "parcelles": []}
+    projet["notice"] = {"sections": {"presentation":
+        "Le présent dossier de déclaration préalable porte sur l'installation "
+        "d'ombrières photovoltaïques sur le parc de stationnement existant situé "
+        "1 rue de L\u2019Arbresle, commune de L\u2019Arbresle. Le projet s'inscrit "
+        "dans le cadre de la loi APER."}}
+
+    # Act / Assert
+    assert coherence.controler(projet) == []
+
+
+# --------------------------------------------------------------- régime
+
+def test_un_projet_en_permis_de_construire_est_bloque():
+    """Trou critique relevé par la relecture : au-delà de 3 MWc le Cerfa
+    refusait de se générer, mais le dossier PPTX sortait « prêt au dépôt »."""
+    # Arrange
+    projet = projet_coherent()
+    projet["ombriere"]["puissance_kwc"] = 3200
+
+    # Act
+    anomalies = coherence.controler(projet)
+
+    # Assert
+    anomalie = next(a for a in anomalies if a["code"] == "regime_permis_de_construire")
+    assert anomalie["gravite"] == coherence.BLOQUANTE
+    assert "3 MWc" in anomalie["message"]
+    assert coherence.bloquantes(projet)
+
+
+def test_le_secteur_abf_bascule_aussi_en_permis_de_construire():
+    projet = projet_coherent()
+    projet["urbanisme"] = {"secteur_abf": True}
+    assert "regime_permis_de_construire" in codes(coherence.controler(projet))
+
+
+def test_un_projet_sous_le_seuil_n_est_pas_bloque():
+    projet = projet_coherent()
+    projet["ombriere"]["puissance_kwc"] = 2999
+    assert "regime_permis_de_construire" not in codes(coherence.controler(projet))

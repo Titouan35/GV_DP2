@@ -238,3 +238,54 @@ def test_la_puissance_est_ecrite_avec_une_virgule_decimale(assets):
     # Assert
     assert valeurs["C2ZP1_crete"] == "157,78"
     assert "157,78 kWc" in valeurs["C2ZD1_description"]
+
+
+# ------------------------------ adresse du demandeur (relecture du 01/09)
+
+def test_l_adresse_du_demandeur_est_decoupee_dans_les_bonnes_cases(assets):
+    """Le formulaire a des cases distinctes : numéro, voie, code postal,
+    localité. Tout déverser dans « Voie » la tronquait à 40 caractères et
+    laissait le code postal et la localité vides."""
+    # Arrange
+    p = projet(mo={"adresse": "Immeuble Le Danica, 21 avenue Georges Pompidou, 69003 Lyon"})
+
+    # Act
+    valeurs, _ = remplir(p)
+
+    # Assert
+    assert valeurs["D3C_code"] == "69003"
+    assert valeurs["D3L_localite"] == "Lyon"
+    assert "Danica" in valeurs["D3V_voie"]
+
+
+def test_le_numero_de_voie_est_isole_quand_il_est_reconnaissable(assets):
+    valeurs, _ = remplir(projet(mo={"adresse": "12 bis avenue de la Gare, 01000 Bourg-en-Bresse"}))
+    assert valeurs["D3N_numero"] == "12 bis"
+    assert valeurs["D3V_voie"] == "avenue de la Gare"
+    assert valeurs["D3L_localite"] == "Bourg-en-Bresse"
+
+
+def test_une_adresse_non_reconnue_n_est_pas_perdue(assets):
+    """Le découpage est au mieux : s'il échoue, on ne perd rien, on retombe sur
+    le comportement précédent."""
+    valeurs, _ = remplir(projet(mo={"adresse": "Lieu-dit Les Granges"}))
+    assert valeurs["D3V_voie"] == "Lieu-dit Les Granges"
+    assert not valeurs.get("D3C_code")
+
+
+def test_toutes_les_valeurs_tiennent_dans_leurs_cases_sur_une_adresse_longue(assets):
+    """Le contrôle générique de MaxLen ne valait que pour l'adresse courte du
+    projet de test : on l'éprouve sur un cas réellement long."""
+    # Arrange
+    p = projet(mo={"adresse": "Immeuble Le Danica, 21 avenue Georges Pompidou, 69003 Lyon"})
+
+    # Act
+    chemin, _, _ = cerfa.preremplir(p)
+
+    # Assert
+    for page in PdfReader(str(chemin)).pages:
+        for annot in (page.get("/Annots") or []):
+            champ = annot.get_object()
+            nom, maxlen, valeur = champ.get("/T"), champ.get("/MaxLen"), champ.get("/V")
+            if nom and maxlen and isinstance(valeur, str):
+                assert len(valeur) <= int(maxlen), f"{nom} : {valeur!r} > {maxlen}"

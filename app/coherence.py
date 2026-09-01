@@ -40,10 +40,24 @@ ATTENTION = "attention"
 _ORDRE = {BLOQUANTE: 0, SERIEUSE: 1, ATTENTION: 2}
 
 
+# Caractères que Word, les exports PDF et les copier-coller substituent aux
+# caractères ASCII. Sans cette table, « L'Arbresle » saisi dans l'outil et
+# « L’Arbresle » collé depuis Word sont deux communes différentes, et le
+# contrôle bloque un dépôt parfaitement légitime.
+_EQUIVALENCES = {
+    "’": "'", "ʼ": "'", "‘": "'", "‛": "'",  # apostrophes
+    "‐": "-", "‑": "-", "‒": "-", "–": "-",  # tirets
+    "—": "-", "−": "-",
+    " ": " ", " ": " ", " ": " ", " ": " ",  # espaces
+}
+
+
 def _norm(texte: str | None) -> str:
-    """Comparaison de libellés insensible à la casse et aux accents."""
+    """Comparaison de libellés insensible à la casse, aux accents et à la
+    typographie (apostrophes courbes, tirets longs, espaces insécables)."""
     if not texte:
         return ""
+    texte = "".join(_EQUIVALENCES.get(c, c) for c in texte)
     sans_accent = unicodedata.normalize("NFKD", texte)
     sans_accent = "".join(c for c in sans_accent if not unicodedata.combining(c))
     return " ".join(sans_accent.lower().split())
@@ -110,18 +124,31 @@ def _controler_adresse(projet: dict) -> list[dict]:
 
 # --------------------------------------------------------------------- notice
 
-# Valeurs du projet reprises telles quelles dans le texte de la notice. Si
-# l'une d'elles a changé depuis la rédaction, le texte ment.
-_ANCRAGES_NOTICE = [
-    ("commune", lambda p: ((p.get("localisation") or {}).get("commune")),
-     "la commune actuelle"),
-    ("adresse", lambda p: ((p.get("localisation") or {}).get("adresse")),
-     "l'adresse actuelle"),
+# Libellés lisibles des valeurs d'ancrage de la notice (app/notice.py).
+_LIBELLES_ANCRAGE = {
+    "adresse": "l'adresse", "commune": "la commune", "code_postal": "le code postal",
+    "code_insee": "le code INSEE", "parcelles": "les parcelles",
+    "surface": "la surface du terrain", "raison_sociale": "le maître d'ouvrage",
+    "representant": "le représentant", "siret": "le SIRET",
+    "coupe": "le type d'ombrière", "dimensions": "les dimensions",
+    "trame": "la trame", "pente": "la pente", "hauteur_max": "la hauteur maximale",
+    "hauteur_bas": "la hauteur bas de pente", "puissance_kwc": "la puissance",
+    "nb_places": "le nombre de places", "module_puissance": "la puissance des modules",
+    "module_dimensions": "les dimensions des modules", "zonage": "le zonage",
+    "abf": "le secteur ABF", "risques": "les risques", "regime": "le régime d'urbanisme",
+}
+
+# Repli pour les notices rédigées avant le 01/09/2026, qui ne portent pas
+# d'empreinte : on ne peut que chercher la valeur dans le texte. C'est une
+# HEURISTIQUE (une notice reformulée par le BE peut ne pas répéter l'adresse
+# mot pour mot), donc elle ne bloque pas le dépôt, elle avertit.
+_ANCRAGES_REPLI = [
+    ("commune", lambda p: ((p.get("localisation") or {}).get("commune")), "la commune"),
+    ("adresse", lambda p: ((p.get("localisation") or {}).get("adresse")), "l'adresse"),
 ]
 
 # En dessous de cette longueur, le texte n'est pas une notice mais une amorce
-# ou une note de travail. On ne peut rien conclure de l'absence d'une adresse
-# dans trois mots, et crier au loup ferait ignorer les vraies alertes.
+# ou une note de travail : le repli ne peut rien en conclure.
 _LONGUEUR_NOTICE_JUGEABLE = 200
 
 
@@ -132,25 +159,71 @@ def _controler_notice(projet: dict) -> list[dict]:
     jamais écraser un texte relu par le BE). Conséquence : après correction de
     l'adresse, la notice garde l'ancienne. On ne peut pas la réécrire d'office
     sans détruire le travail de relecture, donc on signale.
+
+    Depuis le 01/09/2026, la notice enregistre l'empreinte des valeurs qui la
+    portent (app/notice.py:valeurs_ancrage). On COMPARE donc des faits, au lieu
+    de chercher une chaîne dans un texte. La recherche de chaîne se trompait
+    dans les deux sens : elle déclarait périmée une notice reformulée à la main
+    par le bureau d'études, et laissait passer une notice qui citait la bonne
+    commune ET l'ancienne.
     """
-    sections = (projet.get("notice") or {}).get("sections") or {}
+    bloc = projet.get("notice") or {}
+    sections = bloc.get("sections") or {}
     texte = " ".join((v or "") for v in sections.values()).strip()
-    if len(texte) < _LONGUEUR_NOTICE_JUGEABLE:
+    if not texte:
         return []
 
+    empreinte = bloc.get("valeurs") or {}
+    if empreinte:
+        return _notice_par_empreinte(projet, empreinte)
+    return _notice_par_recherche(projet, texte)
+
+
+def _notice_par_empreinte(projet: dict, empreinte: dict) -> list[dict]:
+    """Comparaison exacte : ce qui a changé depuis la rédaction."""
+    from . import notice as mod_notice          # local : évite un cycle d'import
+
+    actuelles = mod_notice.valeurs_ancrage(projet)
+    divergences = [
+        cle for cle, valeur in empreinte.items()
+        if _norm(valeur) != _norm(actuelles.get(cle, ""))
+    ]
+    if not divergences:
+        return []
+
+    details = ", ".join(
+        f"{_LIBELLES_ANCRAGE.get(cle, cle)} (« {empreinte[cle]} » dans la notice, "
+        f"« {actuelles.get(cle, '')} » dans le projet)"
+        for cle in sorted(divergences)[:4]
+    )
+    reste = len(divergences) - 4
+    if reste > 0:
+        details += f", et {reste} autre(s)"
+    return [_anomalie(
+        "notice_perimee", BLOQUANTE,
+        f"La notice a été rédigée avec d'autres valeurs : {details}. Elle n'est "
+        "pas resynchronisée automatiquement, pour ne pas écraser une relecture. "
+        "Régénérez les sections concernées, ou corrigez le texte à la main.",
+        "Étape 4, notice descriptive")]
+
+
+def _notice_par_recherche(projet: dict, texte: str) -> list[dict]:
+    """Repli heuristique pour les notices sans empreinte (avant le 01/09/2026)."""
+    if len(texte) < _LONGUEUR_NOTICE_JUGEABLE:
+        return []
     texte_norm = _norm(texte)
     anomalies = []
-    for code, extraire, libelle in _ANCRAGES_NOTICE:
+    for code, extraire, libelle in _ANCRAGES_REPLI:
         valeur = (extraire(projet) or "").strip()
         if not valeur or len(valeur) < 3:
             continue
         if _norm(valeur) not in texte_norm:
             anomalies.append(_anomalie(
-                f"notice_perimee_{code}", BLOQUANTE,
-                f"La notice ne mentionne pas {libelle} du projet "
-                f"(« {valeur} »). Elle a été rédigée avec d'autres valeurs et "
-                "n'est pas resynchronisée automatiquement, pour ne pas écraser "
-                "une relecture. Régénérez-la, ou corrigez le texte à la main.",
+                f"notice_peut_etre_perimee_{code}", SERIEUSE,
+                f"La notice ne mentionne pas {libelle} actuelle du projet "
+                f"(« {valeur} »). Cette notice date d'avant l'enregistrement des "
+                "valeurs de rédaction : vérifiez-la, ou régénérez-la pour que le "
+                "contrôle devienne exact.",
                 "Étape 4, notice descriptive"))
     return anomalies
 
@@ -200,9 +273,37 @@ def _controler_ombriere(projet: dict) -> list[dict]:
     return anomalies
 
 
+# ---------------------------------------------------------------- régime
+
+def _controler_regime(projet: dict) -> list[dict]:
+    """Un projet en permis de construire ne se dépose pas avec un dossier DP.
+
+    Trou relevé par la relecture du 01/09/2026 : au-delà de 3 MWc ou en secteur
+    ABF, le moteur classe le projet en PC. Le Cerfa refuse alors de se générer,
+    mais l'assemblage PPTX, lui, produisait un dossier qui s'annonçait complet
+    et prêt au dépôt. La pièce qui aurait alerté était justement celle qui
+    manquait, et son absence passait pour un simple « à pré-remplir ».
+    """
+    from . import regles                        # local : évite un cycle d'import
+
+    omb = projet.get("ombriere") or {}
+    urb = projet.get("urbanisme") or {}
+    reg = regles.determiner_regime(omb.get("puissance_kwc"), urb.get("secteur_abf"))
+    if reg["regime"] == regles.REGIME_DP:
+        return []
+    return [_anomalie(
+        "regime_permis_de_construire", BLOQUANTE,
+        "Ce projet relève du permis de construire (" + " ; ".join(reg["raisons"])
+        + "), pas de la déclaration préalable. Le dossier produit ici est un "
+          "dossier DP : il ne convient pas, et le Cerfa 16702 ne peut pas être "
+          "généré.",
+        "Étape 3, puissance et secteur ABF")]
+
+
 # --------------------------------------------------------------------- entrée
 
 CONTROLES = (
+    _controler_regime,
     _controler_parcelles,
     _controler_adresse,
     _controler_notice,
