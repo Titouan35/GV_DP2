@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import config, notice, regles
+from .. import coherence, config, notice, regles
 from ..assemblage import generer_dossier
 from ..cerfa import NUMERO_CERFA, preremplir
 from ..export_pdf import exporter_pdf
@@ -83,6 +83,16 @@ def assembler_dossier(projet_id: str, depot: int = 0):
     on assemble et on signale les manques en avertissements."""
     projet = _charger(projet_id)
     if depot:
+        # Deux refus distincts. L'incohérence passe en premier : un dossier
+        # complet dont les données se contredisent est plus dangereux qu'un
+        # dossier visiblement incomplet, parce que rien n'alerte le déposant.
+        incoherences = coherence.bloquantes(projet.model_dump())
+        if incoherences:
+            raise HTTPException(
+                status_code=409,
+                detail="Dossier incohérent pour un dépôt : "
+                       + " ; ".join(a["message"] for a in incoherences),
+            )
         manquantes = [
             f"{p['titre']} ({p['detail']})"
             for p in regles.completude(projet)["pieces"] if p["statut"] != "prete"

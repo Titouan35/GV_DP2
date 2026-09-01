@@ -573,8 +573,16 @@ def _generer_dossier_verrouille(projet: dict, projet_id: str) -> tuple[Path, lis
 
     evaluation = regles.evaluer(Projet.model_validate(projet))
 
-    # 0. complétude AVANT génération : un dossier assemblé incomplet doit le
-    # dire clairement, pas livrer un PPTX de placeholders en silence
+    # 0. cohérence AVANT tout : une pièce peut être « prête » et porter une
+    # donnée fausse. Ces anomalies passent en tête des avertissements, parce
+    # qu'un dossier complet mais incohérent est plus dangereux qu'un dossier
+    # visiblement incomplet : il part en mairie sans que personne ne doute.
+    for anomalie in evaluation["coherence"]:
+        avertissements.append(
+            f"[{anomalie['gravite']}] {anomalie['message']} ({anomalie['ou']})")
+
+    # complétude : un dossier assemblé incomplet doit le dire clairement,
+    # pas livrer un PPTX de placeholders en silence
     for piece in evaluation["completude"]["pieces"]:
         if piece["statut"] in ("en_attente", "a_generer", "a_completer"):
             avertissements.append(f"{piece['titre']} : {piece['detail']}")

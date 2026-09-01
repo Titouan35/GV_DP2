@@ -447,19 +447,27 @@ def test_piece_declaree_mais_absente_du_disque_retombe_sur_l_emplacement_reserve
     assert "État projeté" in textes(planche(slides, "Insertion paysagère"))
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "Trou connu, NON verrouillé : regles._statut_piece marque la pièce « prête, "
-    "fournie » dès qu'elle est déclarée dans le JSON, sans vérifier le fichier. "
-    "Une pièce déclarée mais absente du disque produit donc un emplacement "
-    "réservé silencieux, sans aucun avertissement. Si ce test passe, c'est que "
-    "le trou a été bouché : retirer le xfail."))
-def test_piece_declaree_mais_absente_du_disque_devrait_avertir(socle):
-    projet = projet_socle(documents={
-        "dp6": {"fichier": f"{ID_PROJET}.assets/dp6.jpg", "nom": "dp6.jpg"}})
+def test_piece_declaree_mais_absente_du_disque_est_signalee(socle):
+    """Trou bouché le 01/09/2026 par app/coherence.py.
 
+    Ce test était marqué xfail(strict=True) : regles._statut_piece marque la
+    pièce « prête, fournie » dès qu'elle est déclarée dans le JSON, sans
+    vérifier que le fichier existe. Un dossier réel affichait ainsi « 11/11
+    pièces prêtes » avec un fichier DP6 disparu du disque. Le contrôle de
+    cohérence lève désormais une anomalie bloquante, remontée en tête des
+    avertissements de l'assemblage.
+    """
+    # Arrange : la DP6 est déclarée, son fichier n'existe pas
+    projet = projet_socle(documents={
+        "dp6": {"fichier": f"{ID_PROJET}.assets/dp6.jpg", "nom_fichier": "dp6.jpg"}})
+
+    # Act
     _, avertissements = assemblage.generer_dossier(projet)
 
-    assert any("DP6" in a for a in avertissements)
+    # Assert
+    alerte = [a for a in avertissements if "DP6" in a and "introuvable" in a]
+    assert alerte, avertissements
+    assert alerte[0].startswith("[bloquante]")
 
 
 def test_pieces_absentes_du_json_sont_toutes_signalees(socle):

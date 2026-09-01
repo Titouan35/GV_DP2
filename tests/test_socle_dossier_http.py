@@ -245,3 +245,21 @@ def test_le_pptx_final_est_ecrit_atomiquement(client, monkeypatch):
     assert not final.exists(), (
         "un PPTX incomplet est apparu au chemin final : l'écriture n'est plus atomique"
     )
+
+
+# --------------------------------------------------- cache de la page d'entrée
+
+def test_index_est_servi_sans_cache(client):
+    """Sinon les mises à jour n'arrivent jamais sur le poste de l'utilisateur.
+
+    Les statiques portent un numéro de version dans leur URL (app.js?v=30).
+    Si le navigateur garde l'index en cache, il redemande l'ANCIENNE version et
+    l'incrément est sans effet. Constaté le 01/09/2026 : après le retrait du
+    module Insertion, l'interface affichait toujours l'étape supprimée.
+    """
+    # Act
+    r = client.get("/")
+
+    # Assert
+    assert r.status_code == 200
+    assert "no-store" in r.headers.get("cache-control", "").lower()

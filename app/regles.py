@@ -7,7 +7,7 @@ Références (PLAN_OUTIL_DP.md §2 et §4) :
 """
 from __future__ import annotations
 
-from . import config
+from . import coherence, config
 from .models import Projet
 
 REGIME_DP = "DP"
@@ -97,8 +97,18 @@ def completude(projet: Projet) -> dict:
 
 
 def evaluer(projet: Projet) -> dict:
-    """Évaluation réglementaire complète d'un projet (régime + checklist)."""
+    """Évaluation complète : régime, checklist des pièces, cohérence.
+
+    Les anomalies de cohérence (app/coherence.py) accompagnent la checklist
+    depuis le 01/09/2026 : une pièce peut être « prête » alors que la donnée
+    qu'elle porte est fausse. Compter les pièces ne suffit pas à dire qu'un
+    dossier est bon.
+    """
     regime = determiner_regime(
         projet.ombriere.puissance_kwc, projet.urbanisme.secteur_abf
     )
-    return {"regime": regime, "completude": completude(projet)}
+    return {
+        "regime": regime,
+        "completude": completude(projet),
+        "coherence": coherence.controler(projet.model_dump()),
+    }

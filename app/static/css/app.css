@@ -430,3 +430,24 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 }
 .presence b { color: #5C3703; }
 .presence[hidden] { display: none; }
+
+/* anomalies de cohérence (panneau de droite) : une pièce peut être « prête »
+   et porter une donnée fausse. Le compteur de pièces ne le dit pas. */
+.coh {
+  border-left: 3px solid var(--line); border-radius: 6px;
+  padding: 9px 11px; margin-top: 8px; background: var(--bg);
+}
+.coh b { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .03em; margin-bottom: 3px; }
+.coh span { display: block; font-size: 12.5px; line-height: 1.45; color: var(--ink); }
+.coh small { display: block; margin-top: 5px; font-size: 11.5px; color: var(--muted); }
+.coh-bloquante { border-left-color: var(--red); background: var(--red-l); }
+.coh-bloquante b { color: var(--red); }
+.coh-serieuse { border-left-color: var(--amber); background: var(--amber-l); }
+.coh-serieuse b { color: var(--amber); }
+.coh-attention b { color: var(--muted); }
+.coh-compte {
+  display: inline-block; min-width: 18px; padding: 1px 6px; margin-left: 6px;
+  border-radius: 20px; background: var(--red); color: #fff;
+  font-size: 11px; font-weight: 700; text-align: center;
+}

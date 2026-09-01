@@ -172,6 +172,38 @@ function renderChrome() {
     $("#prog-label").textContent = "Aucun projet ouvert";
     $("#prog-sub").textContent = "";
   }
+
+  renderCoherence(ev);
+}
+
+// Anomalies de cohérence : compter les pièces ne suffit pas à dire qu'un
+// dossier est bon. Un dossier réel affichait « 11/11 pièces prêtes » avec
+// deux adresses différentes selon la planche, des parcelles de deux communes
+// distantes de 100 km, et un fichier DP6 disparu du disque.
+const LIBELLE_GRAVITE = {
+  bloquante: "À corriger avant dépôt",
+  serieuse: "Incohérence",
+  attention: "À compléter",
+};
+
+function renderCoherence(ev) {
+  const box = $("#coherence-box");
+  if (!box) return;
+  const anomalies = ev?.coherence || [];
+  if (!anomalies.length) {
+    box.innerHTML = "";
+    return;
+  }
+  const bloquantes = anomalies.filter((a) => a.gravite === "bloquante").length;
+  box.innerHTML = `
+    <div class="rp-title" style="margin-top:18px">Cohérence
+      ${bloquantes ? `<span class="coh-compte">${bloquantes}</span>` : ""}</div>
+    ${anomalies.map((a) => `
+      <div class="coh coh-${esc(a.gravite)}">
+        <b>${esc(LIBELLE_GRAVITE[a.gravite] || a.gravite)}</b>
+        <span>${esc(a.message)}</span>
+        <small>${esc(a.ou)}</small>
+      </div>`).join("")}`;
 }
 
 function etapeFaite(n) {
