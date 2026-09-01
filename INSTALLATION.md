@@ -58,11 +58,16 @@ du travail serait perdu.
 **La synchronisation prend quelques secondes.** Un projet créé par un collègue
 n'apparaît pas instantanément chez toi. Patiente un instant et recharge la page.
 
-**La génération d'images est facturée.** Toute l'équipe utilise la même clé, et
-chaque insertion générée coûte environ 0,13 €. L'outil affiche le total de
-l'équipe et enregistre qui a généré quoi. Vérifie le volume dans l'aperçu avant
-de lancer une génération : le rendu ne sera pas meilleur que le volume que tu as
-posé.
+**L'insertion paysagère (DP6) est une pièce que tu déposes.** Comme le plan de
+masse ou la coupe. Le module de génération d'images par IA a été retiré le
+01/09/2026 : l'outil ne fait plus aucun appel payant, il n'y a plus de clé ni de
+coût par image.
+
+**L'outil te dit ce qu'il ne sait pas.** Il ne devine jamais une cote, une
+puissance ou un régime d'urbanisme. Le panneau de droite signale les données du
+dossier qui se contredisent : parcelles hors de la commune, notice rédigée avec
+une ancienne adresse, pièce déclarée dont le fichier a disparu. Corrige-les
+avant l'assemblage « pour dépôt », qui les refuse.
 
 ---
 
@@ -86,6 +91,13 @@ nécessaire. L'outil n'utilise aucun exécutable compilé, ce cas devrait rester
 rare.
 
 **« Site inaccessible »** — la fenêtre noire s'est fermée. Relance le raccourci.
+Si elle affiche un message d'erreur, envoie à Florent les deux journaux dont
+elle donne le chemin (dans `%LOCALAPPDATA%\GV_DP\`).
+
+**L'outil se fige en cours de travail** — ne clique pas dans la fenêtre noire.
+Windows y sélectionne du texte, ce qui met le serveur en pause. Ce piège est
+corrigé depuis le 01/09/2026 (plus rien ne s'y écrit), mais l'ancien réflexe
+reste : cette fenêtre est à laisser tranquille, pas à consulter.
 
 **L'export PDF échoue** — l'outil s'appuie sur PowerPoint, installé avec le pack
 Office. Ferme les fenêtres PowerPoint ouvertes et réessaie ; le fichier `.pptx`

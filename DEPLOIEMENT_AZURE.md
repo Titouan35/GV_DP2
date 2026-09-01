@@ -11,7 +11,6 @@ conversion PPTX → PDF côté Linux (le poste Windows utilise PowerPoint).
 > efface un dossier client complet. Voir le §1 bis ci-dessous.
 
 > **Le module Insertion IA a été retiré le 01/09/2026.** Aucune clé d'API
-> n'est plus nécessaire : `GEMINI_API_KEY` et les variables associées ne
 > servent plus à rien et peuvent être supprimées de la configuration.
 
 ## 0. Prérequis
@@ -117,9 +116,13 @@ az containerapp create \
   --target-port 8420 --ingress internal \
   --min-replicas 1 --max-replicas 1 \
   --cpu 1.0 --memory 2.0Gi \
-  --secrets gemini-key=<clé Gemini> \
-  --env-vars GEMINI_API_KEY=secretref:gemini-key
+  --env-vars GVDP_AUTH_DELEGUEE=1
 ```
+
+> Sans `GVDP_AUTH_DELEGUEE=1` (ou `GVDP_COMPTES`), le conteneur **refuse de
+> démarrer** : il écoute sur `0.0.0.0`. Voir le §1 bis. Configurez d'abord
+> l'authentification Entra ID, sinon l'application démarre en faisant
+> confiance à une authentification qui n'existe pas.
 
 - `--ingress internal` : accessible uniquement depuis le réseau de l'entreprise
   (VNet). Mettre `external` seulement si un accès public est voulu (déconseillé,
