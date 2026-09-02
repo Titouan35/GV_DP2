@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, securite
 from .api import (
+    routes_connexion,
     routes_documents,
     routes_dossier,
     routes_geo,
@@ -28,6 +29,7 @@ MODE_AUTH = securite.verifier_configuration()
 app = FastAPI(title=config.APP_TITLE, version=config.VERSION)
 app.add_middleware(securite.Authentification)
 
+app.include_router(routes_connexion.router)
 app.include_router(routes_geo.router)
 app.include_router(routes_projets.router)
 app.include_router(routes_planches.router)

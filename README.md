@@ -61,7 +61,9 @@ tests/             # pytest ; tests réseau marqués `live`, exclus par défaut
       retries réseau, mode « prêt au dépôt »
 - [x] Refonte du 01/09/2026 : retrait du module Insertion, contrôles de
       cohérence, corrections du Cerfa, authentification, lanceur fiabilisé
-- [ ] Hébergement pour le BE : demande à la DSI (voir `DEPLOIEMENT_AZURE.md`)
+- [x] Prêt pour l'hébergement partagé : page de connexion, sessions signées,
+      volume persistant, garde-fou de démarrage (voir `HEBERGEMENT.md`)
+- [ ] Hébergement effectif : choix de l'hébergeur et accord DSI
 
 ## Le parcours (5 étapes)
 
@@ -121,6 +123,8 @@ parcelle 30 0464, ~30 201 m²) — dossier réel de référence dans `../EXEMPLE
 - Repo dans OneDrive : éviter les sessions git simultanées Windows/Mac.
 - L'outil **refuse de démarrer** s'il écoute au-delà de `127.0.0.1` sans
   authentification (`app/securite.py`). Ce n'est pas une panne : voir
-  `DEPLOIEMENT_AZURE.md` §1 bis.
+  `HEBERGEMENT.md`.
+- Netlify, Vercel et GitHub Pages ne conviennent pas : ils servent du statique
+  et des fonctions courtes, pas un serveur qui vit et écrit sur disque.
 - Le mode QuickEdit de Windows fige un serveur qui écrit dans sa console. Le
   lanceur redirige donc toute la sortie vers `%LOCALAPPDATA%\GV_DP\`.

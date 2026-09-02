@@ -406,3 +406,8 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
   border-radius: 20px; background: var(--red); color: #fff;
   font-size: 11px; font-weight: 700; text-align: center;
 }
+
+/* bandeau de session (instances partagées uniquement) */
+#session-box { display: flex; align-items: center; gap: 10px; margin-left: auto; padding-right: 14px; }
+#session-nom { font-size: 12.5px; color: var(--muted); }
+#session-box[hidden] { display: none; }

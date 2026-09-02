@@ -1257,6 +1257,17 @@ function telechargerFichier(url, nom) {
 window.addEventListener("beforeunload", (e) => {
   if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
 });
+// Bandeau de session : affiché seulement sur une instance partagée. En local,
+// il n'y a personne à déconnecter, la topbar reste inchangée.
+(async () => {
+  try {
+    const moi = await (await fetch("/api/moi")).json();
+    if (!moi.utilisateur) return;
+    $("#session-nom").textContent = moi.utilisateur;
+    $("#session-box").hidden = false;
+  } catch { /* instance locale ou serveur muet : rien à afficher */ }
+})();
+
 $("#btn-accueil").addEventListener("click", () => { state.etape = 0; render(); });
 $("#lightbox").addEventListener("click", () => { $("#lightbox").hidden = true; });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("#lightbox").hidden = true; });

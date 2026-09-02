@@ -41,13 +41,14 @@ import hmac
 import os
 import secrets
 import sys
+import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 
 # Routes joignables sans authentification : la sonde de santé de l'hébergeur
 # doit répondre avant qu'un utilisateur ne soit connecté.
-CHEMINS_LIBRES = frozenset({"/api/sante"})
+CHEMINS_LIBRES = frozenset({"/api/sante", "/connexion", "/static/css/app.css"})
 
 # En-tetes d'identite injectes par les hebergeurs en mode delegue, par ordre de
 # preference. Azure Container Apps (EasyAuth) utilise les deux premiers ; les
@@ -64,7 +65,8 @@ ITERATIONS = 200_000
 # Empreinte d'un mot de passe qui n'existe pas : sert a faire durer une
 # tentative sur un identifiant inconnu aussi longtemps que sur un identifiant
 # connu (voir _authentifier).
-_LEURRE = ("0" * 32) + "$" + ("0" * 64)
+LEURRE = ("0" * 32) + "$" + ("0" * 64)
+_LEURRE = LEURRE      # ancien nom, conserve pour les appels internes
 
 
 class ConfigurationDangereuse(RuntimeError):
@@ -81,13 +83,16 @@ def empreinte(mot_de_passe: str, sel: str | None = None) -> str:
     return f"{sel}${binascii.hexlify(brut).decode()}"
 
 
-def _verifier(mot_de_passe: str, attendu: str) -> bool:
+def verifier_mot_de_passe(mot_de_passe: str, attendu: str) -> bool:
     try:
         sel, _ = attendu.split("$", 1)
     except ValueError:
         return False
     # comparaison à temps constant : ne pas révéler le mot de passe par la durée
     return hmac.compare_digest(empreinte(mot_de_passe, sel), attendu)
+
+
+_verifier = verifier_mot_de_passe      # ancien nom, utilise par les tests
 
 
 def comptes() -> dict[str, str]:
@@ -165,6 +170,65 @@ def verifier_configuration(hote: str | None = None) -> str:
     return actuel
 
 
+# --------------------------------------------------------------- sessions
+
+# Nom du cookie de session et sa duree.
+COOKIE_SESSION = "gvdp_session"
+DUREE_SESSION_H = 12
+
+# Secret de signature des sessions. Fourni par GVDP_SECRET en hebergement pour
+# que les sessions survivent a un redemarrage ; tire au hasard sinon, ce qui
+# est sur mais oblige a se reconnecter apres chaque relance.
+_SECRET = (os.environ.get("GVDP_SECRET") or "").strip().encode("utf-8") or secrets.token_bytes(32)
+
+
+def _signer(charge: str) -> str:
+    empreinte = hmac.new(_SECRET, charge.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{charge}.{empreinte}"
+
+
+def creer_session(utilisateur: str) -> str:
+    """Jeton de session : identifiant + expiration, signes.
+
+    Le separateur est « ~ » et le remplissage base64 est retire : Python met la
+    valeur d'un cookie entre guillemets des qu'elle contient « : » ou « = »,
+    et ces guillemets se retrouvent dans la valeur relue. Le jeton ne doit donc
+    contenir que des caracteres consideres comme legaux par http.cookies.
+    """
+    expire = int(time.time()) + DUREE_SESSION_H * 3600
+    nom = base64.urlsafe_b64encode(utilisateur.encode()).decode().rstrip("=")
+    return _signer(f"{nom}~{expire}")
+
+
+def verifier_session(jeton: str | None) -> str | None:
+    """Identifiant porte par un jeton valide et non expire, sinon None."""
+    if not jeton or "." not in jeton:
+        return None
+    charge, _, empreinte = jeton.rpartition(".")
+    if not hmac.compare_digest(_signer(charge), f"{charge}.{empreinte}"):
+        return None
+    nom_encode, _, expire = charge.partition("~")
+    try:
+        if int(expire) < time.time():
+            return None
+        # remplissage base64 retire a l'encodage : on le restitue
+        rembourre = nom_encode + "=" * (-len(nom_encode) % 4)
+        nom = base64.urlsafe_b64decode(rembourre.encode()).decode("utf-8")
+    except (ValueError, UnicodeDecodeError, binascii.Error):
+        return None
+    return nom if nom in comptes() else None
+
+
+def cookie_securise(request) -> bool:
+    """Le cookie ne doit voyager qu'en HTTPS dès que la connexion l'est.
+
+    Derriere un hebergeur, le TLS est termine en amont : on lit l'en-tete
+    standard que pose le proxy, sinon on retombe sur le schema de la requete.
+    """
+    transfere = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    return (transfere or request.url.scheme) == "https"
+
+
 # ------------------------------------------------------------- middleware
 
 class Authentification(BaseHTTPMiddleware):
@@ -189,13 +253,22 @@ class Authentification(BaseHTTPMiddleware):
             # mode local : verifier_configuration a deja tranche
             return await call_next(request)
 
-        utilisateur = self._authentifier(request, definis)
+        # 1. session posee par la page de connexion (usage humain)
+        utilisateur = verifier_session(request.cookies.get(COOKIE_SESSION))
+        # 2. sinon HTTP Basic, conserve pour les scripts et les sondes
         if utilisateur is None:
-            return Response(
-                status_code=401,
-                headers={"WWW-Authenticate": 'Basic realm="GV_DP", charset="UTF-8"'},
-                content="Authentification requise.",
-            )
+            utilisateur = self._authentifier(request, definis)
+        if utilisateur is None:
+            # Une requete d'API recoit un 401 exploitable ; un humain qui ouvre
+            # une page est envoye sur le formulaire de connexion, au lieu de la
+            # fenetre grise du navigateur, sans deconnexion possible.
+            if request.url.path.startswith("/api/"):
+                return Response(
+                    status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="GV_DP", charset="UTF-8"'},
+                    content="Authentification requise.",
+                )
+            return RedirectResponse("/connexion", status_code=303)
 
         # l'identité authentifiée devient l'auteur des modifications
         entetes = request.scope["headers"] = [

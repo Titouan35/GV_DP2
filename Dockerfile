@@ -8,6 +8,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8420
 
+# Variables a fournir par l'hebergeur (voir HEBERGEMENT.md) :
+#   GVDP_COMPTES        comptes et empreintes, OU
+#   GVDP_AUTH_DELEGUEE  si l'hebergeur authentifie en amont (Entra ID)
+#   GVDP_SECRET         signature des sessions ; sans elle, chaque
+#                       redeploiement deconnecte tout le monde
+
 # LibreOffice Impress (PPTX -> PDF) + polices (DejaVu/Liberation) pour Pillow
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-impress \
@@ -26,7 +32,12 @@ RUN pip install -r requirements.txt
 COPY app ./app
 
 # Données projet (montées sur un volume Azure Files en production, voir la doc)
-RUN mkdir -p /app/PROJETS
+# Donnees projet. En hebergement, elles doivent vivre sur un VOLUME
+# PERSISTANT monte sur /data, sinon chaque redeploiement efface les
+# dossiers clients. GVDP_PROJETS_DIR est lu par app/config.py au demarrage.
+ENV GVDP_PROJETS_DIR=/data
+RUN mkdir -p /data
+VOLUME ["/data"]
 
 EXPOSE 8420
 
