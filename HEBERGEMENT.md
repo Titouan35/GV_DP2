@@ -3,11 +3,60 @@
 Objectif : que le bureau d'études accède à l'outil depuis un navigateur, sans
 rien installer.
 
-> **Netlify, Vercel et GitHub Pages ne conviennent pas.** Ils servent des
-> fichiers statiques et des fonctions de courte durée. GV_DP est un serveur qui
-> vit en continu, écrit des fichiers sur disque et pilote LibreOffice pour
-> l'export PDF. Ce n'est pas une question d'adaptation, c'est une question de
-> nature. Il faut un hébergeur de **conteneurs**.
+> **Netlify ne peut pas exécuter GV_DP**, et aucun réglage n'y changera rien :
+> les Netlify Functions n'acceptent que JavaScript et TypeScript, alors que
+> GV_DP est une application Python qui tourne en continu, écrit des fichiers et
+> pilote LibreOffice. Même chose pour Vercel et GitHub Pages.
+>
+> **Netlify reste utile pour autant** : il porte très bien le domaine, le
+> certificat HTTPS et le relais vers l'application. Voir la section « Netlify
+> en porte d'entrée » ci-dessous. L'application, elle, tourne sur un hébergeur
+> de **conteneurs**.
+
+---
+
+## Netlify en porte d'entrée
+
+Si tu tiens à passer par Netlify, le montage qui fonctionne est le suivant :
+Netlify porte le domaine et relaie tout vers l'application, qui tourne
+ailleurs. Netlify le prend en charge nativement (réécriture en `status = 200`
+vers une URL absolue).
+
+`netlify.toml` est déjà dans le dépôt. Une seule ligne à changer :
+
+```toml
+[[redirects]]
+  from = "/*"
+  to = "https://TON-HEBERGEUR/:splat"   # <- ici
+  status = 200
+  force = true
+```
+
+Tant que l'adresse d'exemple y figure, le site affiche une page qui l'explique,
+plutôt qu'une erreur opaque.
+
+### La limite à connaître
+
+Un relais Netlify **expire à 26 secondes**. Mesuré sur un dossier réel
+(Rive-de-Gier, 8 planches, cartes IGN comprises) :
+
+| Opération | Durée |
+|---|---|
+| Assemblage du PPTX, à froid | 10,4 s |
+| Assemblage du PPTX, caches chauds | 8,0 s |
+| Export PDF (LibreOffice) | non mesuré, c'est le seul à risque |
+
+L'usage courant passe largement. Seul l'export PDF d'un gros dossier peut
+dépasser les 26 secondes. S'il expire, le PPTX reste téléchargeable : on ne perd
+pas le travail, on perd la conversion.
+
+### Si cette limite devient gênante
+
+Fais pointer un sous-domaine directement sur l'hébergeur de conteneurs, par
+exemple `dp.tondomaine.fr`, par un simple enregistrement DNS. Netlify garde le
+site principal, l'outil vit à côté, et il n'y a plus ni relais ni plafond de
+26 secondes. C'est plus simple et plus robuste que le relais, pour exactement le
+même confort d'usage.
 
 ---
 

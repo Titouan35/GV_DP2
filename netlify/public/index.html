@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>GV_DP · relais non configuré</title>
+<style>
+  :root { --navy:#002455; --vert:#05DB79; --line:#DFDFDD; --muted:#667C99; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#F5F7FA; font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+         color:var(--navy); padding:24px; }
+  .carte { background:#fff; border:1px solid var(--line); border-radius:14px;
+           padding:32px; max-width:560px; line-height:1.6; }
+  h1 { font-size:20px; margin:0 0 14px; }
+  p { font-size:14px; color:var(--muted); margin:0 0 12px; }
+  code { background:#F1F5F9; padding:2px 6px; border-radius:5px;
+         font-size:13px; color:var(--navy); }
+  .note { border-left:3px solid var(--vert); padding-left:14px; margin-top:20px; }
+</style>
+</head>
+<body>
+  <div class="carte">
+    <h1>GV_DP n'est pas encore relié</h1>
+    <p>Ce site Netlify sert de porte d'entrée à l'outil, mais le relais vers
+       l'application n'est pas encore configuré.</p>
+    <p>Dans <code>netlify.toml</code>, remplace <code>BACKEND-A-REMPLACER</code>
+       par l'adresse de l'hébergeur de conteneurs qui exécute GV_DP, puis
+       redéploie.</p>
+    <div class="note">
+      <p style="margin:0">Netlify n'exécute pas l'application lui-même : GV_DP
+         est un serveur Python qui écrit des fichiers et produit des PDF. Netlify
+         porte le domaine, le certificat et le relais. Le détail est dans
+         <code>HEBERGEMENT.md</code>.</p>
+    </div>
+  </div>
+</body>
+</html>
