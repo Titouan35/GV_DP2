@@ -1,17 +1,62 @@
 # Héberger GV_DP en ligne
 
-> **Ce n'est PAS la voie retenue.** Le partage se fait par le dossier OneDrive
-> (voir `INSTALLATION.md`) : gratuit, immédiat, et les données restent chez
-> Greenvolt. Ce document est conservé pour le jour où quelqu'un devra accéder à
-> l'outil **sans avoir le dossier OneDrive** : un prestataire externe, une
-> consultation hors du domaine.
+Deux usages, deux modes. Le partage quotidien à l'équipe passe par le dossier
+OneDrive (`INSTALLATION.md`), avec suivi des dossiers dans la durée. Le mode
+**web** sert à autre chose : donner l'outil à quelqu'un qui n'a pas le dossier
+OneDrive, sans rien conserver côté serveur.
 
-L'application est prête pour cela, rien n'est à développer :
+---
 
-- image Docker complète (Python, LibreOffice pour l'export PDF, polices) ;
-- page de connexion, sessions signées, déconnexion ;
-- refus de démarrer si elle écoute au-delà de `127.0.0.1` sans authentification ;
-- dossier des projets déplaçable par `GVDP_PROJETS_DIR`, volume `/data` déclaré.
+## Mode web : espace éphémère, hébergeable gratuitement
+
+Le blocage de l'hébergement n'a jamais été Python, LibreOffice ni
+l'authentification : c'était le **disque persistant**. Les dossiers sont des
+fichiers, et aucune offre gratuite n'offre de volume qui survive à un
+redéploiement.
+
+Le mode web supprime le besoin d'en avoir un. Chaque visiteur reçoit un espace
+de travail temporaire et isolé, y monte son dossier, télécharge le PPTX et le
+Cerfa, et l'espace est purgé après 12 h d'inactivité. **Rien n'est conservé.**
+
+Ce que ça change, concrètement :
+
+| | Mode poste (OneDrive) | Mode web |
+|---|---|---|
+| Suivi des dossiers dans la durée | oui | non, éphémère |
+| Disque persistant nécessaire | oui | **non** |
+| Mémoire nécessaire | 2 Go (LibreOffice) | **~150 Mo** |
+| Export PDF du dossier | oui | non (PPTX + Cerfa PDF) |
+| Données clients au repos sur le serveur | oui | **aucune** |
+| Hébergement gratuit possible | non | **oui** |
+
+### Déployer
+
+Utilise `Dockerfile.web` (sans LibreOffice). Toute plateforme qui construit
+depuis un Dockerfile convient, y compris les offres gratuites : il n'y a ni
+volume à monter, ni base de données.
+
+```
+GVDP_MODE=web         (déjà dans l'image)
+GVDP_SECRET           chaîne aléatoire longue, pour que les espaces survivent
+                      à un redémarrage
+GVDP_COMPTES          facultatif : restreint l'accès à l'équipe
+```
+
+Une seule réplique : un visiteur doit retomber sur l'instance qui détient son
+espace.
+
+### Ce que le mode web ne fait pas
+
+L'export PDF du dossier est indisponible sans LibreOffice : le bouton répond
+avec un message explicite et le PPTX reste téléchargeable. Le Cerfa, lui, reste
+un PDF, il ne dépend pas de LibreOffice.
+
+Et il n'y a pas de suivi : quelqu'un qui ferme son onglet et revient le
+lendemain repart de zéro. L'interface l'annonce en haut de page.
+
+---
+
+## Mode poste hébergé (avec suivi des dossiers)
 
 ## Ce qu'il faudrait alors
 

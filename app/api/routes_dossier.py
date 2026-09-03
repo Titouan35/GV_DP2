@@ -54,7 +54,7 @@ def generer_cerfa(projet_id: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     projet.documents["cerfa"] = {
         "nom_fichier": chemin.name,
-        "fichier": str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/"),
+        "fichier": str(chemin.relative_to(config.espace())).replace("\\", "/"),
         "date": datetime.now().isoformat(timespec="seconds"),
         "genere": True,
         "cerfa": NUMERO_CERFA,

@@ -147,7 +147,13 @@ def mode() -> str:
         return "delegue"
     if comptes():
         return "comptes"
+    if _mode_web():
+        return "web"
     return "local"
+
+
+def _mode_web() -> bool:
+    return (os.environ.get("GVDP_MODE") or "").strip().lower() == "web"
 
 
 def verifier_configuration(hote: str | None = None) -> str:
@@ -157,6 +163,10 @@ def verifier_configuration(hote: str | None = None) -> str:
     l'application sans l'avoir protégée, même par distraction.
     """
     actuel = mode()
+    # Le mode web est la TROISIEME facon legitime d'etre expose. Le garde-fou
+    # existe pour proteger des dossiers clients STOCKES sur le serveur ; en mode
+    # web il n'y en a aucun, chaque visiteur travaille dans un espace ephemere
+    # isole et repart avec ses fichiers. Rien n'est au repos, donc rien a voler.
     if actuel == "local" and not ecoute_locale(hote):
         raise ConfigurationDangereuse(
             "GV_DP refuse de démarrer : le serveur écoute sur "
@@ -185,6 +195,24 @@ _SECRET = (os.environ.get("GVDP_SECRET") or "").strip().encode("utf-8") or secre
 def _signer(charge: str) -> str:
     empreinte = hmac.new(_SECRET, charge.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{charge}.{empreinte}"
+
+
+def signer_brut(valeur: str) -> str:
+    """Signe une valeur quelconque (identifiant d'espace web, par exemple)."""
+    return _signer(valeur)
+
+
+def verifier_session_brute(jeton: str | None) -> bool:
+    """Vrai si le jeton porte une signature valide de CE serveur.
+
+    Sert au mode web : l'identifiant d'espace n'est pas un compte, il n'a ni
+    expiration ni utilisateur, seulement une signature qui empêche de désigner
+    l'espace d'un autre visiteur en modifiant le cookie.
+    """
+    if not jeton or "." not in jeton:
+        return False
+    charge, _, empreinte = jeton.rpartition(".")
+    return hmac.compare_digest(_signer(charge), f"{charge}.{empreinte}")
 
 
 def creer_session(utilisateur: str) -> str:

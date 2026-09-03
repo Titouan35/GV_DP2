@@ -64,7 +64,7 @@ def _proposer_images_fve(projet, projet_id: str, lecture: dict) -> list[str]:
         chemin.write_bytes(blob)
         projet.documents[code_piece] = {
             "nom_fichier": f"FVE — {role}{ext}",
-            "fichier": str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/"),
+            "fichier": str(chemin.relative_to(config.espace())).replace("\\", "/"),
             "date": datetime.now().isoformat(timespec="seconds"),
             "taille": len(blob),
             "origine": "fve",      # traçabilité : valeur non fournie par le BE
@@ -120,8 +120,8 @@ def _verifier_code(code: str):
 
 def _chemin_confine(relatif: str) -> Path:
     """Chemin résolu, confiné à PROJETS/ (garde contre la traversée de dossier)."""
-    cible = (config.PROJETS_DIR / relatif).resolve()
-    if config.PROJETS_DIR.resolve() not in cible.parents:
+    cible = (config.espace() / relatif).resolve()
+    if config.espace().resolve() not in cible.parents:
         raise HTTPException(status_code=404, detail="Fichier introuvable.")
     return cible
 
@@ -149,7 +149,7 @@ async def uploader(projet_id: str, code: str, fichier: UploadFile):
 
     projet.documents[code] = {
         "nom_fichier": fichier.filename,
-        "fichier": str(chemin.relative_to(config.PROJETS_DIR)).replace("\\", "/"),
+        "fichier": str(chemin.relative_to(config.espace())).replace("\\", "/"),
         "date": datetime.now().isoformat(timespec="seconds"),
         "taille": len(contenu),
     }
@@ -182,7 +182,7 @@ def supprimer_document(projet_id: str, code: str):
     projet = _charger(projet_id)
     doc = projet.documents.pop(code, None)
     if doc:
-        chemin = config.PROJETS_DIR / doc["fichier"]
+        chemin = config.espace() / doc["fichier"]
         if chemin.exists():
             chemin.unlink()
     projet.date_modification = datetime.now().isoformat(timespec="seconds")

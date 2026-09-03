@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, securite
+from . import config, securite, session_web
 from .api import (
     routes_connexion,
     routes_documents,
@@ -27,7 +27,10 @@ from .api import (
 MODE_AUTH = securite.verifier_configuration()
 
 app = FastAPI(title=config.APP_TITLE, version=config.VERSION)
+# Ordre : l'espace ephemere est resolu AVANT l'authentification, pour que
+# la page de connexion elle-meme dispose d'un espace en mode web.
 app.add_middleware(securite.Authentification)
+app.add_middleware(session_web.EspaceEphemere)
 
 app.include_router(routes_connexion.router)
 app.include_router(routes_geo.router)
@@ -45,7 +48,8 @@ def sante():
     return {
         "app": config.APP_NAME,
         "version": config.VERSION,
-        "projets_dir": str(config.PROJETS_DIR),
+        "projets_dir": str(config.espace()),
+        "mode": "web" if session_web.actif() else "poste",
         "coupes_dir_existe": config.COUPES_DIR.exists(),
         "env_charge": str(config.ENV_FILE_CHARGE) if config.ENV_FILE_CHARGE else None,
         "authentification": MODE_AUTH,

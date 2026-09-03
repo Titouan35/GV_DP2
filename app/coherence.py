@@ -242,7 +242,7 @@ def _controler_fichiers(projet: dict) -> list[dict]:
         rel = (doc or {}).get("fichier")
         if not rel:
             continue
-        if not (config.PROJETS_DIR / rel).exists():
+        if not (config.espace() / rel).exists():
             nom = (doc or {}).get("nom_fichier") or rel
             anomalies.append(_anomalie(
                 f"fichier_manquant_{code}", BLOQUANTE,

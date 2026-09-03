@@ -63,9 +63,10 @@ tests/             # pytest ; tests réseau marqués `live`, exclus par défaut
       cohérence, corrections du Cerfa, authentification, lanceur fiabilisé
 - [x] Partage à l'équipe : par le **dossier OneDrive** (voir `INSTALLATION.md`).
       Rien à installer côté collègue, le moteur Python est dans le dossier.
-- [x] Prêt pour un hébergement en ligne si le besoin apparaît un jour : page de
-      connexion, sessions signées, volume persistant, garde-fou de démarrage.
-      Ce n'est PAS la voie retenue, voir `HEBERGEMENT.md`.
+- [x] **Mode web** (`GVDP_MODE=web`, `Dockerfile.web`) : espace de travail
+      éphémère par visiteur, rien conservé côté serveur, aucun disque
+      persistant ni LibreOffice. Hébergeable gratuitement, pour donner l'outil
+      à quelqu'un qui n'a pas le dossier OneDrive. Voir `HEBERGEMENT.md`.
 
 ## Le parcours (5 étapes)
 

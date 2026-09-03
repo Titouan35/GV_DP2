@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import securite
+from .. import securite, session_web
 
 router = APIRouter(tags=["connexion"])
 
@@ -109,4 +109,6 @@ def moi(request: Request):
     return JSONResponse({
         "utilisateur": request.headers.get("x-utilisateur"),
         "mode": securite.mode(),
+        "ephemere": session_web.actif(),
+        "duree_vie_h": session_web.DUREE_VIE_H,
     })

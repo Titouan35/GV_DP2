@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import threading
+from contextvars import ContextVar
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -105,10 +106,30 @@ def _projets_dir() -> Path:
 
 PROJETS_DIR = _projets_dir()                 # 1 dossier JSON par projet
 
+# Espace de travail ACTIF. Au poste, c'est PROJETS_DIR, un dossier permanent.
+# En mode web partagé, un intergiciel y place un espace ÉPHÉMÈRE propre à la
+# session : chaque visiteur travaille dans son propre dossier temporaire, et
+# rien n'est conservé côté serveur. C'est ce qui permet d'héberger l'outil sans
+# disque persistant, et surtout sans y déposer de dossiers clients.
+#
+# Une variable de contexte, pas une variable globale : deux requêtes simultanées
+# de deux personnes différentes ne doivent jamais se voir.
+_ESPACE: ContextVar[Path | None] = ContextVar("espace_projets", default=None)
+
+
+def espace() -> Path:
+    """Dossier de travail de la requête en cours."""
+    return _ESPACE.get() or PROJETS_DIR
+
+
+def definir_espace(chemin: Path | None):
+    """Bascule l'espace de travail (mode web). Renvoie le jeton de remise."""
+    return _ESPACE.set(chemin)
+
 
 def assets_dir(projet_id: str):
     """Dossier des fichiers du projet (planches générées, uploads, exports)."""
-    d = PROJETS_DIR / f"{projet_id}.assets"
+    d = espace() / f"{projet_id}.assets"
     d.mkdir(parents=True, exist_ok=True)
     return d
 DP_DIR = REPO_ROOT.parent                     # Innovation/OUTILS/DP

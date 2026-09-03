@@ -1262,6 +1262,14 @@ window.addEventListener("beforeunload", (e) => {
 (async () => {
   try {
     const moi = await (await fetch("/api/moi")).json();
+    if (moi.ephemere) {
+      // Mode web : rien n'est conserve cote serveur. Le dire AVANT que
+      // quelqu'un ne monte un dossier complet puis ferme son onglet.
+      $("#bandeau-texte").textContent =
+        `Vos dossiers ne sont pas conservés sur le serveur et disparaissent après `
+        + `${moi.duree_vie_h} h d'inactivité.`;
+      $("#bandeau-ephemere").hidden = false;
+    }
     if (!moi.utilisateur) return;
     $("#session-nom").textContent = moi.utilisateur;
     $("#session-box").hidden = false;

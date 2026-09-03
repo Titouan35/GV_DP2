@@ -411,3 +411,11 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 #session-box { display: flex; align-items: center; gap: 10px; margin-left: auto; padding-right: 14px; }
 #session-nom { font-size: 12.5px; color: var(--muted); }
 #session-box[hidden] { display: none; }
+
+/* bandeau du mode web : rien n'est conserve cote serveur, il faut le dire */
+#bandeau-ephemere {
+  grid-column: 1 / -1; background: var(--amber-l); color: var(--amber);
+  border-bottom: 1px solid var(--amber); padding: 9px 18px;
+  font-size: 13px; line-height: 1.5;
+}
+#bandeau-ephemere[hidden] { display: none; }

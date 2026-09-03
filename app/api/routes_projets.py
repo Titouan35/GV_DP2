@@ -59,13 +59,13 @@ def _slug(nom: str) -> str:
 def _chemin(projet_id: str):
     if not re.fullmatch(r"[a-z0-9-]+", projet_id):
         raise HTTPException(status_code=400, detail="Identifiant de projet invalide.")
-    return config.PROJETS_DIR / f"{projet_id}.json"
+    return config.espace() / f"{projet_id}.json"
 
 
 def _ecrire(projet: Projet) -> None:
     """Écriture atomique SANS verrou : réservée aux appelants qui tiennent
     déjà `verrou_projet` (le verrou n'est pas réentrant)."""
-    config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
+    config.espace().mkdir(parents=True, exist_ok=True)
     chemin = _chemin(projet.id)
     tmp = chemin.with_suffix(".json.tmp")
     tmp.write_text(projet.model_dump_json(indent=2), encoding="utf-8")
@@ -96,9 +96,9 @@ def _charger(projet_id: str) -> Projet:
 
 @router.get("")
 def lister_projets():
-    config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
+    config.espace().mkdir(parents=True, exist_ok=True)
     projets = []
-    for f in sorted(config.PROJETS_DIR.glob("*.json")):
+    for f in sorted(config.espace().glob("*.json")):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             projet = Projet.model_validate(data)
@@ -280,6 +280,6 @@ def supprimer_projet(projet_id: str):
     chemin.unlink()
     # le dossier .assets (uploads, exports, caches) part avec le projet :
     # avant, il restait orphelin sur le disque et dans la synchro OneDrive
-    shutil.rmtree(config.PROJETS_DIR / f"{projet_id}.assets", ignore_errors=True)
-    (config.PROJETS_DIR / f"{projet_id}.lock").unlink(missing_ok=True)
+    shutil.rmtree(config.espace() / f"{projet_id}.assets", ignore_errors=True)
+    (config.espace() / f"{projet_id}.lock").unlink(missing_ok=True)
     return {"ok": True}

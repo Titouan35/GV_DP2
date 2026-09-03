@@ -296,7 +296,7 @@ def _fichier_document(projet: dict, code: str) -> Path | None:
     doc = (projet.get("documents") or {}).get(code)
     if not doc:
         return None
-    chemin = config.PROJETS_DIR / doc["fichier"]
+    chemin = config.espace() / doc["fichier"]
     return chemin if chemin.exists() else None
 
 

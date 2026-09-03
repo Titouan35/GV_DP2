@@ -1,0 +1,63 @@
+# GV_DP en mode web : espace de travail ephemere, rien de conserve.
+#
+# Difference avec le Dockerfile principal : PAS de LibreOffice.
+#
+# C'est ce qui rend l'hebergement gratuit possible. LibreOffice est le seul
+# composant qui reclamait 2 Go de memoire et plusieurs centaines de Mo d'image ;
+# il ne sert QU'A convertir le PPTX en PDF. Sans lui :
+#   - l'image tombe a ~200 Mo,
+#   - l'application tourne dans ~150 Mo de memoire (mesure : 100 Mo apres un
+#     assemblage reel de 8 planches),
+#   - elle tient donc dans les offres a 512 Mo.
+#
+# Ce qu'on perd : le bouton « exporter en PDF » du dossier. Il repond alors 501
+# avec un message explicite, et le PPTX reste telechargeable. Le Cerfa, lui,
+# reste un PDF : il est produit par pypdf, sans LibreOffice.
+#
+# Ce qu'on ne perd pas : le disque persistant n'est plus necessaire, puisque
+# rien n'est conserve cote serveur (voir app/session_web.py).
+
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8420 \
+    GVDP_MODE=web
+
+# Variables utiles (voir HEBERGEMENT.md) :
+#   GVDP_SECRET   signature des cookies d'espace. Sans elle, une valeur est
+#                 tiree au demarrage : les visiteurs perdent leur espace a
+#                 chaque redeploiement, sans risque de securite.
+#   GVDP_WEB_DIR  ou vivent les espaces. Par defaut le dossier temporaire du
+#                 systeme, ce qui convient : rien n'est cense survivre.
+#   GVDP_COMPTES  facultatif. Le mode web n'exige PAS de compte, puisqu'aucun
+#                 dossier client n'est au repos ; en ajouter reste possible
+#                 pour restreindre l'acces a l'equipe.
+
+# Polices pour le rendu des planches (Pillow). Pas de LibreOffice.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fonts-dejavu \
+        fonts-liberation \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+COPY app ./app
+
+# Espaces de session : ephemeres par nature, aucun volume a monter.
+ENV GVDP_WEB_DIR=/tmp/gvdp_sessions
+RUN mkdir -p /tmp/gvdp_sessions
+
+EXPOSE 8420
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${PORT}/api/sante || exit 1
+
+# Une seule replique : les verrous de generation sont des verrous de processus,
+# et un visiteur doit retomber sur l'instance qui detient son espace.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

@@ -32,7 +32,7 @@ DUREE_VIE = timedelta(minutes=15)
 
 
 def _chemin(projet_id: str) -> Path:
-    return config.PROJETS_DIR / f"{projet_id}.lock"
+    return config.espace() / f"{projet_id}.lock"
 
 
 def _machine() -> str:
@@ -73,7 +73,7 @@ def poser(projet_id: str, utilisateur: str | None) -> dict:
     données = {"utilisateur": moi, "machine": _machine(),
                "date": maintenant, "depuis": depuis or maintenant}
     try:
-        config.PROJETS_DIR.mkdir(parents=True, exist_ok=True)
+        config.espace().mkdir(parents=True, exist_ok=True)
         tmp = _chemin(projet_id).with_suffix(".lock.tmp")
         tmp.write_text(json.dumps(données), encoding="utf-8")
         os.replace(tmp, _chemin(projet_id))
