@@ -31,14 +31,22 @@ import logging
 import re
 from pathlib import Path
 
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.util import Emu
+
 logger = logging.getLogger(__name__)
 
-# Libellé de la planche portant le photomontage, et des deux images qu'elle
-# porte. La liaison libellé -> image se fait par proximité VERTICALE : sur la
-# FVE de référence, « Image source » est à 0,86 pouce et sa photo à 0,72 ;
-# « Insertion Paysagère » à 3,92 et sa photo à 3,92.
-LIBELLE_SOURCE = "image source"
-LIBELLE_INSERTION = "insertion paysag"
+# Libellés des deux images (avant / après) de la planche d'insertion. La liaison
+# libellé -> image se fait par proximité VERTICALE : sur la FVE de référence,
+# « Image source » est à 0,86 pouce et sa photo à 0,72 ; « Insertion
+# Paysagère » à 3,92 et sa photo à 3,92.
+# Deux variantes du gabarit circulent : la fiche « MARKET » (EXEMPLE/, relevé
+# le 10/09/2026) étiquette le photomontage « IP-3D ». Sans cet alias, seule la
+# photo avant était lue et la DP6 n'était jamais proposée.
+LIBELLES_SOURCE = ("image source",)
+LIBELLES_INSERTION = ("insertion paysag", "ip-3d", "ip 3d", "ip3d")
+# Un libellé d'image est court ; un paragraphe qui cite le mot n'en est pas un.
+LONGUEUR_MAX_LIBELLE = 40
 
 # En dessous, une image est un pictogramme de la mise en page, pas une photo.
 TAILLE_MINI_PHOTO = 200_000
@@ -110,41 +118,72 @@ def _images_insertion(prs) -> dict:
     pour la mise en page de la fiche. L'image complète cadre bien mieux la
     planche DP6 du dossier.
     """
-    from pptx.util import Emu
-
     resultat: dict[str, bytes] = {}
     for planche in prs.slides:
         libelles: list[tuple[float, str]] = []
-        photos: list[tuple[float, bytes]] = []
-        for forme in planche.shapes:
-            haut = Emu(forme.top or 0).inches
+        photos: list[tuple[float, float, bytes]] = []
+        for forme in _formes(planche.shapes):
+            haut = _pouces(forme.top)
             if forme.has_text_frame:
                 minuscule = forme.text_frame.text.strip().lower()
                 # Le TITRE de la planche (« 03 INSERTION PAYSAGERE ») contient
                 # le même mot que le libellé de l'image et se trouve en haut,
                 # donc plus près de la photo « source » que de l'insertion :
                 # sans ce filtre, les deux rôles pointaient la même image.
-                if _RE_TITRE_SECTION.match(minuscule):
+                if _RE_TITRE_SECTION.match(minuscule) or len(minuscule) >= LONGUEUR_MAX_LIBELLE:
                     continue
-                if LIBELLE_SOURCE in minuscule:
-                    libelles.append((haut, "source"))
-                elif LIBELLE_INSERTION in minuscule and len(minuscule) < 40:
-                    libelles.append((haut, "insertion"))
-            if forme.__class__.__name__ == "Picture":
+                milieu = haut + _pouces(forme.height) / 2
+                if any(l in minuscule for l in LIBELLES_SOURCE):
+                    libelles.append((milieu, "source"))
+                elif any(l in minuscule for l in LIBELLES_INSERTION):
+                    libelles.append((milieu, "insertion"))
+            # Picture ET PlaceholderPicture : toute forme qui porte une image.
+            if hasattr(forme, "image"):
                 try:
                     blob = forme.image.blob
                 except (ValueError, AttributeError):
                     continue          # image liée, non embarquée
                 if len(blob) >= TAILLE_MINI_PHOTO:
-                    photos.append((haut, blob))
-        if not (libelles and photos):
-            continue
-        for haut_libelle, role in libelles:
-            if role in resultat:
+                    photos.append((haut, haut + _pouces(forme.height), blob))
+        # Chaque photo ne sert qu'une fois : sans cela, deux libellés proches
+        # d'une même photo lui attribuaient les deux rôles (avant = après).
+        paires = sorted(
+            (_distance(milieu, photo), i, role)
+            for milieu, role in libelles
+            for i, photo in enumerate(photos)
+        )
+        prises: set[int] = set()
+        for _, i, role in paires:
+            if role in resultat or i in prises:
                 continue
-            _, blob = min(photos, key=lambda p: abs(p[0] - haut_libelle))
-            resultat[role] = blob
+            resultat[role] = photos[i][2]
+            prises.add(i)
     return resultat
+
+
+def _formes(formes):
+    """Formes de la planche, y compris celles rangées dans des groupes."""
+    for forme in formes:
+        if getattr(forme, "shape_type", None) == MSO_SHAPE_TYPE.GROUP:
+            yield from _formes(forme.shapes)
+        else:
+            yield forme
+
+
+def _pouces(emu) -> float:
+    return Emu(emu or 0).inches
+
+
+def _distance(y: float, photo: tuple[float, float, bytes]) -> float:
+    """Écart vertical entre un libellé et une photo : nul s'il est À CÔTÉ.
+
+    Comparer au seul bord haut était fragile : sur la fiche MARKET, « IP-3D »
+    est à mi-hauteur de sa photo, un pouce sous son bord haut.
+    """
+    haut, bas, _ = photo
+    if haut <= y <= bas:
+        return 0.0
+    return min(abs(y - haut), abs(y - bas))
 
 
 def lire_fve(chemin: Path) -> dict:

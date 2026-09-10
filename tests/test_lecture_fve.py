@@ -95,6 +95,33 @@ def test_les_deux_images_sont_distinctes(tmp_path):
     assert images["source"] != images["insertion"]
 
 
+def test_la_variante_market_ip_3d_donne_l_avant_et_l_apres(tmp_path):
+    """Fiche « MARKET » (EXEMPLE/, 10/09/2026) : le photomontage est étiqueté
+    « IP-3D » et chaque libellé est à mi-hauteur de sa photo, un pouce sous
+    son bord haut. Avant le correctif, seule la photo avant était lue."""
+    # Arrange : positions relevées sur la fiche réelle
+    prs = Presentation()
+    planche = prs.slides.add_slide(prs.slide_layouts[6])
+    titre = planche.shapes.add_textbox(Inches(0.37), Inches(0.40), Inches(8), Inches(0.5))
+    titre.text_frame.text = "FICHE DE VALIDATION D’EMPRISE"
+    avant = planche.shapes.add_textbox(Inches(1.06), Inches(2.14), Inches(1.5), Inches(0.3))
+    avant.text_frame.text = "Image source"
+    apres = planche.shapes.add_textbox(Inches(1.60), Inches(5.30), Inches(1), Inches(0.3))
+    apres.text_frame.text = "IP-3D"
+    planche.shapes.add_picture(_image(3), Inches(3.17), Inches(4.27), Inches(8), Inches(2.9))
+    planche.shapes.add_picture(_image(4), Inches(3.16), Inches(1.07), Inches(8), Inches(2.9))
+    chemin = tmp_path / "MARKET.pptx"
+    prs.save(str(chemin))
+
+    # Act
+    images = lecture_fve.lire_fve(chemin)["images"]
+
+    # Assert
+    assert set(images) == {"source", "insertion"}
+    assert images["source"] == _image(4).getvalue()
+    assert images["insertion"] == _image(3).getvalue()
+
+
 def test_une_fve_sans_planche_insertion_ne_plante_pas(tmp_path):
     lecture = lecture_fve.lire_fve(fve_de_test(tmp_path, avec_images=False))
     assert lecture["images"] == {}
