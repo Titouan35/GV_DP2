@@ -40,7 +40,16 @@ function toast(msg, type = "") {
   el.className = `toast ${type}`;
   el.textContent = msg;
   $("#toasts").appendChild(el);
+  setTimeout(() => el.classList.add("sort"), 3900);   // fondu de sortie (CSS)
   setTimeout(() => el.remove(), 4200);
+}
+
+// Relance une animation CSS sur un élément PERSISTANT (la retirer puis la
+// remettre dans la même frame ne suffit pas : le reflow force le redémarrage).
+function rejouer(el, classe) {
+  el.classList.remove(classe);
+  void el.offsetWidth;
+  el.classList.add(classe);
 }
 
 async function api(path, options = {}) {
@@ -123,6 +132,12 @@ function sauvegarderBientot() {
 }
 
 // ---------------- chrome (topbar, stepper, panneau droit) ----------------
+// Ce panneau est reconstruit à chaque sauvegarde automatique : pour n'animer
+// que ce qui VIENT de changer, on garde l'état du rendu précédent. Il est remis
+// à zéro à chaque changement de projet (ouvrir un dossier n'est pas une
+// progression, rien ne doit « popper »).
+let chromePrecedent = { projetId: undefined, faites: null, statuts: null, pretes: null };
+
 function renderChrome() {
   const p = state.projet;
   $("#proj-badge").hidden = !p;
@@ -130,13 +145,22 @@ function renderChrome() {
   // accueil : sidebar et panneau complétude masqués (CSS .accueil)
   document.body.classList.toggle("accueil", state.etape === 0);
 
+  if (chromePrecedent.projetId !== p?.id) {
+    chromePrecedent = { projetId: p?.id, faites: null, statuts: null, pretes: null };
+  }
+  const avant = chromePrecedent;
+
   // stepper
   const nav = $("#stepper");
   nav.innerHTML = "";
+  const faites = new Set();
   for (const s of STEPS) {
     const btn = document.createElement("button");
+    const faite = etapeFaite(s.n);
+    if (faite) faites.add(s.n);
     btn.className = "step" + (state.etape === s.n ? " active" : "") +
-      (etapeFaite(s.n) ? " done" : "");
+      (faite ? " done" : "") +
+      (faite && avant.faites && !avant.faites.has(s.n) ? " vient-de-finir" : "");
     btn.disabled = !p;
     btn.innerHTML = `<span class="dot">${etapeFaite(s.n) && state.etape !== s.n ? "✓" : s.n}</span>
       <span class="lbl">${esc(s.titre)}<small>${esc(s.sous)}</small></span>`;
@@ -150,23 +174,29 @@ function renderChrome() {
   const arc = $("#ring-arc");
   const CIRC = 2 * Math.PI * 30;      // r = 30 dans le SVG
   list.innerHTML = "";
+  const statuts = {};
+  // style (et non attribut) : c'est ce qui déclenche la transition CSS de l'arc
   if (ev) {
     const c = ev.completude;
-    arc.setAttribute("stroke-dasharray", `${(c.pretes / c.total * CIRC).toFixed(1)} ${CIRC.toFixed(1)}`);
+    arc.style.strokeDasharray = `${(c.pretes / c.total * CIRC).toFixed(1)} ${CIRC.toFixed(1)}`;
+    if (avant.pretes != null && c.pretes > avant.pretes) rejouer($(".ring"), "pulse");
     $("#ring-txt").textContent = c.pretes;
     $("#ring-tot").textContent = `/${c.total}`;
     $("#prog-label").textContent = "Pièces prêtes";
     $("#prog-sub").textContent = `${c.pretes} sur ${c.total}`;
     for (const piece of c.pieces) {
       const ok = piece.statut === "prete";
+      statuts[piece.titre] = piece.statut;
+      const vientDeFinir = ok && avant.statuts && avant.statuts[piece.titre] !== "prete";
       const div = document.createElement("div");
-      div.className = "piece" + (ok ? " ok" : "");
+      div.className = "piece" + (ok ? " ok" : "") + (vientDeFinir ? " vient-de-finir" : "");
       div.innerHTML = `<span class="st ${esc(piece.statut)}">${ok ? "✓" : ""}</span>
         <span class="nm">${esc(piece.titre)}</span>`;
       list.appendChild(div);
     }
+    chromePrecedent = { projetId: p?.id, faites, statuts, pretes: c.pretes };
   } else {
-    arc.setAttribute("stroke-dasharray", `0 ${CIRC.toFixed(1)}`);
+    arc.style.strokeDasharray = `0 ${CIRC.toFixed(1)}`;
     $("#ring-txt").textContent = "—";
     $("#ring-tot").textContent = "";
     $("#prog-label").textContent = "Aucun projet ouvert";
@@ -222,9 +252,22 @@ function allerEtape(n) {
 }
 
 // ---------------- rendu principal ----------------
+// Animation d'entrée : seulement quand l'étape CHANGE. render() est aussi
+// rappelé dans une même étape (dépôt d'un fichier, choix du type) et tout
+// rejouer à chaque fois serait pénible. La classe est retirée après coup,
+// sinon tout contenu réinjecté plus tard dans #main s'animerait à nouveau.
+let etapeAffichee = null;
+let finEntree = null;
+
 function render() {
   renderChrome();
   const main = $("#main");
+  if (etapeAffichee !== state.etape) {
+    etapeAffichee = state.etape;
+    rejouer(main, "entree");
+    clearTimeout(finEntree);
+    finEntree = setTimeout(() => main.classList.remove("entree"), 800);
+  }
   if (state.etape === 0) return renderAccueil(main);
   if (state.etape === 1) return renderEtapeLocalisation(main);
   if (state.etape === 2) return renderEtapePieces(main);
@@ -263,13 +306,14 @@ async function renderAccueil(main) {
       return;
     }
     box.innerHTML = "";
-    for (const pr of data.projets) {
+    for (const [i, pr] of data.projets.entries()) {
       const c = pr.completude || { pretes: 0, total: 1 };
       const pct = Math.round((c.pretes / c.total) * 100);
       const complet = c.pretes >= c.total;
       const teinte = complet ? "var(--gv-green)" : "var(--gv-violet)";
       const div = document.createElement("div");
       div.className = "home-item";
+      div.style.setProperty("--i", Math.min(i, 12));   // rang dans la cascade (CSS)
       div.innerHTML = `
         <span class="t">${esc(pr.nom)}<small>modifié ${esc((pr.date_modification || "").slice(0, 10) || "—")}</small></span>
         <span class="home-comp">
@@ -1176,8 +1220,13 @@ function renderEtapeExport(main) {
   brancherChamps(main);  // champs maître d'ouvrage
   const chargerImg = (code, regen) => {
     const img = $(`#pl-${code}`);
+    // .chargee coupe le reflet d'attente et joue le fondu (CSS). Gestionnaires
+    // posés AVANT src : une image en cache peut arriver immédiatement.
+    img.classList.remove("chargee");
+    img.style.opacity = "";
+    img.onload = () => img.classList.add("chargee");
+    img.onerror = () => { img.alt = "Planche indisponible (complétez la localisation et les caractéristiques)"; img.style.opacity = 0.25; img.classList.add("chargee"); };
     img.src = `/api/projets/${state.projet.id}/planches/${code}.png?regen=${regen ? 1 : 0}&t=${Date.now()}`;
-    img.onerror = () => { img.alt = "Planche indisponible (complétez la localisation et les caractéristiques)"; img.style.opacity = 0.25; };
   };
   PLANCHES_APERCU.forEach(([code]) => chargerImg(code, false));
   main.querySelectorAll("[data-regen]").forEach((el) =>
@@ -1190,12 +1239,14 @@ function renderEtapeExport(main) {
   const actionLongue = (btn, fn) => async () => {
     if (btn.disabled) return;
     btn.disabled = true;
+    btn.classList.add("charge");   // spinner (CSS)
     try {
       await fn();
     } catch (e) {
       liens.textContent = "";   // l'erreur est déjà affichée en toast par api()
     } finally {
       btn.disabled = false;
+      btn.classList.remove("charge");
     }
   };
   const btnCerfa = $("#btn-cerfa"), btnPptx = $("#btn-pptx"), btnPdf = $("#btn-pdf");

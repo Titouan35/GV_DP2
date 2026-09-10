@@ -419,3 +419,121 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
   font-size: 13px; line-height: 1.5;
 }
 #bandeau-ephemere[hidden] { display: none; }
+
+/* ======================================================================
+   ANIMATIONS
+   Règle d'or : le panneau latéral est reconstruit à CHAQUE sauvegarde
+   automatique (900 ms). On n'y anime donc que ce qui vient de CHANGER
+   (classe .vient-de-finir posée par app.js), jamais un état permanent,
+   sinon tout rejouerait pendant la saisie.
+   Toutes les entrées utilisent `backwards` et non `both` : une fois jouée,
+   l'animation rend la main aux styles normaux (survol, transform...).
+   ====================================================================== */
+@keyframes monte   { from { opacity: 0; transform: translateY(10px); } }
+@keyframes apparait { from { opacity: 0; } }
+@keyframes pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+@keyframes remplit { from { transform: scaleX(0); } }
+@keyframes toast-entre { from { opacity: 0; transform: translateX(28px); } }
+@keyframes toast-sort  { to   { opacity: 0; transform: translateX(28px); } }
+@keyframes tourne  { to { transform: rotate(360deg); } }
+@keyframes reflet  { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@keyframes halo {
+  0%   { box-shadow: 0 0 0 0 rgba(5, 219, 121, 0.55); }
+  100% { box-shadow: 0 0 0 9px rgba(5, 219, 121, 0); }
+}
+@keyframes zoom { from { opacity: 0; transform: scale(0.94); } }
+
+/* entrée d'étape : les blocs arrivent en cascade */
+.main.entree > * { animation: monte .38s cubic-bezier(.2, .8, .2, 1) backwards; }
+.main.entree > :nth-child(2) { animation-delay: 40ms; }
+.main.entree > :nth-child(3) { animation-delay: 80ms; }
+.main.entree > :nth-child(4) { animation-delay: 120ms; }
+.main.entree > :nth-child(5) { animation-delay: 160ms; }
+.main.entree > :nth-child(6) { animation-delay: 200ms; }
+.main.entree > :nth-child(n+7) { animation-delay: 240ms; }
+
+/* boutons : retour tactile */
+.btn, .addbtn, .suggest-row button {
+  transition: background .15s, border-color .15s, box-shadow .15s, transform .1s;
+}
+.btn:active:not(:disabled), .addbtn:active, .suggest-row button:active { transform: scale(.97); }
+.btn.primary:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(5, 219, 121, 0.35); }
+.btn.navy:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(0, 36, 85, 0.25); }
+
+/* bouton d'une opération longue : spinner */
+.btn.charge { position: relative; cursor: progress; }
+.btn.charge:disabled { opacity: .85; cursor: progress; }
+.btn.charge::after {
+  content: ""; width: 13px; height: 13px; border-radius: 50%; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent;
+  animation: tourne .7s linear infinite;
+}
+
+/* barre d'étapes et panneau de complétude */
+.step { transition: background .15s; }
+.step .dot { transition: background .25s, border-color .25s, color .25s; }
+.step.vient-de-finir .dot { animation: pop .5s cubic-bezier(.3, 1.6, .5, 1); }
+.piece.vient-de-finir .st { animation: pop .5s cubic-bezier(.3, 1.6, .5, 1); }
+.piece.vient-de-finir .nm { animation: apparait .5s; }
+#ring-arc { transition: stroke-dasharray .9s cubic-bezier(.2, .8, .2, 1); }
+.ring.pulse { animation: pop .6s cubic-bezier(.3, 1.6, .5, 1); }
+
+/* accueil : cartes en cascade, barres qui se remplissent */
+.home-item {
+  animation: monte .35s cubic-bezier(.2, .8, .2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms);
+  transition: border-color .15s, box-shadow .2s, transform .2s;
+}
+.home-item:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(0, 36, 85, 0.08); }
+.home-bar i {
+  transform-origin: left;
+  animation: remplit .8s cubic-bezier(.2, .8, .2, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 45ms + 150ms);
+}
+
+/* choix du type d'ombrière */
+.type-chip { transition: border-color .12s, background .12s, transform .15s, box-shadow .15s; }
+.type-chip:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(119, 109, 248, 0.12); }
+
+/* dépôt de fichiers */
+.dropzone, .dropzone-slot { transition: border-color .15s, background .15s, transform .15s; }
+.dropzone.over, .dropzone-slot.over { transform: scale(1.01); }
+
+/* champs pré-remplis par la FVE ou le plan de masse : ils pulsent deux fois */
+.input.propose { animation: halo 1.4s ease-out 2; }
+
+/* toasts : entrent par la droite, sortent en fondu */
+.toast { animation: toast-entre .3s cubic-bezier(.2, .8, .2, 1); }
+.toast.sort { animation: toast-sort .3s ease-in forwards; }
+
+/* résultats de géocodage, blocs repliables */
+.geo-results { animation: monte .18s ease-out; }
+.foldable[open] > :not(summary) { animation: monte .25s ease-out backwards; }
+
+/* planches : reflet pendant le calcul, fondu à l'arrivée */
+.planche-img:not(.chargee) {
+  min-height: 220px;
+  background: linear-gradient(90deg, #EEF1F5 0%, #F8FAFC 50%, #EEF1F5 100%);
+  background-size: 200% 100%;
+  animation: reflet 1.4s linear infinite;
+}
+.planche-img.chargee { animation: apparait .45s ease-out; }
+
+/* lightbox */
+#lightbox:not([hidden]) { animation: apparait .2s ease-out; }
+#lightbox:not([hidden]) img { animation: zoom .25s cubic-bezier(.2, .8, .2, 1); }
+
+/* Le poste demande moins d'animations (réglage d'accessibilité Windows) :
+   on coupe tout, l'interface reste identique. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: .01ms !important;
+  }
+}
