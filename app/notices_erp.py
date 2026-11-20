@@ -348,12 +348,23 @@ class _Paquet:
         tmp.replace(chemin)
 
 
-def _pages_pdf(chemin: Path, dpi: int = 150) -> list[Image.Image]:
+def _pages_pdf(chemin: Path, dpi: int = 150, cote_max_px: int = 2500,
+               max_pages: int | None = None) -> list[Image.Image]:
+    """Pages d'un PDF en images, pour une annexe A4 de la notice.
+
+    Plafonnées en taille (images.rendre_page_pdf) : un plan A0 à 200 dpi
+    pesait près de 190 Mo par page, et TOUTES les pages étaient rendues pour
+    n'en garder que la première. 2 500 px sur le grand côté font encore plus
+    de 200 dpi sur une page A4.
+    """
     import pypdfium2 as pdfium
+
+    from .images import rendre_page_pdf
     with config.PDFIUM_LOCK:
         pdf = pdfium.PdfDocument(str(chemin))
         try:
-            return [pdf[i].render(scale=dpi / 72).to_pil() for i in range(len(pdf))]
+            nb = len(pdf) if max_pages is None else min(len(pdf), max_pages)
+            return [rendre_page_pdf(pdf[i], dpi, cote_max_px) for i in range(nb)]
         finally:
             pdf.close()
 
@@ -369,7 +380,8 @@ def _images_plan_masse(projet: dict) -> list[Image.Image]:
     if chemin is None or not chemin.exists():
         return []
     if chemin.suffix.lower() == ".pdf":
-        image = _pages_pdf(chemin, dpi=200)[0]
+        # première page seulement, déjà au plafond appliqué plus bas
+        image = _pages_pdf(chemin, dpi=200, cote_max_px=3500, max_pages=1)[0]
     else:
         with Image.open(chemin) as im:
             image = im.copy()

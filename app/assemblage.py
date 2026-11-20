@@ -53,6 +53,12 @@ POLICE = "Poppins"
 EMU_PAR_PX = 914400 / 96.0
 ZONE = (48, 118, 1184, 516)          # zone de contenu sous l'en-tête
 
+# Plus grand côté d'une page PDF rendue en image (plans du BE). _optimiser
+# ramène ensuite toute image à 2 400 px de large : 3 400 px sur le grand côté
+# laissent ces 2 400 px à un plan A0 en portrait (rapport 1,41), sans fabriquer
+# les 7 000 px d'un A0 à 150 dpi (voir images.rendre_page_pdf).
+COTE_MAX_RENDU_PDF = 3400
+
 MOIS_FR = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet",
            "août", "septembre", "octobre", "novembre", "décembre"]
 
@@ -303,7 +309,9 @@ def _pdf_en_images(chemin_pdf: Path, assets: Path, prefixe: str,
         doc = pdfium.PdfDocument(str(chemin_pdf))
         try:
             for i in range(min(len(doc), max_pages)):
-                image = doc[i].render(scale=150 / 72).to_pil()
+                # plafond : un plan A0 n'a pas besoin de plus que ce que
+                # _optimiser gardera (2 400 px de large, même en portrait)
+                image = images.rendre_page_pdf(doc[i], 150, COTE_MAX_RENDU_PDF)
                 chemin = assets / f"{prefixe}_p{i + 1}.jpg"
                 image.convert("RGB").save(chemin, "JPEG", quality=88)
                 sorties.append(chemin)

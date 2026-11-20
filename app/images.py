@@ -113,3 +113,22 @@ def rendre_lisible(chemin: Path, assets: Path) -> Path:
     except OSError:
         logger.warning("Réparation impossible pour %s", chemin.name, exc_info=True)
     return chemin
+
+
+def rendre_page_pdf(page, dpi: float, cote_max_px: int) -> Image.Image:
+    """Image d'une page PDF à `dpi`, sans dépasser `cote_max_px` de côté.
+
+    Pourquoi (20/11/2026). Le serveur gratuit (Render) s'est arrêté cinq fois
+    en septembre faute de mémoire (plus de 512 Mo). Cause mesurée : des plans
+    de masse au format A0, rendus à 150 dpi pour le dossier, donnent une
+    image de 7 000 x 5 000 px, plus de 100 Mo, copiée deux fois avant d'être
+    enregistrée. Or le dossier la ramène ensuite à 2 400 px de large
+    (assemblage._optimiser) : tout ce surplus était calculé pour rien.
+    Assemblage d'un dossier réel, caches vidés : 566 Mo de pic avant.
+
+    On garde la résolution demandée pour les formats courants (A4, A3), et on
+    réduit seulement l'échelle des grands formats.
+    """
+    largeur_pt, hauteur_pt = page.get_size()
+    echelle = min(dpi / 72, cote_max_px / max(largeur_pt, hauteur_pt, 1))
+    return page.render(scale=echelle).to_pil()
