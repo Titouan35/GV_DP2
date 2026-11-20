@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="fr">
 <head>
 <meta charset="utf-8" />
@@ -6,16 +6,14 @@
 <title>GV_DP · Déclaration Préalable — Ombrières</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2305DB79' d='M13 2 4 14h6l-1 8 9-12h-6z'/%3E%3C/svg%3E" />
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css" />
-<link rel="stylesheet" href="/static/css/app.css?v=35" />
+<link rel="stylesheet" href="/static/css/app.css?v=42" />
 </head>
 <body>
 <div class="app">
 
-  <div id="bandeau-ephemere" hidden>
-    <b>Espace de travail temporaire.</b>
-    <span id="bandeau-texte"></span>
-    Téléchargez votre dossier à l'étape « Aperçu &amp; export » avant de partir.
-  </div>
+  <!-- mode web : où vivent les projets (dossier du PC lié, ou espace
+       temporaire). Rempli par app.js, voir majBandeau(). -->
+  <div id="bandeau-ephemere" hidden></div>
 
 
   <header class="topbar">
@@ -37,6 +35,11 @@
     </button>
   </header>
 
+  <!-- présence d'un collègue sur ce dossier (mode partagé). HORS de #main :
+       chaque étape réécrit #main, ce qui effaçait le bandeau avant même qu'il
+       ne s'affiche (relevé le 20/11/2026). -->
+  <div id="presence" class="presence" hidden></div>
+
   <div class="body">
 
     <aside class="side" id="sidebar">
@@ -44,8 +47,6 @@
     </aside>
 
     <main class="main" id="main">
-      <!-- presence d'un collegue sur ce dossier (mode partage) -->
-      <div id="presence" class="presence" hidden></div>
       <!-- contenu de l'étape active, rendu par app.js -->
     </main>
 
@@ -74,6 +75,7 @@
 <div id="lightbox" hidden><img id="lightbox-img" alt="Agrandissement" /></div>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
-<script src="/static/js/app.js?v=35"></script>
+<script src="/static/js/dossier_lie.js?v=2"></script>
+<script src="/static/js/app.js?v=56"></script>
 </body>
 </html>

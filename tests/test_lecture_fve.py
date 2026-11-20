@@ -83,7 +83,10 @@ def test_le_module_est_distingue_de_l_onduleur(tmp_path):
     champs = lecture_fve.lire_fve(fve_de_test(tmp_path))["champs"]
     assert champs["module_puissance_wc"] == 490.0
     assert champs["module_modele"] == "AIKO-A490-MCES4Dw"
-    assert "SUNGROW" not in str(champs)
+    # l'onduleur est désormais lu (notice de sécurité ERP), mais à part
+    assert "SUNGROW" not in str({k: v for k, v in champs.items() if "onduleur" not in k})
+    assert champs["modele_onduleur"] == "SUNGROW 125 CX-P2"
+    assert champs["nb_onduleurs"] == 1
 
 
 def test_les_deux_images_sont_distinctes(tmp_path):
@@ -106,8 +109,14 @@ def test_un_gabarit_inconnu_signale_ce_qui_manque(tmp_path):
     pas trouvé."""
     lecture = lecture_fve.lire_fve(fve_de_test(tmp_path, textes=["Rien d'exploitable ici."]))
     assert lecture["champs"] == {}
-    assert set(lecture["manquant"]) == {"puissance_kwc", "garde_au_sol_m",
-                                        "pente_deg", "largeur_m"}
+    # Une règle de lecture = un champ signalé s'il manque. La liste suit donc
+    # lecture_fve.REGLES : la puissance AC (cadre 4.2.1 du Cerfa) et le nombre
+    # de modules du rampant (choix de la coupe DP3) y ont été ajoutés après
+    # l'écriture de ce test, qui n'en attendait que quatre.
+    assert set(lecture["manquant"]) == {cle for cle, _, _ in lecture_fve.REGLES}
+    assert set(lecture["manquant"]) == {"puissance_kwc", "puissance_raccordement_kva",
+                                        "garde_au_sol_m", "pente_deg", "largeur_m",
+                                        "nb_modules_rampant"}
 
 
 def test_un_fichier_qui_n_est_pas_un_pptx_est_ignore(tmp_path):
@@ -173,3 +182,17 @@ def test_la_localisation_n_est_jamais_touchee(tmp_path):
     # Assert
     assert projet.localisation.adresse is None
     assert projet.localisation.parcelles == []
+
+
+def test_onduleur_sur_une_seule_ligne(tmp_path):
+    """FVE de Bourges : « Marque-modèle : SUNGROW SG40CX-P2 Puissance
+    nominale : 40 » sur une seule ligne. Le modèle s'arrête au libellé."""
+    textes = [
+        "Marque-modèle : AIKO-A490-MCES4Dw\nPuissance nominale : 490 Wc\nNombre : 189",
+        "Marque-modèle : SUNGROW SG40CX-P2 Puissance nominale : 40\nNombre : 2",
+        "Point bas : 3,5 m\nInclinaison : 6°\nNombre de panneaux en largeur : 7 (12,35m)",
+    ]
+    champs = lecture_fve.lire_fve(fve_de_test(tmp_path, textes=textes, avec_images=False))["champs"]
+    assert champs["modele_onduleur"] == "SUNGROW SG40CX-P2"
+    assert champs["nb_onduleurs"] == 2
+    assert champs["pente_deg"] == 6.0

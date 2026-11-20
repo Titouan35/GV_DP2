@@ -35,8 +35,13 @@ def test_completude_projet_vide():
     # DP4 retirée du dossier le 17/07/2026 : 11 pièces attendues
     assert c["total"] == len(PIECES_DP) == 11
     assert all(p["code"] != "dp4" for p in c["pieces"])
-    assert c["pretes"] == 0
     statuts = {p["code"]: p["statut"] for p in c["pieces"]}
+    # Seule la page de garde est prête : depuis le 16/09/2026, tout projet naît
+    # avec Greenvolt Next France pour maître d'ouvrage
+    # (config.MAITRE_OUVRAGE_DEFAUT), et la garde n'exige que le nom et la
+    # raison sociale. Ce test attendait 0, d'avant ce défaut.
+    assert c["pretes"] == 1
+    assert statuts["garde"] == "prete"
     assert statuts["dp1_situation"] == "a_completer"
     assert statuts["dp6"] == "en_attente"
 

@@ -39,12 +39,11 @@ def test_hauteur_hors_tout_saisie_gagne():
     assert p["h_haut_m"] == 4.2
 
 
-def test_deux_hauteurs_priment_pente_recalculee():
-    """Hauteurs bas + haut saisies : elles font foi, la pente est déduite."""
+def test_deux_hauteurs_sans_pente_pente_recalculee():
+    """Hauteurs bas + haut saisies, pente non renseignée : pente déduite."""
     p = parametres_effectifs({
         "famille": "START PLAINE Bas",
         "largeur_m": 7.5,            # profondeur couverte
-        "pente_deg": 5.0,            # incohérente : ignorée
         "garde_au_sol_m": 2.5,
         "hauteur_hors_tout_m": 3.5,
     })
@@ -52,6 +51,22 @@ def test_deux_hauteurs_priment_pente_recalculee():
     assert p["h_haut_m"] == 3.5
     # atan(1,0 / 7,5) ≈ 7,6°
     assert p["pente_deg"] == pytest.approx(7.6, abs=0.1)
+
+
+def test_la_pente_saisie_n_est_jamais_recalculee():
+    """Cas Bourges (12/11/2026) : FVE à 6°, point bas 3,50 m, 12,35 m de
+    profondeur, hauteur max saisie 3,92 m. L'ancienne règle « hauteurs >
+    pente » affichait 1,9° dans la notice au lieu des 6° de la FVE."""
+    p = parametres_effectifs({
+        "famille": "START PLAINE Double",
+        "largeur_m": 12.35,
+        "pente_deg": 6.0,
+        "garde_au_sol_m": 3.5,
+        "hauteur_hors_tout_m": 3.92,
+    })
+    assert p["pente_deg"] == 6.0
+    assert p["h_bas_m"] == 3.5
+    assert p["h_haut_m"] == 3.92     # la saisie n'est pas réécrite non plus
 
 
 PROJET_MIN = {

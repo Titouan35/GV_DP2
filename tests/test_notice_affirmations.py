@@ -215,3 +215,43 @@ def test_la_destination_alimente_aussi_le_cerfa(tmp_path, monkeypatch):
     lus = PdfReader(str(chemin)).get_fields()
     assert lus["C2ZR1_destination"].get("/V") == "Autoconsommation totale"
     assert not any("destination" in a.lower() for a in avertissements)
+
+
+def test_eaux_pluviales_cheneau_sans_raccordement_reseau():
+    """Section 7 (03/11/2026) : chéneau + descentes, rejet en pied de poteau.
+
+    Le texte ne doit affirmer ni un raccordement au réseau existant, ni une
+    imperméabilisation nouvelle ; il est identique quel que soit le projet.
+    """
+    for p in (projet(), {"nom": "X"}):
+        texte = section(p, "eaux_pluviales")
+        assert "chéneau" in texte
+        assert "pied de poteau" in texte
+        assert "sans raccordement au réseau" in texte
+        assert "aucune surface imperméabilisée supplémentaire" in texte
+        assert "{{" not in texte
+
+
+# ------------------------------------------- ombrière monopente (12/11/2026)
+
+def test_le_type_double_est_une_ombriere_monopente_double_en_t():
+    description = section(projet(), "description")
+    assert "toiture monopente double (structure en T)" in description
+    assert "double pente" not in description
+
+
+def test_le_type_simple_est_une_ombriere_monopente_simple():
+    description = section(projet(ombriere={"famille": "START PLAINE Bas",
+                                           "puissance_kwc": 500}), "description")
+    assert "toiture monopente simple" in description
+
+
+def test_la_pente_de_la_fve_est_celle_de_la_notice():
+    """Bourges : FVE à 6°, hauteur max saisie 3,92 m. La notice affichait
+    1,9° (pente recalculée depuis les hauteurs)."""
+    description = section(projet(ombriere={
+        "famille": "START PLAINE Double", "puissance_kwc": 92.61,
+        "largeur_m": 12.35, "pente_deg": 6.0, "garde_au_sol_m": 3.5,
+        "hauteur_hors_tout_m": 3.92}), "description")
+    assert "à 6°" in description
+    assert "1,9°" not in description

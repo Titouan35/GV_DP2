@@ -38,7 +38,7 @@ PROJET = {
 }
 
 
-def test_notice_sept_sections_remplies():
+def test_notice_huit_sections_remplies():
     sections = generer_sections(PROJET)
     assert set(sections) == {cle for cle, _ in SECTIONS}
     assert all(len(v) > 60 for v in sections.values())
@@ -51,7 +51,7 @@ def test_notice_sept_sections_remplies():
 
 def test_notice_projet_minimal_sans_crash():
     sections = generer_sections({"nom": "X"})
-    assert len(sections) == 7
+    assert len(sections) == 8
 
 
 def test_gabarit_cerfa_versionne():
@@ -83,7 +83,12 @@ def test_cerfa_prerempli(tmp_path, monkeypatch):
     assert lus["C2ZP1_crete"].get("/V") == "500"
     assert not lus["C2ZE1_puissance"].get("/V")   # raccordement : inconnu de l'outil
     desc = lus["C2ZD1_description"].get("/V") or ""
-    assert "START PLAINE Double" in desc
+    # La référence commerciale du catalogue est RETIRÉE de la nature des
+    # travaux depuis le 16/09/2026 (cerfa.py) : la mairie instruit une
+    # structure, pas un produit. Ce test l'exigeait encore ; il vérifie
+    # désormais qu'elle n'y est plus, et que le matériau, lui, y est.
+    assert "START PLAINE" not in desc
+    assert "acier galvanisé" in desc
     # nb_travees + entraxe saisis : la longueur (6 x 5 = 30 m) est affirmée
     assert "30 m x 10 m" in desc
 

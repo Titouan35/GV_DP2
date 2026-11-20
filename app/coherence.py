@@ -242,7 +242,10 @@ def _controler_fichiers(projet: dict) -> list[dict]:
         rel = (doc or {}).get("fichier")
         if not rel:
             continue
-        if not (config.espace() / rel).exists():
+        # un chemin hors de l'espace est traité comme absent : l'assemblage
+        # ne le lira pas (config.chemin_dans_espace), la pièce ne sortira pas
+        chemin = config.chemin_dans_espace(rel)
+        if chemin is None or not chemin.exists():
             nom = (doc or {}).get("nom_fichier") or rel
             anomalies.append(_anomalie(
                 f"fichier_manquant_{code}", BLOQUANTE,
@@ -264,6 +267,7 @@ def _controler_ombriere(projet: dict) -> list[dict]:
             "Aucun type d'ombrière n'est choisi. Les cotes du catalogue ne "
             "seront pas affirmées dans le Cerfa ni dans la notice.",
             "Étape 3, type d'ombrière"))
+    anomalies.extend(_controler_profil(omb))
     if not omb.get("puissance_kwc"):
         anomalies.append(_anomalie(
             "puissance_absente", SERIEUSE,
@@ -271,6 +275,40 @@ def _controler_ombriere(projet: dict) -> list[dict]:
             "d'urbanisme (déclaration préalable en dessous de 3 MWc).",
             "Étape 3, puissance"))
     return anomalies
+
+
+# Écart toléré entre la hauteur maximale saisie et celle que donnent le point
+# bas, la pente et la profondeur : arrondis de saisie, épaisseur de chéneau.
+_TOLERANCE_HAUTEUR_M = 0.10
+
+
+def _controler_profil(omb: dict) -> list[dict]:
+    """Point bas + pente + profondeur doivent redonner la hauteur maximale.
+
+    Depuis le 12/11/2026, une pente saisie (FVE) n'est plus recalculée depuis
+    les hauteurs (app/catalogue.py). Si les cotes se contredisent, on le DIT :
+    la notice et le Cerfa affirmeraient sinon une pente et des hauteurs
+    géométriquement incompatibles.
+    """
+    import math
+
+    pente = omb.get("pente_deg")
+    h_bas = omb.get("garde_au_sol_m")
+    h_haut = omb.get("hauteur_hors_tout_m")
+    profondeur = omb.get("largeur_m")
+    if not (pente and h_bas and h_haut and profondeur):
+        return []
+    attendue = h_bas + profondeur * math.tan(math.radians(pente))
+    if abs(attendue - h_haut) <= _TOLERANCE_HAUTEUR_M:
+        return []
+    f = lambda v: f"{v:.2f}".replace(".", ",")
+    return [_anomalie(
+        "profil_ombriere_incoherent", SERIEUSE,
+        f"La hauteur maximale saisie ({f(h_haut)} m) ne correspond pas au profil : "
+        f"point bas {f(h_bas)} m + {f(profondeur)} m de profondeur à "
+        f"{pente:g}° donnent environ {f(attendue)} m. Vérifier la hauteur "
+        "maximale (ou la pente) avant de générer la notice et le Cerfa.",
+        "Étape 3, ombrière")]
 
 
 # ---------------------------------------------------------------- régime
@@ -300,6 +338,37 @@ def _controler_regime(projet: dict) -> list[dict]:
         "Étape 3, puissance et secteur ABF")]
 
 
+def _controler_pieces_provisoires(projet: dict) -> list[dict]:
+    """Une pièce venue du catalogue ne doit pas partir pour la pièce du BE.
+
+    La coupe type déposée en DP3 d'après la FVE (app/coupes_dp3.py) est un
+    point de départ : elle est cotée pour SA configuration et porte le
+    cartouche du dossier dont elle est issue. Sans ce contrôle, elle comptait
+    comme « pièce fournie » et le dossier passait le contrôle de dépôt en
+    présentant à la mairie la référence d'un autre projet.
+
+    L'anomalie tombe dès que le BE VALIDE la pièce (bouton « Valider » de
+    l'étape 2, `valide_humain`) : il a alors regardé le dessin et pris la
+    responsabilité de le déposer. Même règle que la notice, dont le brouillon
+    ne bloque plus une fois relu.
+    """
+    anomalies = []
+    for code, doc in (projet.get("documents") or {}).items():
+        if not isinstance(doc, dict) or doc.get("origine") != "catalogue":
+            continue
+        if doc.get("valide_humain"):
+            continue
+        anomalies.append(_anomalie(
+            f"piece_provisoire_{code}",
+            BLOQUANTE,
+            f"La pièce {code.upper()} est une coupe type du catalogue, déposée "
+            "automatiquement d'après la FVE. Elle est cotée pour sa configuration "
+            "et son cartouche est celui du dossier d'origine : vérifiez-la puis "
+            "validez-la à l'étape 2, ou remplacez-la par la coupe du bureau d'études.",
+            "Étape 2, pièces du BE"))
+    return anomalies
+
+
 # --------------------------------------------------------------------- entrée
 
 CONTROLES = (
@@ -309,6 +378,7 @@ CONTROLES = (
     _controler_notice,
     _controler_fichiers,
     _controler_ombriere,
+    _controler_pieces_provisoires,
 )
 
 

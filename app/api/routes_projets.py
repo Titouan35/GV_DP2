@@ -13,7 +13,8 @@ import shutil
 import threading
 import unicodedata
 import uuid
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
@@ -27,13 +28,18 @@ router = APIRouter(prefix="/api/projets", tags=["projets"])
 # Un verrou par projet sérialise l'écriture ; l'écriture elle-même est atomique
 # (fichier temporaire + os.replace) pour ne jamais laisser un JSON tronqué en
 # cas de crash ou de verrou OneDrive en plein write.
-_VERROUS_PROJET: dict[str, threading.Lock] = {}
+#
+# Réentrant depuis le 20/11/2026 : les routes tiennent désormais le verrou
+# pendant tout leur travail (projet_a_modifier). Un `_sauver` appelé un jour
+# à l'intérieur d'un tel bloc figerait sinon le projet pour de bon, sans
+# erreur ni trace.
+_VERROUS_PROJET: dict[str, threading.RLock] = {}
 _VERROUS_GARDE = threading.Lock()
 
 
-def verrou_projet(projet_id: str) -> threading.Lock:
+def verrou_projet(projet_id: str) -> threading.RLock:
     with _VERROUS_GARDE:
-        return _VERROUS_PROJET.setdefault(projet_id, threading.Lock())
+        return _VERROUS_PROJET.setdefault(projet_id, threading.RLock())
 
 
 def _utilisateur(request: Request | None) -> str | None:
@@ -57,14 +63,28 @@ def _slug(nom: str) -> str:
 
 
 def _chemin(projet_id: str):
-    if not re.fullmatch(r"[a-z0-9-]+", projet_id):
+    if not config.projet_id_valide(projet_id):
         raise HTTPException(status_code=400, detail="Identifiant de projet invalide.")
     return config.espace() / f"{projet_id}.json"
 
 
+def exiger_projet_id(projet_id: str) -> None:
+    """Dépendance de routeur : refuse un identifiant mal formé AVANT la route.
+
+    Pourquoi (20/11/2026). Les routes de téléchargement (`cerfa.pdf`,
+    `dossier.pptx`, `planches/...`) construisaient le dossier du projet avec
+    `config.assets_dir(projet_id)` AVANT tout chargement, donc sans le contrôle
+    de `_chemin`. Sous Windows, `\\` est un séparateur que l'URL laisse passer
+    (`..%5C..%5Cx`) : le dossier visé sortait de l'espace, et `assets_dir` le
+    créait au passage. Posée sur les routeurs dont TOUTES les routes portent
+    un identifiant, cette dépendance couvre aussi les routes à venir.
+    """
+    _chemin(projet_id)
+
+
 def _ecrire(projet: Projet) -> None:
     """Écriture atomique SANS verrou : réservée aux appelants qui tiennent
-    déjà `verrou_projet` (le verrou n'est pas réentrant)."""
+    déjà `verrou_projet`."""
     config.espace().mkdir(parents=True, exist_ok=True)
     chemin = _chemin(projet.id)
     tmp = chemin.with_suffix(".json.tmp")
@@ -77,12 +97,62 @@ def _sauver(projet: Projet) -> None:
         _ecrire(projet)
 
 
+@contextmanager
+def projet_a_modifier(projet_id: str):
+    """Charge le projet, le laisse modifier, puis l'écrit : tout sous son verrou.
+
+    Pourquoi (20/11/2026). Seule la sauvegarde (PUT) tenait le verrou sur
+    toute la séquence lire-modifier-écrire. Les autres routes qui écrivent le
+    projet (dépôt d'une pièce, validation, suppression, type d'ombrière,
+    notice, Cerfa, notices ERP) le chargeaient, travaillaient (plusieurs
+    secondes pour lire une FVE), puis réécrivaient leur copie ENTIÈRE. Une
+    sauvegarde arrivée entre-temps était écrasée sans un mot : exactement le
+    « dernier qui écrit gagne » que le verrou optimiste du PUT devait empêcher.
+
+    Une sauvegarde concurrente attend désormais la fin du bloc. Elle passe
+    ensuite si elle partait du bon état, ou reçoit le 409 habituel sinon :
+    jamais de perte silencieuse. Si le bloc lève une exception, rien n'est
+    écrit.
+    """
+    with verrou_projet(projet_id):
+        projet = _charger(projet_id)
+        avant = projet.date_modification
+        yield projet
+        projet.date_modification = _date_suivante(avant)
+        _ecrire(projet)
+
+
+def _date_suivante(precedente: str | None) -> str:
+    """Horodatage d'une écriture, STRICTEMENT postérieur au précédent.
+
+    `date_modification` sert de jeton au verrou optimiste du PUT, à la seconde
+    près. Deux écritures dans la même seconde portaient donc le même jeton :
+    une sauvegarde partie d'AVANT un dépôt passait le contrôle et effaçait la
+    pièce (relevé le 20/11/2026). On avance d'une seconde au besoin ; toutes
+    les écritures d'un projet passant sous son verrou, le jeton ne peut que
+    croître.
+    """
+    maintenant = datetime.now().replace(microsecond=0)
+    try:
+        avant = datetime.fromisoformat(precedente) if precedente else None
+        if avant is not None and maintenant <= avant:
+            maintenant = avant + timedelta(seconds=1)
+    except (ValueError, TypeError):
+        pass          # date illisible ou avec fuseau : l'heure courante suffit
+    return maintenant.isoformat(timespec="seconds")
+
+
 def _charger(projet_id: str) -> Projet:
     chemin = _chemin(projet_id)
     if not chemin.exists():
         raise HTTPException(status_code=404, detail="Projet introuvable.")
     try:
-        return Projet.model_validate(json.loads(chemin.read_text(encoding="utf-8")))
+        projet = Projet.model_validate(json.loads(chemin.read_text(encoding="utf-8")))
+        # dossiers antérieurs au 16/09/2026 : le maître d'ouvrage y a été
+        # enregistré champ par champ (ou laissé vide). On y remet les valeurs
+        # Greenvolt manquantes plutôt que de laisser le BE les retaper.
+        projet.mo.completer_defauts()
+        return projet
     except (ValueError, OSError) as exc:
         # JSON tronqué, schéma incompatible ou fichier verrouillé (OneDrive) :
         # un message actionnable plutôt qu'un 500 brut qui bloque tout le projet
@@ -94,6 +164,31 @@ def _charger(projet_id: str) -> Projet:
         ) from exc
 
 
+def resume_projet(data) -> dict | None:
+    """Ligne de la liste des projets, ou None si le contenu n'est pas un projet.
+
+    Partagé avec la synchro du dossier lié (routes_synchro), qui calcule la
+    liste à partir des fichiers du POSTE sans les écrire sur le serveur.
+    """
+    if not isinstance(data, dict):
+        return None
+    try:
+        projet = Projet.model_validate(data)
+    except ValueError:
+        return None
+    projet.mo.completer_defauts()  # même complétude que dans le projet ouvert
+    c = regles.completude(projet)
+    return {
+        "id": data.get("id"),
+        "nom": data.get("nom"),
+        "statut": data.get("statut"),
+        "regime": data.get("regime"),
+        "commune": (data.get("localisation") or {}).get("commune"),
+        "date_modification": data.get("date_modification"),
+        "completude": {"pretes": c["pretes"], "total": c["total"]},
+    }
+
+
 @router.get("")
 def lister_projets():
     config.espace().mkdir(parents=True, exist_ok=True)
@@ -101,21 +196,11 @@ def lister_projets():
     for f in sorted(config.espace().glob("*.json")):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            projet = Projet.model_validate(data)
         except (ValueError, OSError):
             continue
-        c = regles.completude(projet)
-        projets.append(
-            {
-                "id": data.get("id"),
-                "nom": data.get("nom"),
-                "statut": data.get("statut"),
-                "regime": data.get("regime"),
-                "commune": (data.get("localisation") or {}).get("commune"),
-                "date_modification": data.get("date_modification"),
-                "completude": {"pretes": c["pretes"], "total": c["total"]},
-            }
-        )
+        resume = resume_projet(data)
+        if resume is not None:
+            projets.append(resume)
     projets.sort(key=lambda p: p.get("date_modification") or "", reverse=True)
     return {"projets": projets}
 
@@ -165,7 +250,7 @@ def sauvegarder_projet(projet_id: str, projet: Projet, request: Request = None):
                        + "). Rechargez la page pour repartir de la dernière version.",
             )
         projet.id = projet_id
-        projet.date_modification = datetime.now().isoformat(timespec="seconds")
+        projet.date_modification = _date_suivante(existant.date_modification)
         projet.modifie_par = _utilisateur(request)
         evaluation = regles.evaluer(projet)
         projet.regime = evaluation["regime"]["regime"]
@@ -177,7 +262,12 @@ def sauvegarder_projet(projet_id: str, projet: Projet, request: Request = None):
 # Gemini, pages PDF rendues, aperçus. Supprimables sans perte de donnée.
 _MOTIFS_CACHE = ("embed_*.jpg", "kit_*.png", "apercu_*.png", "_gradient*.png",
                  "photo_reperee.png", "scaffold.png", "aerienne_*.png",
-                 "dp1_*.png", "dp3_provisoire.png", "dp*_p*.jpg")
+                 "dp1_*.png", "dp3_provisoire.png", "dp*_p*.jpg",
+                 # copies réparées des images qu'PIL refuse d'ouvrir
+                 # (app/images.py) : refaites au prochain assemblage
+                 "repare_*.jpg",
+                 # archive des pages découpées : refaite à la demande
+                 "pages_*.zip")
 
 
 @router.post("/{projet_id}/nettoyer")
@@ -233,18 +323,17 @@ def choisir_type_ombriere(projet_id: str, corps: dict = Body(...)):
     """
     from ..catalogue import CATALOGUE
 
-    projet = _charger(projet_id)
-    famille = corps.get("famille")
-    if famille not in CATALOGUE:
-        raise HTTPException(status_code=400, detail="Type d'ombrière inconnu.")
-    projet.ombriere.famille = famille
-    entree = CATALOGUE[famille]
-    if projet.ombriere.garde_au_sol_m is None:
-        projet.ombriere.garde_au_sol_m = entree["h_bas_m"]
-    if projet.ombriere.hauteur_hors_tout_m is None:
-        projet.ombriere.hauteur_hors_tout_m = entree["h_haut_m"]
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
+    with projet_a_modifier(projet_id) as projet:
+        famille = corps.get("famille")
+        if famille not in CATALOGUE:
+            raise HTTPException(status_code=400, detail="Type d'ombrière inconnu.")
+        projet.ombriere.famille = famille
+        entree = CATALOGUE[famille]
+        if projet.ombriere.garde_au_sol_m is None:
+            projet.ombriere.garde_au_sol_m = entree["h_bas_m"]
+        if projet.ombriere.hauteur_hors_tout_m is None:
+            projet.ombriere.hauteur_hors_tout_m = entree["h_haut_m"]
+        projet.date_modification = datetime.now().isoformat(timespec="seconds")
     return {"projet": projet, "evaluation": regles.evaluer(projet)}
 
 

@@ -8,13 +8,16 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from PIL import Image, ImageOps
 
-from .. import config, lecture_fve, lecture_plan, regles
-from .routes_projets import _charger, _sauver
+from .. import config, coupes_dp3, lecture_fve, lecture_plan, regles
+from .routes_projets import _charger, _utilisateur, exiger_projet_id, projet_a_modifier
 
-router = APIRouter(prefix="/api/projets", tags=["documents"])
+# Toutes les routes portent {projet_id} : validé avant la route (exiger_projet_id)
+router = APIRouter(prefix="/api/projets", tags=["documents"],
+                   dependencies=[Depends(exiger_projet_id)])
 
 # "photo_site" est parti avec le module Insertion (01/09/2026) : la photo
 # du parking actuel est désormais la pièce DP7, déjà demandée au BE.
@@ -73,6 +76,39 @@ def _proposer_images_fve(projet, projet_id: str, lecture: dict) -> list[str]:
     return deposees
 
 
+def _proposer_coupe_fve(projet, projet_id: str) -> tuple[str | None, str | None]:
+    """Dépose la coupe type du catalogue en DP3. Renvoie (libellé, refus).
+
+    Le choix se fait sur le nombre de modules du rampant ET le point bas, tous
+    deux lus sur la FVE (app/coupes_dp3.py). Ne remplace jamais une DP3 déjà
+    fournie : le bureau d'études reste l'auteur de sa coupe.
+
+    La pièce est marquée `origine: "catalogue"`, pas `"fve"` : elle ne sort pas
+    de la fiche, elle est CHOISIE d'après elle. L'assemblage s'en sert pour
+    l'étiqueter provisoire, parce qu'elle porte le cartouche du dossier dont
+    elle est issue et non celui du projet en cours.
+    """
+    omb = projet.ombriere
+    coupe, refus = coupes_dp3.choisir(omb.nb_modules_rampant, omb.garde_au_sol_m)
+    if coupe is None:
+        return None, refus
+    if "dp3" in (projet.documents or {}):
+        return None, None          # le BE a déjà fourni sa coupe : on n'y touche pas
+
+    chemin = config.assets_dir(projet_id) / "uploads" / "dp3.pdf"
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    chemin.write_bytes(coupe["chemin"].read_bytes())
+    projet.documents["dp3"] = {
+        "nom_fichier": coupe["libelle"] + ".pdf",
+        "fichier": str(chemin.relative_to(config.espace())).replace("\\", "/"),
+        "date": datetime.now().isoformat(timespec="seconds"),
+        "taille": chemin.stat().st_size,
+        "origine": "catalogue",
+        "provisoire": True,
+    }
+    return coupe["libelle"], None
+
+
 async def lire_upload(fichier: UploadFile, taille_max: int) -> bytes:
     """Lit un upload par morceaux, en coupant court dès le dépassement.
 
@@ -119,9 +155,9 @@ def _verifier_code(code: str):
 
 
 def _chemin_confine(relatif: str) -> Path:
-    """Chemin résolu, confiné à PROJETS/ (garde contre la traversée de dossier)."""
-    cible = (config.espace() / relatif).resolve()
-    if config.espace().resolve() not in cible.parents:
+    """Chemin confiné à l'espace de travail (garde contre la traversée de dossier)."""
+    cible = config.chemin_dans_espace(relatif)
+    if cible is None:
         raise HTTPException(status_code=404, detail="Fichier introuvable.")
     return cible
 
@@ -137,56 +173,120 @@ async def uploader(projet_id: str, code: str, fichier: UploadFile):
         raise HTTPException(status_code=400,
                             detail=f"Le contenu du fichier ne correspond pas à son format ({ext}).")
 
-    projet = _charger(projet_id)
-    dossier = config.assets_dir(projet_id) / "uploads"
-    dossier.mkdir(parents=True, exist_ok=True)
-    # un seul fichier par pièce : purger les anciennes versions
-    for ancien in dossier.glob(f"{code}.*"):
-        ancien.unlink()
-    chemin = dossier / f"{code}{ext}"
-    chemin.write_bytes(contenu)
-    normaliser_exif(chemin)
+    # Seule la lecture de l'envoi a besoin de la boucle asynchrone. La suite
+    # est bloquante (lecture du PPTX de la FVE, rendu PDF du plan de masse) et
+    # tient le verrou du projet : exécutée ici, elle figeait TOUT le serveur
+    # pendant plusieurs secondes, et un verrou tenu par une autre requête
+    # aurait bloqué la boucle elle-même (20/11/2026).
+    return await run_in_threadpool(
+        _enregistrer_depot, projet_id, code, ext, fichier.filename, contenu)
 
-    projet.documents[code] = {
-        "nom_fichier": fichier.filename,
-        "fichier": str(chemin.relative_to(config.espace())).replace("\\", "/"),
-        "date": datetime.now().isoformat(timespec="seconds"),
-        "taille": len(contenu),
-    }
 
-    # plan de masse : lecture du cartouche -> pré-remplissage des champs vides
-    champs_proposes: list[str] = []
-    fve_images: list[str] = []
-    if code == "dp2":
-        lecture = lecture_plan.lire_plan_masse(chemin)
-        if lecture:
-            champs_proposes = lecture_plan.appliquer_lecture(projet, lecture)
+def _enregistrer_depot(projet_id: str, code: str, ext: str,
+                       nom_fichier: str | None, contenu: bytes) -> dict:
+    """Écrit la pièce et met le projet à jour, sous le verrou du projet."""
+    with projet_a_modifier(projet_id) as projet:
+        dossier = config.assets_dir(projet_id) / "uploads"
+        dossier.mkdir(parents=True, exist_ok=True)
+        # un seul fichier par pièce : purger les anciennes versions
+        for ancien in dossier.glob(f"{code}.*"):
+            ancien.unlink()
+        chemin = dossier / f"{code}{ext}"
+        chemin.write_bytes(contenu)
+        normaliser_exif(chemin)
 
-    # FVE du BE : mêmes règles que le plan de masse (on PROPOSE, on n'impose
-    # pas), plus le photomontage d'insertion offert comme pièce DP6.
-    if code == CODE_FVE:
-        lecture = lecture_fve.lire_fve(chemin)
-        champs_proposes = lecture_fve.appliquer_lecture(projet, lecture)
-        fve_images = _proposer_images_fve(projet, projet_id, lecture)
+        projet.documents[code] = {
+            "nom_fichier": nom_fichier,
+            "fichier": str(chemin.relative_to(config.espace())).replace("\\", "/"),
+            "date": datetime.now().isoformat(timespec="seconds"),
+            "taille": len(contenu),
+        }
 
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
+        # plan de masse : lecture du cartouche -> pré-remplissage des champs vides
+        champs_proposes: list[str] = []
+        fve_images: list[str] = []
+        if code == "dp2":
+            lecture = lecture_plan.lire_plan_masse(chemin)
+            if lecture:
+                champs_proposes = lecture_plan.appliquer_lecture(projet, lecture)
+
+        # FVE du BE : mêmes règles que le plan de masse (on PROPOSE, on n'impose
+        # pas), plus le photomontage d'insertion offert comme pièce DP6.
+        if code == CODE_FVE:
+            lecture = lecture_fve.lire_fve(chemin)
+            champs_proposes = lecture_fve.appliquer_lecture(projet, lecture)
+            fve_images = _proposer_images_fve(projet, projet_id, lecture)
+            # la coupe type vient APRÈS appliquer_lecture : elle se choisit sur des
+            # valeurs que cette lecture vient d'écrire (modules du rampant, point bas)
+            # la coupe n'entre PAS dans `fve_images` : elle est annoncée à part,
+            # sinon le bilan disait deux fois la même chose (« DP3 déposée · coupe
+            # type en DP3 »)
+            coupe, refus_coupe = _proposer_coupe_fve(projet, projet_id)
+            # de quel fichier, et quand : l'étape 3 l'affiche pour que le rédacteur
+            # sache quelle version de la FVE a alimenté les cases qu'il relit.
+            projet.meta["fve"].update({
+                "fichier": nom_fichier,
+                "date": projet.documents[code]["date"],
+                "images": fve_images,
+                "coupe": coupe,
+                "coupe_refus": refus_coupe,
+            })
+
+        projet.date_modification = datetime.now().isoformat(timespec="seconds")
     return {"projet": projet, "evaluation": regles.evaluer(projet),
             "plan_champs_proposes": champs_proposes,
             "fve_images": fve_images}
 
 
+@router.put("/{projet_id}/documents/{code}/valider")
+def valider_document(projet_id: str, code: str, valide: int = 1, request: Request = None):
+    """Le BE prend la responsabilité d'une pièce déposée automatiquement.
+
+    Une coupe type du catalogue est provisoire tant que personne ne l'a
+    regardée : elle est cotée pour SA configuration et porte le cartouche du
+    dossier dont elle est issue. Valider, c'est dire « je l'ai vérifiée, elle
+    convient à ce projet » — l'anomalie bloquante tombe alors, exactement
+    comme la notice cesse d'être un brouillon quand elle est relue
+    (`notice.valide_humain`).
+
+    La validation ne survit pas à un remplacement : téléverser une nouvelle
+    pièce réécrit l'entrée entière, donc la marque disparaît avec elle.
+    `valide=0` revient en arrière.
+    """
+    _verifier_code(code)
+    with projet_a_modifier(projet_id) as projet:
+        doc = projet.documents.get(code)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Pièce non fournie.")
+        if valide:
+            doc["valide_humain"] = True
+            doc["valide_le"] = datetime.now().isoformat(timespec="seconds")
+            doc["valide_par"] = _utilisateur(request)
+        else:
+            for cle in ("valide_humain", "valide_le", "valide_par"):
+                doc.pop(cle, None)
+        projet.date_modification = datetime.now().isoformat(timespec="seconds")
+    return {"projet": projet, "evaluation": regles.evaluer(projet)}
+
+
 @router.delete("/{projet_id}/documents/{code}")
 def supprimer_document(projet_id: str, code: str):
     _verifier_code(code)
-    projet = _charger(projet_id)
-    doc = projet.documents.pop(code, None)
-    if doc:
-        chemin = config.espace() / doc["fichier"]
-        if chemin.exists():
-            chemin.unlink()
-    projet.date_modification = datetime.now().isoformat(timespec="seconds")
-    _sauver(projet)
+    with projet_a_modifier(projet_id) as projet:
+        doc = projet.documents.pop(code, None)
+        if doc:
+            # confiné : un `fichier` forgé côté navigateur ne doit jamais désigner
+            # un fichier hors de l'espace (voir config.chemin_dans_espace). L'entrée
+            # est retirée du projet dans tous les cas.
+            chemin = config.chemin_dans_espace(doc.get("fichier"))
+            if chemin is not None and chemin.is_file():
+                chemin.unlink()
+        if code == CODE_FVE:
+            # Retirer la FVE, c'est dire « oublie ce document ». Les valeurs déjà
+            # reportées restent — elles appartiennent au projet — mais plus rien ne
+            # les annonce comme reprises d'une fiche qui n'est plus là.
+            projet.meta.pop("fve", None)
+        projet.date_modification = datetime.now().isoformat(timespec="seconds")
     return {"projet": projet, "evaluation": regles.evaluer(projet)}
 
 

@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 FORMAT_PDF = 32  # ppSaveAsPDF (PowerPoint COM)
+FORMAT_PDF_WORD = 17  # wdExportFormatPDF (Word COM)
 TIMEOUT_S = 240
 
 
@@ -58,6 +59,45 @@ try {{
         raise RuntimeError(f"Export PDF via PowerPoint échoué : {detail or 'erreur inconnue'}")
 
 
+def _export_word(chemin_docx: Path, chemin_pdf: Path) -> None:
+    """Notices ERP (.docx) via Word COM. Le sommaire est mis à jour avant
+    l'export : le gabarit garde les numéros de page du dossier MEHUN, que
+    l'insertion des annexes décale. Ouvert en lecture seule, rien n'est
+    réécrit dans le .docx. Même try/finally que PowerPoint, pour ne pas
+    laisser de WINWORD.EXE orphelin."""
+    script = f"""
+$ErrorActionPreference = 'Stop'
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+$word.DisplayAlerts = 0
+try {{
+    $doc = $word.Documents.Open("{chemin_docx}", $false, $true)
+    try {{
+        foreach ($toc in $doc.TablesOfContents) {{ $toc.Update() }}
+        $doc.ExportAsFixedFormat("{chemin_pdf}", {FORMAT_PDF_WORD})
+    }} finally {{
+        $doc.Close(0)
+    }}
+}} finally {{
+    $word.Quit()
+}}
+"""
+    try:
+        res = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            "Export PDF : Word n'a pas répondu dans les temps. Fermez les "
+            "fenêtres/processus Word résiduels puis réessayez, ou exportez "
+            "le .docx en PDF à la main."
+        ) from None
+    if res.returncode != 0 and not chemin_pdf.exists():
+        detail = (res.stderr or res.stdout or "").strip()[:400]
+        raise RuntimeError(f"Export PDF via Word échoué : {detail or 'erreur inconnue'}")
+
+
 def _export_libreoffice(chemin_pptx: Path, chemin_pdf: Path) -> None:
     """Conversion Linux/macOS via LibreOffice headless (soffice/libreoffice)."""
     binaire = shutil.which("soffice") or shutil.which("libreoffice")
@@ -87,12 +127,16 @@ def _export_libreoffice(chemin_pptx: Path, chemin_pdf: Path) -> None:
 
 
 def exporter_pdf(chemin_pptx: Path) -> Path:
+    """PPTX (dossier) ou DOCX (notices ERP) -> PDF à côté du fichier source."""
     chemin_pdf = chemin_pptx.with_suffix(".pdf")
     if chemin_pdf.exists():
         chemin_pdf.unlink()
 
     if sys.platform == "win32":
-        _export_powerpoint(chemin_pptx, chemin_pdf)
+        if chemin_pptx.suffix.lower() == ".docx":
+            _export_word(chemin_pptx, chemin_pdf)
+        else:
+            _export_powerpoint(chemin_pptx, chemin_pdf)
     else:
         _export_libreoffice(chemin_pptx, chemin_pdf)
 

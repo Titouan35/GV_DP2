@@ -1,8 +1,8 @@
 """GV_DP — Générateur de Déclaration Préalable (ombrières PV de parking).
 
-Application FastAPI locale (port 8420), interface HTML servie en statique.
+Application FastAPI locale (port 8421), interface HTML servie en statique.
 Lancement : `Lancer GV_DP.bat` ou
-    .venv/Scripts/python -m uvicorn app.main:app --port 8420
+    .venv/Scripts/python -m uvicorn app.main:app --port 8421
 (jamais --reload : le watcher scanne tout le dossier OneDrive.)
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from .api import (
     routes_geo,
     routes_planches,
     routes_projets,
+    routes_synchro,
 )
 
 # Contrôle de démarrage : l'application refuse de servir si elle est joignable
@@ -38,6 +39,7 @@ app.include_router(routes_projets.router)
 app.include_router(routes_planches.router)
 app.include_router(routes_documents.router)
 app.include_router(routes_dossier.router)
+app.include_router(routes_synchro.router)
 
 STATIC_DIR = config.REPO_ROOT / "app" / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

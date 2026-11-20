@@ -6,9 +6,9 @@ une réponse 502 avec un message affichable dans l'UI.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
-from ..geo import cadastre, geocode, georisques, gpu
+from ..geo import batiments, cadastre, geocode, georisques, gpu
 from ..geo.client import GeoApiError
 
 router = APIRouter(prefix="/api", tags=["geo"])
@@ -51,6 +51,19 @@ def api_parcelles_lookup(
             detail=f"Parcelle {section} {numero} introuvable sur la commune {insee}.",
         )
     return {"parcelles": parcelles}
+
+
+@router.post("/batiments")
+def api_batiments(corps: dict = Body(...)):
+    """Bâtiments existants sur les parcelles + leur emprise (m²).
+
+    Corps : {"parcelles": [{"geometry": GeoJSON, "code_insee": "..."}]}.
+    POST car les géométries ne tiennent pas dans une URL.
+    """
+    parcelles = corps.get("parcelles") or []
+    if not parcelles:
+        return {"source": None, "avertissement": None, "batiments": [], "emprise_batie_m2": 0}
+    return _proteger(batiments.batiments_sur_parcelles, parcelles)
 
 
 @router.get("/urbanisme")

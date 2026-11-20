@@ -27,7 +27,7 @@ REM
 REM  Ne JAMAIS lancer avec --reload : le watcher scannerait tout OneDrive.
 REM ===========================================================================
 
-set "PORT=8420"
+set "PORT=8421"
 set "URL=http://localhost:%PORT%"
 
 REM --- Journal local, hors OneDrive. On CONSERVE le lancement precedent :
@@ -40,11 +40,34 @@ if exist "%LOGFILE%" move /y "%LOGFILE%" "%LOGPREV%" >nul 2>&1
 
 REM --- 1. Moteur Python, par ordre de preference :
 REM       runtime\ (portable, partage) puis installation locale puis .venv du repo
-set "PYEXE=%~dp0runtime\python.exe"
-if not exist "%PYEXE%" set "PYEXE=%LOCALAPPDATA%\GV_DP\.venv\Scripts\python.exe"
-if not exist "%PYEXE%" set "PYEXE=%~dp0.venv\Scripts\python.exe"
+REM
+REM     Chaque candidat est ESSAYE, pas seulement trouve (20/11/2026). Un
+REM     runtime\ copie a moitie (synchro OneDrive en cours, archive tronquee)
+REM     a bien un python.exe, mais il meurt au demarrage faute de bibliotheque
+REM     standard ("init_fs_encoding") : le lanceur le choisissait quand meme,
+REM     et l'outil ne demarrait jamais alors qu'un environnement local valide
+REM     etait installe. Un .venv cree sur un autre poste pointe de meme vers
+REM     un Python qui n'existe pas ici. Voir :essayer en fin de fichier.
+set "PYEXE="
+set "ECARTE="
+call :essayer "%~dp0runtime\python.exe"
+if not defined PYEXE call :essayer "%LOCALAPPDATA%\GV_DP\.venv\Scripts\python.exe"
+if not defined PYEXE call :essayer "%~dp0.venv\Scripts\python.exe"
 
-if not exist "%PYEXE%" (
+if not defined PYEXE if defined ECARTE (
+  echo.
+  echo   [X] Moteur Python present mais inutilisable ^(incomplet ou casse^).
+  echo.
+  echo   Si le dossier vient d'etre partage avec toi, attends la fin de la
+  echo   synchronisation OneDrive du sous-dossier "runtime", puis relance.
+  echo   Sinon, lance "Installer GV_DP.bat" : il installe un moteur local.
+  echo.
+  echo   Detail dans le journal : %LOGFILE%
+  echo.
+  pause
+  exit /b 1
+)
+if not defined PYEXE (
   echo.
   echo   [X] Aucun moteur Python trouve.
   echo.
@@ -55,10 +78,15 @@ if not exist "%PYEXE%" (
   pause
   exit /b 1
 )
+if defined ECARTE (
+  echo.
+  echo   [!] Le moteur partage ^(runtime^) est incomplet sur ce poste :
+  echo       le moteur installe localement prend le relais.
+)
 
 REM --- 2. Deja demarre ? On ouvre le navigateur au lieu d'echouer sur le port.
 REM     On interroge /api/sante et on verifie que c'est bien GV_DP qui repond :
-REM     n'importe quel autre outil ecoutant sur 8420 faisait ouvrir le navigateur
+REM     n'importe quel autre outil ecoutant sur le port faisait ouvrir le navigateur
 REM     dessus et abandonner le lancement (releve le 01/09/2026).
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try{$r=Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri ($env:URL + '/api/sante'); if(($r.Content | ConvertFrom-Json).app -eq 'GV_DP'){exit 0}else{exit 1}}catch{exit 1}" >nul 2>&1
 if not errorlevel 1 (
@@ -98,7 +126,7 @@ echo   Garde cette fenetre ouverte pendant que tu travailles.
 echo   Ferme-la pour arreter l'outil.
 echo.
 echo   Adresse : %URL%
-echo   Journaux : %LOGFILE%
+echo   Journaux : %LOGFILE%
 echo              %LOGDIR%\gvdp_navigateur.log
 echo.
 
@@ -134,3 +162,25 @@ if "%CODE%"=="0" (
 echo.
 pause
 exit /b %CODE%
+
+
+REM ---------------------------------------------------------------------------
+REM  :essayer "chemin\python.exe"
+REM  Retient le candidat dans PYEXE s'il demarre ET importe les composants dont
+REM  l'outil a besoin (requirements.txt). Sinon, le note dans le journal et pose
+REM  ECARTE. On teste les DEPENDANCES, pas le code de l'outil : une erreur dans
+REM  app\ doit s'afficher comme telle au lancement, pas se deguiser en
+REM  "aucun moteur Python".
+REM  Pas de bloc entre parentheses ici : un chemin contenant ")" les casserait.
+REM ---------------------------------------------------------------------------
+:essayer
+if not exist "%~1" goto :eof
+"%~1" -B -c "import encodings, fastapi, uvicorn, httpx, PIL, numpy, pyproj, pypdf, pypdfium2, pptx, lxml" >> "%LOGFILE%" 2>&1
+if errorlevel 1 goto :essayer_ecarte
+set "PYEXE=%~1"
+goto :eof
+
+:essayer_ecarte
+>> "%LOGFILE%" echo [%date% %time%] moteur ecarte, incomplet ou casse : "%~1"
+set "ECARTE=1"
+goto :eof

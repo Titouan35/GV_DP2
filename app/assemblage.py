@@ -14,6 +14,7 @@ pour garder un dossier léger.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -29,10 +30,12 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Emu, Pt
 
-from . import config, regles
+from . import config, images, regles
 from .geo.client import GeoApiError
 from .models import Projet
 from .planches import GENERATEURS
+
+logger = logging.getLogger(__name__)
 
 # --- charte (maquette) ---
 NAVY = RGBColor(0x00, 0x24, 0x55)
@@ -197,8 +200,20 @@ def _zone_cadre(slide, zone=ZONE):
 
 def _image_zone(slide, chemin: Path, zone=ZONE, pad=6):
     x, y, w, h = zone
-    with Image.open(chemin) as im:
-        iw, ih = im.size
+    # Dernier filet : une image que ni PIL ni la réparation n'ouvrent ne doit
+    # pas faire tomber TOUT l'assemblage en erreur 500. Le dossier sort, avec
+    # un emplacement réservé qui dit lequel remplacer (constaté le 16/09/2026,
+    # une photo de téléphone a planté quatre assemblages de suite).
+    try:
+        with Image.open(chemin) as im:
+            iw, ih = im.size
+    except (OSError, ValueError):
+        logger.warning("Image illisible à l'assemblage : %s", chemin, exc_info=True)
+        _placeholder_zone(slide, "Image illisible",
+                          f"Le fichier « {Path(chemin).name} » n'a pas pu être décodé. "
+                          "Ré-enregistrez-le (export JPEG standard) puis redéposez-le.",
+                          zone, note="à remplacer")
+        return
     x, y, w, h = x + pad, y + pad, w - 2 * pad, h - 2 * pad
     r = min(w / iw, h / ih)
     w2, h2 = iw * r, ih * r
@@ -241,7 +256,12 @@ def _optimiser(chemin: Path, assets: Path) -> Path:
     PNG volumineux (orthophotos) -> JPEG ; photos très haute résolution
     (téléphone) -> redimensionnées à 2400 px de large (~150 dpi sur A3),
     largement suffisant pour le dépôt. Les dessins légers restent en PNG.
+
+    Passage obligé de TOUTES les images du dossier : c'est donc ici qu'on
+    répare celles que PIL refuse d'ouvrir (voir app/images.py), avant que
+    _image_zone ne s'y casse les dents.
     """
+    chemin = images.rendre_lisible(chemin, assets)
     try:
         taille = chemin.stat().st_size
         est_png = chemin.suffix.lower() == ".png"
@@ -296,8 +316,9 @@ def _fichier_document(projet: dict, code: str) -> Path | None:
     doc = (projet.get("documents") or {}).get(code)
     if not doc:
         return None
-    chemin = config.espace() / doc["fichier"]
-    return chemin if chemin.exists() else None
+    # confiné à l'espace : `fichier` vient du navigateur (config.chemin_dans_espace)
+    chemin = config.chemin_dans_espace(doc.get("fichier"))
+    return chemin if chemin is not None and chemin.exists() else None
 
 
 def _pages_document(projet: dict, code: str, assets: Path) -> list[Path]:
@@ -391,8 +412,24 @@ def _slide_dp1_fusion(prs, projet, assets, generees):
     return slide
 
 
+# Zone de texte de la notice : remontée sous le titre (y = 96 au lieu de 118)
+# et descendue jusqu'au filet du cartouche (650), pour gagner ~40 px de
+# hauteur sur la planche unique à 8 sections (demande du 03/11/2026).
+ZONE_NOTICE = (48, 96, 1184, 548)
+NOTICE_COL_W = 568                 # deux colonnes de 568 px, filet au milieu
+
+
 def _slide_notice(prs, projet, assets):
-    """Notice descriptive en deux colonnes (style maquette)."""
+    """Notice descriptive sur UNE planche, en deux colonnes (style maquette).
+
+    Le 03/11/2026, la 8e section (gestion des eaux pluviales) a rendu la
+    planche illisible : le texte partait sous le cartouche, la police
+    tombait à 8,5 px. Une pagination sur deux planches a été écartée par
+    Brahim (« sur une planche, remonte le texte »). On gagne donc la place
+    autrement : zone de texte agrandie (ZONE_NOTICE), colonnes élargies,
+    interligne et espacements resserrés, et une estimation de repli plus
+    prudente (Poppins est une police large) pour que rien ne déborde.
+    """
     TITRES = {
         "presentation": "Objet de la demande",
         "etat_initial": "Le site",
@@ -400,39 +437,50 @@ def _slide_notice(prs, projet, assets):
         "reglementaire": "Contexte réglementaire",
         "insertion": "Insertion paysagère",
         "acces_reseaux": "Accès et raccordement aux réseaux",
+        "eaux_pluviales": "Gestion des eaux pluviales",
         "chantier": "Chantier et remise en état",
     }
     COL1 = ["presentation", "etat_initial", "description", "insertion"]
-    COL2 = ["reglementaire", "acces_reseaux", "chantier"]
+    COL2 = ["reglementaire", "acces_reseaux", "eaux_pluviales", "chantier"]
+    # Point 7 optionnel (12/11/2026) : décoché, il ne figure pas sur la planche.
+    from .notice import eaux_pluviales_incluses
+    if not eaux_pluviales_incluses(projet):
+        COL2.remove("eaux_pluviales")
+    X1, X2 = ZONE_NOTICE[0], ZONE_NOTICE[0] + NOTICE_COL_W + 48
+    INTERLIGNE = 1.2
 
     sections = (projet.get("notice") or {}).get("sections") or {}
     slide = _slide(prs)
     _entete(slide, "Notice descriptive")
-    if not any((sections.get(c) or "").strip() for c in TITRES):
+    if not any((sections.get(c) or "").strip() for c in COL1 + COL2):
         _placeholder_zone(slide, "Notice à générer",
                           f"Générez et relisez la notice à l'étape {regles.ETAPE_NOTICE_CERFA} "
                           "de l'outil avant l'export.")
         _cartouche(slide, projet, "Notice", VIOLET, BLANC)
         return slide
 
-    _rect(slide, 640, ZONE[1] + 4, 1, ZONE[3] - 8, fill=GRIS_LIGNE)  # séparateur
+    _rect(slide, X1 + NOTICE_COL_W + 23, ZONE_NOTICE[1] + 4, 1, ZONE_NOTICE[3] - 8,
+          fill=GRIS_LIGNE)  # séparateur
 
-    def px_ajuste(cles, largeur_px=560, hauteur_px=ZONE[3] - 4):
+    def px_ajuste(cles, largeur_px=NOTICE_COL_W, hauteur_px=ZONE_NOTICE[3] - 4):
         """Taille de police qui fait tenir la colonne dans son cadre.
 
         Les zones de texte sont à hauteur FIXE : une notice longue débordait
         sous le cartouche. Estimation lignes = titres + texte replié à la
-        largeur de colonne ; on descend la police (12 -> 8,5 px) jusqu'à tenir.
+        largeur de colonne ; on descend la police (13 -> 9 px) jusqu'à tenir.
+        Largeur moyenne d'un caractère Poppins ~0,58 em (0,55 sous-estimait,
+        d'où le débordement constaté le 03/11/2026).
         """
-        px = 12.0
-        while px > 8.5:
-            cpl = max(30, largeur_px / (px * 0.55))   # ~caractères par ligne
+        px = 13.0
+        while px > 9:
+            cpl = max(30, largeur_px / (px * 0.58))   # ~caractères par ligne
             lignes = 0.0
             for cle in cles:
                 txt = (sections.get(cle) or "").strip()
                 if txt:
-                    lignes += 2.2 + math.ceil(len(txt) / cpl)  # titre + espaces
-            if lignes * px * 1.32 <= hauteur_px:
+                    # titre (px+2, interligne) + corps + espacements (2 + 6 pt)
+                    lignes += 1.3 + math.ceil(len(txt) / cpl) + 0.7
+            if lignes * px * INTERLIGNE <= hauteur_px:
                 break
             px -= 0.5
         return px
@@ -440,7 +488,8 @@ def _slide_notice(prs, projet, assets):
     px_corps = min(px_ajuste(COL1), px_ajuste(COL2))
 
     def colonne(cles, x, w):
-        box = slide.shapes.add_textbox(P(x), P(ZONE[1] + 2), P(w), P(ZONE[3] - 4))
+        box = slide.shapes.add_textbox(P(x), P(ZONE_NOTICE[1] + 2), P(w),
+                                       P(ZONE_NOTICE[3] - 4))
         tf = box.text_frame
         tf.word_wrap = True
         tf.margin_left = tf.margin_right = tf.margin_top = tf.margin_bottom = 0
@@ -456,17 +505,17 @@ def _slide_notice(prs, projet, assets):
             pt.font.bold = True
             pt.font.color.rgb = NAVY
             pt.font.name = POLICE
-            pt.space_after = Pt(2)
+            pt.space_after = Pt(1)
             pb = tf.add_paragraph()
             pb.text = txt
             pb.font.size = _pt(px_corps)
             pb.font.color.rgb = SOFT
             pb.font.name = POLICE
-            pb.line_spacing = 1.3
-            pb.space_after = Pt(10)
+            pb.line_spacing = INTERLIGNE
+            pb.space_after = Pt(6)
 
-    colonne(COL1, ZONE[0], 560)
-    colonne(COL2, 672, 560)
+    colonne(COL1, X1, NOTICE_COL_W)
+    colonne(COL2, X2, NOTICE_COL_W)
     _cartouche(slide, projet, "Notice", VIOLET, BLANC)
     return slide
 
@@ -634,7 +683,23 @@ def _generer_dossier_verrouille(projet: dict, projet_id: str) -> tuple[Path, lis
     titre_dp3 = "Coupe du terrain et de la construction"
     pages = _pages_document(projet, "dp3", assets)
     if pages:
-        _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=pages[0])
+        # Une coupe TYPE déposée depuis le catalogue (choisie d'après la FVE)
+        # n'est pas la coupe du BE : elle porte le cartouche du dossier dont
+        # elle est issue. Sans cette distinction, elle passerait pour la pièce
+        # définitive et partirait telle quelle au dépôt.
+        # Validée par le BE (étape 2), elle devient une pièce comme une autre :
+        # quelqu'un a regardé le dessin et en a pris la responsabilité.
+        doc_dp3 = (projet.get("documents") or {}).get("dp3") or {}
+        if doc_dp3.get("origine") == "catalogue" and not doc_dp3.get("valide_humain"):
+            _slide_piece_image(
+                prs, projet, assets, titre_dp3, "DP3", image=pages[0],
+                pastille="Coupe type du catalogue — cartouche à adapter au projet")
+            avertissements.append(
+                "DP3 : coupe type du catalogue intégrée, choisie d'après la FVE. "
+                "Son cartouche est celui du dossier d'origine : à adapter, ou à "
+                "remplacer par la coupe du bureau d'études avant dépôt.")
+        else:
+            _slide_piece_image(prs, projet, assets, titre_dp3, "DP3", image=pages[0])
     else:
         provisoire = None
         if (projet.get("ombriere") or {}).get("famille"):

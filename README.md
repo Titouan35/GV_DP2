@@ -61,18 +61,36 @@ tests/             # pytest ; tests réseau marqués `live`, exclus par défaut
       retries réseau, mode « prêt au dépôt »
 - [x] Refonte du 01/09/2026 : retrait du module Insertion, contrôles de
       cohérence, corrections du Cerfa, authentification, lanceur fiabilisé
+- [x] Cerfa du 16/09/2026 : les 386 champs du gabarit ont été cartographiés
+      (`app/cerfa.py`). Le pré-remplissage passe de 21 à ~46 cases — adresse du
+      terrain découpée, superficie totale, emprise au sol, puissance de
+      raccordement, et **bordereau de dépôt des pièces jointes coché** d'après
+      la checklist de complétude. L'étape 5 rend un bilan : ce qui est porté au
+      formulaire, ce qui manque encore, et ce que l'outil ne remplira jamais.
 - [x] Partage à l'équipe : par le **dossier OneDrive** (voir `INSTALLATION.md`).
       Rien à installer côté collègue, le moteur Python est dans le dossier.
 - [x] **Mode web** (`GVDP_MODE=web`, `Dockerfile.web`) : espace de travail
       éphémère par visiteur, rien conservé côté serveur, aucun disque
       persistant ni LibreOffice. Hébergeable gratuitement, pour donner l'outil
       à quelqu'un qui n'a pas le dossier OneDrive. Voir `HEBERGEMENT.md`.
+- [x] **Dossier lié** (20/11/2026, `app/static/js/dossier_lie.js`,
+      `app/api/routes_synchro.py`) : en ligne, Edge et Chrome lisent et
+      écrivent les projets dans le dossier PROJETS du poste (le OneDrive
+      partagé). Le serveur n'en garde qu'une copie de travail. Cible
+      d'hébergement : Koyeb, offre gratuite, pas à pas dans `HEBERGEMENT.md`.
 
 ## Le parcours (5 étapes)
 
 1. **Localisation** — projet, adresse (BAN), parcelles (API Carto), PLU, risques
 2. **Pièces du BE** — dépôt du plan de masse (DP2), de la coupe (DP3), du
-   photomontage d'insertion (DP6) et des photos (DP7, DP8)
+   photomontage d'insertion (DP6) et des photos (DP7, DP8). La FVE alimente
+   DP6/DP7 et **précharge la coupe type en DP3** (`app/coupes_dp3.py`) quand
+   le nombre de modules du rampant ET le point bas correspondent au catalogue.
+   Cette coupe est PROVISOIRE : elle porte le cartouche du dossier dont elle
+   est issue, une anomalie bloquante interdit donc le dépôt tant que le BE ne
+   l'a pas **validée** (bouton « Valider la coupe »), ou remplacée par la
+   sienne. Valider, c'est dire « je l'ai vérifiée » — même mécanique que la
+   notice relue (`valide_humain`), et réversible.
 3. **Caractéristiques** — type d'ombrière, puissance, cotes
 4. **Notice + Cerfa** — notice DP11, maître d'ouvrage, Cerfa 16702*03 pré-rempli
 5. **Aperçu & export** — assemblage PPTX, export PDF
@@ -103,8 +121,27 @@ empêchent l'assemblage « pour dépôt ».
 - **Assembler pour dépôt** : contrôle bloquant, refuse tant que les 11 pièces ne
   sont pas prêtes (notice validée humainement incluse) **et** tant qu'une
   anomalie de cohérence bloquante subsiste.
+- **Pages séparées (ZIP)** : découpe le PDF exporté en une page par pièce,
+  nommées pour être déposées telles quelles sur un portail d'urbanisme
+  (`02_DP1-PLAN-DE-SITUATION-ET-CADASTRAL.pdf`…). Les libellés viennent des
+  planches du PPTX (`app/decoupe_pdf.py`) ; seule l'archive est conservée.
 - **Nettoyer** : purge les caches régénérables du dossier `.assets`, ainsi que
   le dossier `insertion/` hérité de l'ancien module — utile sur OneDrive.
+
+- **Cerfa 13824 (ERP)** : autorisation de travaux sur un établissement recevant
+  du public (accessibilité, sécurité incendie) — le parking d'un supermarché en
+  dépend. Pré-rempli depuis le maître d'ouvrage et le projet
+  (`app/cerfa_erp.py`), disponible sur tout projet existant, hors de la
+  checklist des 11 pièces. Les noms de champs de ce gabarit sont trompeurs
+  (cases décalées, Oui/Non inversés) : le module se fie aux positions relevées.
+  Il sort **signé** (`app/signature.py`) : déposez une signature scannée dans
+  `app/gabarits/signature_mo.png` pour remplacer le paraphe générique (tracé
+  sans nom) dessiné par défaut. « Stationnement couvert » et l'opposition à l'usage
+  commercial des données sont cochés d'office (décision du 30/09/2026).
+
+Noms des fichiers téléchargés (`app/nomenclature.py`) : mot-clé puis commune —
+`CERFA_16702-03_AMBERT.pdf`, `DOSSIER_DP_AMBERT.pptx`, `PAGES_DP_AMBERT.zip`.
+Sur le disque, les fichiers gardent leur nom technique (cache, purge).
 
 ## Tests
 
@@ -131,3 +168,18 @@ parcelle 30 0464, ~30 201 m²) — dossier réel de référence dans `../EXEMPLE
   n'acceptent que JavaScript, pas un serveur Python qui écrit sur disque.
 - Le mode QuickEdit de Windows fige un serveur qui écrit dans sa console. Le
   lanceur redirige donc toute la sortie vers `%LOCALAPPDATA%\GV_DP\`.
+- **`OSError: [Errno 22] Invalid argument` = OneDrive, presque toujours.** Le
+  fournisseur de fichiers cloud refuse par moments de servir un fichier du
+  `runtime/`, et l'erreur surgit là où un module est importé PARESSEUSEMENT :
+  pytest qui ne démarre plus, un codec de la bibliothèque standard, ou
+  `TiffImagePlugin` que PIL charge pour lire l'EXIF d'une photo — ce dernier
+  cas a produit quatre erreurs 500 à l'assemblage le 16/09/2026. Ce n'est pas
+  le fichier du projet qui est en cause : les mêmes octets se relisent
+  parfaitement plus tard. `app/images.py` réessaie, puis se rabat sur une copie
+  sans EXIF ; et l'assemblage dégrade en emplacement réservé plutôt que de
+  rendre un 500.
+- **Le serveur ne recharge pas le code à chaud** (pas de `--reload`, cf.
+  ci-dessus). Après toute modification du code Python, il faut FERMER la
+  fenêtre noire et relancer `Lancer GV_DP.bat` : sinon le navigateur appelle
+  des routes que le processus en cours ne connaît pas, et l'interface affiche
+  un « not found » sans rapport avec le dossier (constaté le 16/09/2026).

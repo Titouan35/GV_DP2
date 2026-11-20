@@ -554,34 +554,76 @@ def test_notice_vide_affiche_un_emplacement_reserve(socle):
 
 
 def test_notice_repartie_en_deux_colonnes(socle):
-    """Les 7 sections sont ventilées en 2 colonnes fixes, pas au fil de l'eau.
+    """Les 8 sections tiennent sur UNE planche, en 2 colonnes fixes.
 
     Colonne de gauche (x = 48) : présentation, site, projet, insertion.
-    Colonne de droite (x = 672) : réglementaire, réseaux, chantier.
+    Colonne de droite (x = 664) : réglementaire, réseaux, eaux pluviales,
+    chantier. Depuis le 03/11/2026 la zone de texte est remontée sous le
+    titre (ZONE_NOTICE) : une pagination sur deux planches a été refusée.
     """
     # Arrange
     projet = projet_socle(notice={"sections": {
         "presentation": "Texte de présentation du projet.",
         "reglementaire": "Texte du contexte réglementaire.",
+        "eaux_pluviales": "Texte de gestion des eaux pluviales.",
         "chantier": "Texte du chantier et de la remise en état.",
-    }, "valide_humain": True})
+    }, "eaux_pluviales": True, "valide_humain": True})
 
     # Act
     chemin, avertissements = assemblage.generer_dossier(projet)
 
     # Assert
-    notice = planche(planches(chemin), "Notice descriptive")
+    slides = planches(chemin)
+    assert [titre(s) for s in slides].count("Notice descriptive") == 1
+    notice = planche(slides, "Notice descriptive")
+    y = assemblage.P(assemblage.ZONE_NOTICE[1] + 2)
     colonnes = {f.left: f.text_frame.text for f in notice.shapes
-                if f.has_text_frame and f.top == assemblage.P(assemblage.ZONE[1] + 2)}
+                if f.has_text_frame and f.top == y}
     gauche = colonnes[assemblage.P(48)]
-    droite = colonnes[assemblage.P(672)]
+    droite = colonnes[assemblage.P(48 + assemblage.NOTICE_COL_W + 48)]
     assert "Objet de la demande" in gauche
     assert "Texte de présentation du projet." in gauche
     assert "Contexte réglementaire" in droite
+    assert "Gestion des eaux pluviales" in droite
     assert "Chantier et remise en état" in droite
     assert "Texte du chantier et de la remise en état." in droite
+    # le texte commence sous le titre (fin du titre à y = 90) et s'arrête
+    # au-dessus du filet du cartouche (y = 650)
+    assert assemblage.ZONE_NOTICE[1] >= 90
+    assert assemblage.ZONE_NOTICE[1] + assemblage.ZONE_NOTICE[3] <= 650
     # notice relue et validée : plus signalée en avertissement
     assert not any("Notice descriptive" in a for a in avertissements)
+
+
+def test_notice_sans_point_7_eaux_pluviales_par_defaut(socle):
+    """Point 7 optionnel (12/11/2026) : case décochée par défaut, la section
+    « Gestion des eaux pluviales » ne figure pas sur la planche Notice, même
+    si son texte est stocké dans le projet."""
+    projet = projet_socle(notice={"sections": {
+        "presentation": "Texte de présentation du projet.",
+        "eaux_pluviales": "Texte de gestion des eaux pluviales.",
+        "chantier": "Texte du chantier et de la remise en état.",
+    }, "valide_humain": True})
+
+    chemin, _ = assemblage.generer_dossier(projet)
+
+    notice = planche(planches(chemin), "Notice descriptive")
+    assert "eaux pluviales" not in textes(notice).lower()
+    assert "Chantier et remise en état" in textes(notice)
+
+
+def test_notice_longue_reste_dans_le_cadre(socle):
+    """8 sections réalistes : la police de repli reste >= 9 px et l'estimation
+    de hauteur (celle de _slide_notice) tient dans ZONE_NOTICE."""
+    from app import notice as mod_notice
+    sections = mod_notice.generer_sections(PROJET)
+    projet = projet_socle(notice={"sections": sections, "valide_humain": True})
+    chemin, _ = assemblage.generer_dossier(projet)
+    notice = planche(planches(chemin), "Notice descriptive")
+    tailles = {p.font.size for f in notice.shapes if f.has_text_frame
+               and f.top == assemblage.P(assemblage.ZONE_NOTICE[1] + 2)
+               for p in f.text_frame.paragraphs if p.font.size}
+    assert min(tailles) >= assemblage._pt(9)
 
 
 # ---------------------------------------------- planche DP6 avant / après

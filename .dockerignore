@@ -1,5 +1,7 @@
 # Contexte de build minimal : seuls app/ + requirements.txt sont nécessaires.
 .venv/
+# moteur Python portable du poste Windows (~400 Mo) : inutile dans l'image
+runtime/
 PROJETS/
 **/__pycache__/
 **/*.pyc

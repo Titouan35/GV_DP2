@@ -31,6 +31,8 @@ import logging
 import re
 from pathlib import Path
 
+from . import config
+
 logger = logging.getLogger(__name__)
 
 # Libellé de la planche portant le photomontage, et des deux images qu'elle
@@ -55,16 +57,36 @@ def _nombre(texte: str) -> float | None:
         return None
 
 
+def _entier(texte: str) -> int | None:
+    """« 7 » -> 7. Un compte de modules n'a pas de décimale."""
+    try:
+        return int(texte.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
 # Chaque règle : (clé du projet, expression, conversion).
 # Les libellés viennent du gabarit FVE ; l'espace avant « : » est optionnel car
 # PowerPoint insère parfois une espace insécable.
 REGLES = [
     ("puissance_kwc", r"Puissance\s+crête\s*:\s*([\d\s,.]+)\s*kWc", _nombre),
+    # Bloc « Puissance projet » : la puissance AC est la puissance électrique
+    # nécessaire au projet, celle du cadre 4.2.1 du Cerfa. À ne pas confondre
+    # avec la puissance crête, qui est juste au-dessus dans le même bloc.
+    #
+    # Le DEUX-POINTS est la clé du motif : une autre planche porte un tableau
+    # « Puissance AC estimée [kVA] | 250 | 125 », deux valeurs d'une étude de
+    # variantes dont aucune n'est forcément celle retenue. Exiger « AC : »
+    # écarte ce tableau et ne retient que la donnée du projet.
+    ("puissance_raccordement_kva", r"Puissance\s+AC\s*:\s*([\d\s,.]+)\s*kVA", _nombre),
     ("garde_au_sol_m", r"Point\s+bas\s*:\s*([\d\s,.]+)\s*m\b", _nombre),
     ("pente_deg", r"Inclinaison\s*:\s*([\d\s,.]+)\s*°", _nombre),
     # « Nombre de panneaux en largeur : 7 (12,3m) » : la cote entre parenthèses
     # est la largeur de l'ombrière, c'est-à-dire sa profondeur au sens du Cerfa.
     ("largeur_m", r"Nombre\s+de\s+panneaux\s+en\s+largeur\s*:[^(]*\(\s*([\d\s,.]+)\s*m\s*\)", _nombre),
+    # Le NOMBRE lui-même, qu'on ne lisait pas : avec le point bas, il désigne
+    # la coupe type du catalogue à déposer en DP3 (app/coupes_dp3.py).
+    ("nb_modules_rampant", r"Nombre\s+de\s+panneaux\s+en\s+largeur\s*:\s*(\d+)", _entier),
 ]
 
 
@@ -98,8 +120,75 @@ def _module(morceaux: list[str]) -> dict:
         m = re.search(r"Marque-modèle\s*:\s*([^\n|]+)", texte)
         if m:
             champs["module_modele"] = m.group(1).strip()
+        # « Nombre : 322 » : le nombre TOTAL de modules. Il est dans le même
+        # bloc, donc distinct du « Nombre » du bloc Onduleurs. Il sert à
+        # estimer l'emprise au sol créée (cadre 4.3 du Cerfa).
+        m = re.search(r"Nombre\s*:\s*([\d\s]+)", texte)
+        if m:
+            nombre = _entier(m.group(1).replace(" ", "").replace(" ", ""))
+            if nombre:
+                champs["nb_modules_total"] = nombre
         return champs
     return {}
+
+
+def _onduleur(morceaux: list[str]) -> dict:
+    """Modèle et nombre d'onduleurs : le bloc « Marque-modèle » SANS « Wc ».
+
+    « Marque-modèle : SUNGROW SG50CX-P2 / Puissance nominale : 50 / Nombre : 2 »
+    — la puissance n'y porte pas toujours d'unité, c'est l'absence de « Wc »
+    qui le distingue du bloc Modules. Sert à la notice de sécurité ERP (§4.1
+    et fiche technique de l'annexe 7.4, app/notices_erp.py).
+    """
+    for texte in morceaux:
+        if "Marque-modèle" not in texte or "Wc" in texte:
+            continue
+        champs = {}
+        # Sur la FVE de Bourges, « Puissance nominale » suit le modèle sur la
+        # MÊME ligne : on s'arrête à ce libellé, sinon le modèle valait
+        # « SUNGROW SG40CX-P2 Puissance nominale : 40 ».
+        m = re.search(r"Marque-modèle\s*:\s*(.+?)\s*(?:Puissance\s+nominale|Nombre\s*:|[\n|]|$)",
+                      texte)
+        if m and m.group(1).strip():
+            champs["modele_onduleur"] = m.group(1).strip()
+        m = re.search(r"Nombre\s*:\s*([\d\s]+)", texte)
+        if m:
+            nombre = _entier(m.group(1).replace(" ", "").replace("\u202f", ""))
+            if nombre:
+                champs["nb_onduleurs"] = nombre
+        return champs
+    return {}
+
+
+def lire_onduleur(chemin: Path) -> dict:
+    """Seulement le bloc Onduleurs d'une FVE déjà déposée (projets montés
+    avant le 28/10/2026, dont la lecture n'avait pas retenu l'onduleur)."""
+    try:
+        from pptx import Presentation
+
+        return _onduleur(_texte_planches(Presentation(str(chemin))))
+    except Exception:
+        logger.warning("Lecture des onduleurs de la FVE impossible (%s)", Path(chemin).name,
+                       exc_info=True)
+        return {}
+
+
+# « 1762 x 1134 », « 1762x1134 mm », « 1762 × 1134 »
+_RE_DIMENSIONS = re.compile(r"(\d{3,5})\s*[x×*]\s*(\d{3,5})")
+
+
+def surface_module_m2(module_dimensions: str | None) -> float:
+    """Surface d'un module, en m².
+
+    Les dimensions du PROJET priment quand elles sont lisibles : c'est la
+    donnée réelle. À défaut, le module type du catalogue (config).
+    """
+    m = _RE_DIMENSIONS.search(module_dimensions or "")
+    if m:
+        largeur, hauteur = int(m.group(1)), int(m.group(2))
+    else:
+        largeur, hauteur = config.MODULE_DIMENSIONS_DEFAUT_MM
+    return largeur * hauteur / 1_000_000
 
 
 def _images_insertion(prs) -> dict:
@@ -173,6 +262,7 @@ def lire_fve(chemin: Path) -> dict:
             else:
                 manquant.append(cle)
         champs.update(_module(morceaux))
+        champs.update(_onduleur(morceaux))
 
         return {
             "champs": champs,
@@ -192,14 +282,43 @@ def appliquer_lecture(projet, lecture: dict) -> list[str]:
     Ne réécrit jamais une valeur déjà saisie : la FVE propose, l'utilisateur
     dispose. `module_modele` n'a pas de champ dédié dans le modèle, il alimente
     `type_module` qui sert d'information libre.
+
+    Range aussi la lecture dans `projet.meta["fve"]`, comme la lecture du plan
+    de masse le fait dans `meta["plan_lecture"]`. Sans cette trace, l'étape 3
+    n'avait aucun moyen de dire d'où venaient les valeurs : elles apparaissaient
+    dans les cases sans que personne sache qu'elles étaient à relire (demande du
+    16/09/2026). Les images restent dehors : ce sont des octets, meta est du
+    JSON.
     """
     proposes: list[str] = []
     correspondances = {"module_modele": "type_module"}
-    for cle, valeur in (lecture.get("champs") or {}).items():
+    champs = lecture.get("champs") or {}
+    for cle, valeur in champs.items():
         attribut = correspondances.get(cle, cle)
         if not hasattr(projet.ombriere, attribut):
             continue
         if getattr(projet.ombriere, attribut) in (None, ""):
             setattr(projet.ombriere, attribut, valeur)
             proposes.append(attribut)
+
+    # Emprise au sol créée (cadre 4.3 du Cerfa), estimée comme la surface
+    # couverte de modules : nombre total x surface unitaire (demande du
+    # 16/09/2026). C'est une ESTIMATION — l'emprise réglementaire est la
+    # projection verticale du volume, débords de structure inclus, donc
+    # légèrement supérieure à la seule surface des panneaux. Elle est proposée
+    # comme les autres valeurs : surlignée, et modifiable.
+    if (projet.ombriere.emprise_creee_m2 is None
+            and projet.ombriere.nb_modules_total):
+        surface = (projet.ombriere.nb_modules_total
+                   * surface_module_m2(projet.ombriere.module_dimensions))
+        projet.ombriere.emprise_creee_m2 = round(surface, 1)
+        proposes.append("emprise_creee_m2")
+
+    trace = projet.meta.get("fve") or {}
+    trace.update({
+        "champs": {correspondances.get(c, c): v for c, v in champs.items()},
+        "proposes": proposes,
+        "manquant": list(lecture.get("manquant") or []),
+    })
+    projet.meta["fve"] = trace
     return proposes

@@ -423,3 +423,24 @@ def test_un_projet_sous_le_seuil_n_est_pas_bloque():
     projet = projet_coherent()
     projet["ombriere"]["puissance_kwc"] = 2999
     assert "regime_permis_de_construire" not in codes(coherence.controler(projet))
+
+
+# ------------------------------------------------- profil de l'ombrière
+
+def test_profil_incoherent_signale():
+    """Cas Bourges (12/11/2026) : 3,50 m + 12,35 m à 6° donnent ~4,80 m,
+    pas les 3,92 m saisis. Signalé, pas corrigé en silence."""
+    projet = projet_coherent()
+    projet["ombriere"].update({"pente_deg": 6.0, "garde_au_sol_m": 3.5,
+                               "hauteur_hors_tout_m": 3.92, "largeur_m": 12.35})
+    anomalies = coherence.controler(projet)
+    assert "profil_ombriere_incoherent" in codes(anomalies)
+    message = next(a["message"] for a in anomalies if a["code"] == "profil_ombriere_incoherent")
+    assert "4,80" in message
+
+
+def test_profil_coherent_ne_declenche_rien():
+    projet = projet_coherent()
+    projet["ombriere"].update({"pente_deg": 6.0, "garde_au_sol_m": 3.5,
+                               "hauteur_hors_tout_m": 4.8, "largeur_m": 12.35})
+    assert "profil_ombriere_incoherent" not in codes(coherence.controler(projet))

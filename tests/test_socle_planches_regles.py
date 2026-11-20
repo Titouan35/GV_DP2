@@ -125,19 +125,28 @@ def test_modes_repartis_entre_generation_auto_et_upload_be():
 
 
 def test_statut_page_de_garde_exige_le_nom_et_le_maitre_d_ouvrage():
-    """La garde est « prête » seulement quand elle a de quoi être imprimée."""
+    """La garde est « prête » seulement quand elle a de quoi être imprimée.
+
+    Depuis le 16/09/2026, un projet naît avec Greenvolt pour maître d'ouvrage
+    (config.MAITRE_OUVRAGE_DEFAUT) : un `Projet(nom=...)` n'est donc plus
+    « sans MO ». Le cas sans MO se construit en vidant la raison sociale,
+    comme le ferait un rédacteur qui l'efface à l'étape 4.
+    """
     # Arrange
-    sans_mo = Projet(nom="Soufflenheim")
+    sans_mo = Projet(nom="Soufflenheim", mo=MaitreOuvrage(raison_sociale=None))
     avec_mo = Projet(nom="Soufflenheim",
                      mo=MaitreOuvrage(raison_sociale="Greenvolt Next France"))
+    par_defaut = Projet(nom="Soufflenheim")
 
     # Act
     st_sans = {p["code"]: p["statut"] for p in completude(sans_mo)["pieces"]}
     st_avec = {p["code"]: p["statut"] for p in completude(avec_mo)["pieces"]}
+    st_defaut = {p["code"]: p["statut"] for p in completude(par_defaut)["pieces"]}
 
     # Assert
     assert st_sans["garde"] == "a_completer"
     assert st_avec["garde"] == "prete"
+    assert st_defaut["garde"] == "prete"   # le MO par défaut suffit
 
 
 @pytest.mark.parametrize(
@@ -192,6 +201,7 @@ def test_piece_fournie_par_le_be_est_comptee_prete():
     projet = Projet(nom="Test", id="p-test",
                     documents={"dp3": {"nom_fichier": "coupe.pdf",
                                        "fichier": relatif, "taille": 16}})
+    sans_piece = Projet(nom="Test", id="p-test")
 
     # Act
     resultat = completude(projet)
@@ -199,7 +209,10 @@ def test_piece_fournie_par_le_be_est_comptee_prete():
 
     # Assert
     assert statuts["dp3"] == "prete"
-    assert resultat["pretes"] == 1
+    # La pièce ajoute exactement UNE pièce prête. Le décompte absolu dépend
+    # d'autres défauts (la garde est prête d'office depuis le 16/09/2026, cf.
+    # config.MAITRE_OUVRAGE_DEFAUT) : on compare au même projet sans la pièce.
+    assert resultat["pretes"] == completude(sans_piece)["pretes"] + 1
     assert resultat["total"] == 11
 
 

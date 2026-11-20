@@ -1,4 +1,4 @@
-"""Notice descriptive DP11 : notice type en 7 sections, pré-remplie.
+"""Notice descriptive DP11 : notice type en 8 sections, pré-remplie.
 
 Les paragraphes sont modelés sur une vraie notice de dossier (Soufflenheim),
 rendus génériques : les informations qui varient d'un projet à l'autre sont
@@ -23,8 +23,30 @@ SECTIONS = [
     ("insertion", "4. Insertion paysagère et aspect extérieur"),
     ("reglementaire", "5. Contexte réglementaire, servitudes et risques"),
     ("acces_reseaux", "6. Accès, réseaux et raccordement"),
-    ("chantier", "7. Chantier et remise en état"),
+    ("eaux_pluviales", "7. Gestion des eaux pluviales"),
+    ("chantier", "8. Chantier et remise en état"),
 ]
+
+# Section optionnelle : n'apparaît que si la case « Intégrer le point 7 » est
+# cochée à l'étape Notice + Cerfa (projet.notice.eaux_pluviales, 12/11/2026).
+SECTIONS_OPTIONNELLES = {"eaux_pluviales"}
+
+
+def eaux_pluviales_incluses(projet: dict) -> bool:
+    return bool((projet.get("notice") or {}).get("eaux_pluviales"))
+
+
+def sections_actives(projet: dict) -> list[tuple[str, str]]:
+    """Sections de la notice du projet, renumérotées dans l'ordre (1., 2., …).
+
+    Sans le point 7 « eaux pluviales », « Chantier et remise en état »
+    devient le point 7 : la numérotation reste continue.
+    """
+    garder = [(cle, titre) for cle, titre in SECTIONS
+              if cle not in SECTIONS_OPTIONNELLES or eaux_pluviales_incluses(projet)]
+    return [(cle, f"{i}. " + titre.split(". ", 1)[1])
+            for i, (cle, titre) in enumerate(garder, 1)]
+
 
 # Notice type (balises {{variable}}), synthétique, sur la trame Soufflenheim.
 TEMPLATES: dict[str, str] = {
@@ -45,7 +67,10 @@ TEMPLATES: dict[str, str] = {
         "Le projet consiste à installer une ombrière photovoltaïque de coupe {{coupe}}, "
         "{{dimensions}}, en structure métallique galvanisée : {{trame}}, "
         "{{toiture}} à {{pente}}, hauteur maximale {{hauteur_max}} "
-        "et point bas {{hauteur_bas}}. Elle reçoit des modules photovoltaïques full black"
+        # « full black » ne décrivait pas les modules d'un dossier réel
+        # (16/09/2026) : l'aspect des modules n'est pas une donnée de l'outil,
+        # la notice ne l'affirme donc plus. Même correction dans le Cerfa.
+        "et point bas {{hauteur_bas}}. Elle reçoit des modules photovoltaïques"
         "{{modules_detail}} pour une puissance de {{puissance_kwc}}, et couvre {{nb_places}} "
         "places qui restent utilisables. Aucun terrassement significatif n'est nécessaire, les "
         "fondations se limitant aux massifs des poteaux."
@@ -61,6 +86,23 @@ TEMPLATES: dict[str, str] = {
     "acces_reseaux": (
         "Les accès et circulations du parking sont conservés. {{raccordement}} Les câbles "
         "cheminent sous les ombrières puis en souterrain."
+    ),
+    # Modalités de gestion des eaux pluviales (demandé le 03/11/2026). Texte
+    # fixe : toutes nos ombrières sont équipées d'un chéneau en bas de pente
+    # et de descentes le long des poteaux, avec rejet en pied de poteau sur
+    # le revêtement du parking, SANS raccordement au réseau existant.
+    "eaux_pluviales": (
+        "Le projet ne crée aucune surface imperméabilisée supplémentaire : les ombrières "
+        "sont implantées sur un parc de stationnement existant, déjà revêtu, et leur "
+        "emprise au sol se limite aux massifs de fondation des poteaux. Les eaux pluviales "
+        "interceptées par les modules photovoltaïques sont recueillies en partie basse de "
+        "la toiture par un chéneau intégré à la structure, puis évacuées par des descentes "
+        "fixées le long des poteaux. Elles sont rejetées en pied de poteau, directement "
+        "sur le revêtement du parking, sans raccordement au réseau d'eaux pluviales. Elles "
+        "rejoignent ensuite, par ruissellement, les dispositifs de collecte déjà en place "
+        "sur le site (caniveaux, avaloirs). Le volume ruisselé, les points de collecte et "
+        "l'exutoire restent donc identiques à la situation actuelle : la gestion des eaux "
+        "pluviales du site n'est pas modifiée."
     ),
     "chantier": (
         "Les travaux (massifs de fondation, montage de la charpente, pose des modules, câblage) "
@@ -156,7 +198,12 @@ def _valeurs(projet: dict) -> dict[str, str]:
         abf_txt = ("La présence d'un périmètre de protection patrimoniale (abords de monument "
                    "historique, site, SPR) reste à vérifier.")
     double = bool(p and p.get("double"))
-    toiture = ("toiture à double pente (structure en T)" if double else "toiture monopente")
+    # Nos ombrières sont TOUTES monopentes : le type « Double » est une
+    # ombrière monopente double (deux rangées de places sous une même pente
+    # continue, poteau central en T), pas une toiture à deux pans
+    # (correction du 12/11/2026, cf. app/catalogue.py « pas de V inversé »).
+    toiture = ("toiture monopente double (structure en T)" if double
+               else "toiture monopente simple")
     md = ", ".join(filter(None, [
         f"{omb['module_puissance_wc']:g} Wc" if omb.get("module_puissance_wc") else None,
         omb.get("module_dimensions"),

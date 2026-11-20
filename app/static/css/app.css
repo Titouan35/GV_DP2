@@ -285,6 +285,28 @@ body.accueil .side, body.accueil .rightpanel { display: none; }
 .plan-note { margin-bottom: 14px; }
 .plan-note .link { margin-left: 8px; }
 
+/* provenance des valeurs reprises d'un document source (FVE).
+   display:block et non le flex de .note : la bannière porte plusieurs lignes
+   (résumé, puis ce que la fiche ne contenait pas), que le flex mettrait côte
+   à côte en ignorant le retour à la ligne. */
+.source-note { display: block; margin: 14px 16px; line-height: 1.55; }
+.source-note small { display: inline-block; margin-top: 3px; opacity: .8; }
+/* étape 5 : bilan du pré-remplissage du Cerfa */
+.rapport-liste { margin: 6px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.6; }
+.rapport-liste li { margin-bottom: 3px; }
+.rapport-liste.muted { color: var(--muted); }
+.rapport-liste .sub { font-size: 12px; }
+
+.fve-chip {
+  margin-left: 8px; background: var(--gv-green-l); border-color: var(--gv-green);
+  color: var(--gv-navy); font-weight: 600; vertical-align: 1px;
+}
+/* pièce déposée depuis le catalogue : provisoire, donc en ambre et non en vert */
+.catalogue-chip {
+  margin-left: 8px; background: var(--amber-l); border-color: var(--amber);
+  color: var(--amber); font-weight: 600; vertical-align: 1px;
+}
+
 /* lightbox (agrandissement des insertions) */
 #lightbox {
   position: fixed; inset: 0; z-index: 300; background: rgba(0, 20, 45, 0.82);
@@ -381,7 +403,7 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
 .presence {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   background: #FFF4E5; border: 1px solid #F3C892; border-radius: 8px;
-  padding: 9px 14px; margin-bottom: 14px; font-size: 13.5px; color: #7A4A05;
+  padding: 9px 14px; margin: 10px 18px 0; font-size: 13.5px; color: #7A4A05;
 }
 .presence b { color: #5C3703; }
 .presence[hidden] { display: none; }
@@ -419,3 +441,9 @@ mark.v { background: var(--gv-green-l); color: var(--gv-navy); border-radius: 3p
   font-size: 13px; line-height: 1.5;
 }
 #bandeau-ephemere[hidden] { display: none; }
+/* dossier du PC lié : les projets sont en sécurité, le bandeau passe au vert */
+#bandeau-ephemere.lie {
+  background: var(--gv-green-l); color: var(--gv-navy); border-bottom-color: var(--gv-green);
+}
+#bandeau-ephemere.lie.alerte { background: var(--amber-l); color: var(--amber); border-bottom-color: var(--amber); }
+#bandeau-ephemere .btn { margin-left: 8px; vertical-align: baseline; }

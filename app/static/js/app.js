@@ -43,7 +43,8 @@ function toast(msg, type = "") {
   setTimeout(() => el.remove(), 4200);
 }
 
-async function api(path, options = {}) {
+async function api(path, options = {}, reprise = false) {
+  await avantEcriture(path, options.method);
   let resp;
   try {
     resp = await fetch(path, {
@@ -51,16 +52,47 @@ async function api(path, options = {}) {
       ...options,
     });
   } catch {
-    toast("Serveur injoignable : relancez GV_DP.", "err");
+    toast(DossierLie.disponible ? "Serveur injoignable : vérifiez votre connexion."
+      : "Serveur injoignable : relancez GV_DP.", "err");
     throw new Error("network");
   }
   if (!resp.ok) {
+    if (resp.status === 404 && !reprise && (await retablirCopie(path))) return api(path, options, true);
     let detail = `Erreur ${resp.status}`;
     try { detail = (await resp.json()).detail || detail; } catch { /* brut */ }
     toast(detail, "err");
     throw new Error(detail);
   }
+  apresEcriture(path, options.method);
   return resp.json();
+}
+
+// ---------------- dossier lié (mode web) ----------------
+// En ligne, les projets vivent dans le dossier PROJETS du poste et le serveur
+// n'en tient qu'une copie de travail (voir dossier_lie.js). Trois points de
+// contact avec les appels au serveur :
+//   - avant de rafraîchir la présence, lui montrer celle déposée par OneDrive ;
+//   - s'il a perdu sa copie (veille, redémarrage), la lui renvoyer et réessayer ;
+//   - après chacune de ses écritures, rapatrier le résultat sur le poste.
+function projetDeLaRoute(path) {
+  const m = /^\/api\/projets\/([a-z0-9-]+)/.exec(path);
+  return m ? m[1] : null;
+}
+
+async function avantEcriture(path, method) {
+  if (!DossierLie.actif || method !== "POST" || !/\/verrou(\?|$)/.test(path)) return;
+  try { await DossierLie.pousserVerrou(projetDeLaRoute(path)); } catch { /* présence : sans gravité */ }
+}
+
+async function retablirCopie(path) {
+  const id = projetDeLaRoute(path);
+  if (!id || !DossierLie.actif) return false;
+  try { return await DossierLie.retablir(id); } catch { return false; }
+}
+
+function apresEcriture(path, method) {
+  if (!DossierLie.actif || !method || method === "GET" || !projetDeLaRoute(path)) return;
+  DossierLie.tirer().catch((e) => toast(`Enregistrement sur votre PC impossible : ${e.message}`, "err"));
 }
 
 // accès par chemin ("mo.raison_sociale") dans l'objet projet
@@ -81,7 +113,11 @@ function nouveauProjet(nom) {
     statut: "brouillon",
     mo: {},
     localisation: { parcelles: [] },
-    ombriere: { pente_deg: 5 },
+    // Aucune cote pré-remplie : une pente de 5° écrite d'office ne venait de
+    // personne, et surtout elle passait pour « déjà saisie », donc l'inclinaison
+    // lue sur la FVE ou sur le plan de masse n'était jamais reportée. Le
+    // catalogue retombe de toute façon sur 5° (catalogue.parametres_effectifs).
+    ombriere: {},
     urbanisme: {},
     notice: { sections: {}, genere_par_ia: false, valide_humain: false },
     documents: {},
@@ -104,14 +140,36 @@ function sauvegarder(silencieux = true) {
 async function _sauvegarderMaintenant(silencieux) {
   const p = state.projet;
   if (!p) return;
+  const cree = !p.id;
   const data = p.id
     ? await api(`/api/projets/${p.id}`, { method: "PUT", body: JSON.stringify(p) })
     : await api("/api/projets", { method: "POST", body: JSON.stringify(p) });
+  // projet neuf : sa fiche doit aussi naître dans le dossier du poste
+  if (cree && DossierLie.actif) {
+    DossierLie.suivre(data.projet.id)
+      .catch((e) => toast(`Enregistrement sur votre PC impossible : ${e.message}`, "err"));
+  }
   state.projet = data.projet;
   state.evaluation = data.evaluation;
   state.dirty = false;
   renderChrome();
   if (!silencieux) toast("Projet enregistré.", "ok");
+}
+
+// Action qui fait RÉÉCRIRE le projet par le serveur (dépôt ou suppression
+// d'une pièce, validation, notice, Cerfa) : elle prend sa place dans la même
+// file que les sauvegardes, et envoie d'abord la saisie en attente. Sans cela
+// (20/11/2026), une valeur tapée moins de 900 ms avant le clic n'était pas
+// encore partie : la route renvoyait le projet sans elle, l'écran l'effaçait,
+// et l'autosave suivante partait d'une date périmée (409). Si la sauvegarde
+// préalable échoue, l'action n'est pas lancée (api() a déjà affiché l'erreur).
+function apresSauvegarde(action) {
+  clearTimeout(saveTimer);
+  chaineSauvegarde = chaineSauvegarde.catch(() => {}).then(async () => {
+    if (state.dirty) await _sauvegarderMaintenant(true);
+    return action();
+  });
+  return chaineSauvegarde;
 }
 
 function sauvegarderBientot() {
@@ -235,6 +293,7 @@ function render() {
 
 // ---------------- accueil ----------------
 async function renderAccueil(main) {
+  afficherPresence(null);   // la présence concerne le projet qu'on quitte
   main.innerHTML = `
     <div class="crumb">GV_DP</div>
     <h1>Projets</h1>
@@ -256,10 +315,23 @@ async function renderAccueil(main) {
   $("#new-nom").addEventListener("keydown", (e) => { if (e.key === "Enter") creerDepuisAccueil(); });
 
   try {
-    const data = await api("/api/projets");
+    let data;
+    if (DossierLie.actif) {
+      try {
+        data = await DossierLie.lister();
+      } catch (e) {
+        $("#home-items").innerHTML = `<p class="sub">Lecture du dossier « ${esc(DossierLie.nom)} » impossible : ${esc(e.message)}</p>`;
+        return;
+      }
+    } else {
+      data = await api("/api/projets");
+    }
     const box = $("#home-items");
+    if (!box) return;     // l'accueil a été redessiné entre-temps
     if (!data.projets.length) {
-      box.innerHTML = `<p class="sub">Aucun projet pour l'instant.</p>`;
+      box.innerHTML = DossierLie.actif
+        ? `<p class="sub">Aucun projet dans le dossier « ${esc(DossierLie.nom)} ».</p>`
+        : `<p class="sub">Aucun projet pour l'instant.</p>`;
       return;
     }
     box.innerHTML = "";
@@ -282,8 +354,14 @@ async function renderAccueil(main) {
         ouvrirProjet(pr.id);
       });
       div.querySelector(".home-del").addEventListener("click", async () => {
-        if (!window.confirm(`Supprimer définitivement « ${pr.nom} » ?`)) return;
-        await api(`/api/projets/${pr.id}`, { method: "DELETE" });
+        if (DossierLie.actif) {
+          if (!window.confirm(`Supprimer définitivement « ${pr.nom} » du dossier « ${DossierLie.nom} » de ce PC ?`)) return;
+          try { await DossierLie.supprimerProjet(pr.id); }
+          catch (e) { toast(`Suppression impossible : ${e.message}`, "err"); return; }
+        } else {
+          if (!window.confirm(`Supprimer définitivement « ${pr.nom} » ?`)) return;
+          await api(`/api/projets/${pr.id}`, { method: "DELETE" });
+        }
         toast("Projet supprimé.", "ok");
         renderAccueil(main);
       });
@@ -302,6 +380,7 @@ async function creerDepuisAccueil() {
 }
 
 async function ouvrirProjet(id) {
+  if (DossierLie.actif && !(await envoyerDepuisLePoste(id))) return;
   const data = await api(`/api/projets/${id}`);
   state.projet = data.projet;
   state.evaluation = data.evaluation;
@@ -309,6 +388,32 @@ async function ouvrirProjet(id) {
   state.etape = 1;
   render();
   signalerPresence(id, data.verrou);
+}
+
+// Dossier lié : le projet part du poste vers le serveur de calcul. Seuls les
+// fichiers que le serveur n'a pas déjà sont envoyés ; la première ouverture
+// de la journée transfère tout le dossier (20 à 80 Mo mesurés), d'où l'écran
+// d'attente avec la progression.
+async function envoyerDepuisLePoste(id) {
+  const main = $("#main");
+  main.innerHTML = `
+    <div class="crumb">GV_DP</div>
+    <h1>Ouverture du projet</h1>
+    <p class="sub" id="lie-progression">Lecture du dossier sur votre PC…</p>`;
+  const mo = (n) => (n / 1_048_576).toLocaleString("fr-FR", { maximumFractionDigits: 1 });
+  try {
+    await DossierLie.ouvrir(id, (fait, total) => {
+      const el = $("#lie-progression");
+      if (el && total) el.textContent = `Envoi des pièces au serveur de calcul : ${mo(fait)} / ${mo(total)} Mo`;
+    });
+    majBandeau();
+    return true;
+  } catch (e) {
+    toast(`Ouverture impossible : ${e.message}`, "err");
+    state.etape = 0;
+    render();
+    return false;
+  }
 }
 
 // ---------------- présence sur un projet (mode partagé entre postes) -------
@@ -367,7 +472,7 @@ function champ(label, bind, opts = {}) {
   const type = opts.type || "text";
   const ph = esc(opts.placeholder || "");
   return `<div class="field${wide}"><label>${esc(label)}</label>
-    <input class="input" type="${type}" data-bind="${esc(bind)}" value="${val}" placeholder="${ph}" ${opts.step ? `step="${opts.step}"` : ""} /></div>`;
+    <input class="input" type="${type}" data-bind="${esc(bind)}" value="${val}" placeholder="${ph}" ${opts.step ? `step="${opts.step}"` : ""} ${opts.list ? `list="${esc(opts.list)}"` : ""} /></div>`;
 }
 
 function brancherChamps(main, apres) {
@@ -387,6 +492,7 @@ let map = null;
 let parcelLayer = null;
 let marker = null;
 let cadastreLayer = null;
+let batLayer = null;
 
 function renderEtapeLocalisation(main) {
   const loc = state.projet.localisation;
@@ -432,6 +538,16 @@ function renderEtapeLocalisation(main) {
       </div>
     </div>
 
+    <details class="foldable" id="fold-bati" open>
+      <summary>Bâtiments existants sur les parcelles <span class="hint" id="bati-source">(emprise au sol)</span></summary>
+      <div id="bati-note"></div>
+      <table class="ptable">
+        <thead><tr><th style="width:36px"></th><th>Bâtiment</th><th style="text-align:right">Sur les parcelles</th><th style="text-align:right">Bâtiment entier</th></tr></thead>
+        <tbody id="btable-body"></tbody>
+      </table>
+      <div style="padding:10px 16px"><button class="btn" id="btn-bati">Recalculer</button></div>
+    </details>
+
     <details class="foldable" id="fold-urba" open>
       <summary>Synthèse urbanisme <span class="hint">(PLU, ABF, risques)</span></summary>
       <div class="chips" id="chips"></div>
@@ -451,9 +567,14 @@ function renderEtapeLocalisation(main) {
     allerEtape(2);
   });
 
+  $("#btn-bati").addEventListener("click", () => chargerBatiments());
+
   initCarte();
   renderParcelles();
+  renderBatiments();
   renderChips();
+  // projet antérieur à la fonction, ou parcelles saisies sans calcul
+  if (loc.parcelles.length && !loc.batiments_source) chargerBatiments();
 }
 
 // coordonnées « lat, lon » saisies à la main (France métropolitaine + DROM)
@@ -504,7 +625,7 @@ async function cliquerCarteParcelle(latlng) {
     }
     if (n) {
       toast(`${n} parcelle${n > 1 ? "s" : ""} ajoutée${n > 1 ? "s" : ""}.`, "ok");
-      renderParcelles(); renderChips(); majCarte(); sauvegarderBientot();
+      renderParcelles(); renderChips(); majCarte(); sauvegarderBientot(); chargerBatimentsBientot();
     } else { toast("Parcelle déjà présente.", ""); }
   } catch { /* toast déjà affiché */ }
 }
@@ -538,6 +659,21 @@ function initCarte() {
     style: { color: "#05DB79", weight: 2.5, fillColor: "#05DB79", fillOpacity: 0.14 },
   }).addTo(map);
 
+  // bâtiments existants : orange plein = retenu, pointillé = écarté ;
+  // à cheval sur la limite : contour entier mais remplissage léger, seule la
+  // part sur les parcelles compte. Un clic bascule (sans ajouter de parcelle)
+  batLayer = L.geoJSON(null, {
+    style: (f) => !f.properties.inclus
+      ? { color: "#E8590C", weight: 1.5, dashArray: "4 4", fillOpacity: 0 }
+      : f.properties.a_cheval
+        ? { color: "#E8590C", weight: 1.5, fillColor: "#E8590C", fillOpacity: 0.12 }
+        : { color: "#E8590C", weight: 2, fillColor: "#E8590C", fillOpacity: 0.35 },
+    onEachFeature: (f, layer) => {
+      layer.bindTooltip(f.properties.label, { sticky: true });
+      layer.on("click", (e) => { L.DomEvent.stopPropagation(e); basculerBatiment(f.properties.idx); });
+    },
+  }).addTo(map);
+
   map.on("click", (e) => cliquerCarteParcelle(e.latlng));
   majCarte(true);
 }
@@ -554,6 +690,18 @@ function majCarte(fit = false) {
       });
     }
   }
+  batLayer.clearLayers();
+  (loc.batiments || []).forEach((b, idx) => {
+    if (!b.geometry) return;
+    batLayer.addData({
+      type: "Feature", geometry: b.geometry,
+      properties: {
+        idx, inclus: b.inclus !== false, a_cheval: !!b.a_cheval,
+        label: `${libelleBatiment(b)} · ${fmtM2(Math.round(b.surface_parcelles_m2))}`
+          + (b.a_cheval ? ` sur les parcelles (bâtiment entier ${fmtM2(Math.round(b.surface_m2))})` : ""),
+      },
+    });
+  });
   // marqueur : créé une fois, ensuite simplement déplacé (évite de recréer le layer)
   if (loc.lat != null) {
     if (!marker) {
@@ -681,7 +829,7 @@ function renderParcelles() {
       <td><button class="iconbtn" title="Retirer" aria-label="Retirer la parcelle">✕</button></td>`;
     tr.querySelector(".iconbtn").addEventListener("click", () => {
       parcelles.splice(idx, 1);
-      renderParcelles(); renderChips(); majCarte(); sauvegarderBientot();
+      renderParcelles(); renderChips(); majCarte(); sauvegarderBientot(); chargerBatimentsBientot();
     });
     body.appendChild(tr);
   });
@@ -696,7 +844,7 @@ function renderParcelles() {
     tr.querySelector("button").addEventListener("click", () => {
       state.projet.localisation.parcelles.push({ ...s, source: "suggestion" });
       state.suggestions.splice(idx, 1);
-      renderParcelles(); renderChips(); majCarte(); sauvegarderBientot();
+      renderParcelles(); renderChips(); majCarte(); sauvegarderBientot(); chargerBatimentsBientot();
     });
     body.appendChild(tr);
   });
@@ -704,6 +852,113 @@ function renderParcelles() {
   if (!parcelles.length && !state.suggestions.length) {
     body.innerHTML = `<tr><td colspan="4" style="color:var(--faint)">Aucune parcelle. Recherchez une adresse ou saisissez section + numéro.</td></tr>`;
   }
+}
+
+// ---- bâtiments existants → emprise au sol avant travaux (cadre 4.3) ----
+// Source : BD TOPO IGN (contours au toit, débords compris), secours cadastre.
+// Seule la part de chaque bâtiment SUR les parcelles compte (app/geo/batiments.py).
+let batTimer = null;
+let batRequete = 0;
+
+function emprisebatie(loc = state.projet.localisation) {
+  if (!loc.batiments_source) return null;
+  return Math.round((loc.batiments || [])
+    .filter((b) => b.inclus !== false)
+    .reduce((t, b) => t + (b.surface_parcelles_m2 || 0), 0));
+}
+
+// L'emprise avant travaux suit l'emprise bâtie tant que le rédacteur ne l'a
+// pas changée à la main : vide, ou égale à la valeur calculée précédente.
+function reporterEmpriseAvant(ancienne) {
+  const o = (state.projet.ombriere = state.projet.ombriere || {});
+  const nouvelle = emprisebatie();
+  if (nouvelle == null) return;
+  if (o.emprise_avant_m2 == null || o.emprise_avant_m2 === "" || Number(o.emprise_avant_m2) === ancienne) {
+    o.emprise_avant_m2 = nouvelle;
+  }
+}
+
+function libelleBatiment(b) {
+  const bits = [b.usage, b.nature && b.nature !== "Indifférenciée" ? b.nature : null].filter(Boolean);
+  return bits.join(" · ") || "Bâtiment";
+}
+
+function chargerBatimentsBientot() {
+  clearTimeout(batTimer);
+  batTimer = setTimeout(() => chargerBatiments(), 600);
+}
+
+async function chargerBatiments() {
+  const loc = state.projet.localisation;
+  const ancienne = emprisebatie();
+  const n = ++batRequete;
+  if (!loc.parcelles.length) {
+    loc.batiments = []; loc.batiments_source = null;
+    renderBatiments(); renderChips(); majCarte(); sauvegarderBientot();
+    return;
+  }
+  const note = $("#bati-note");
+  if (note) note.innerHTML = `<div class="note" style="margin:10px 16px">Recherche des bâtiments…</div>`;
+  let data;
+  try {
+    data = await api("/api/batiments", {
+      method: "POST",
+      body: JSON.stringify({ parcelles: loc.parcelles.map((p) => ({ geometry: p.geometry, code_insee: p.code_insee })) }),
+    });
+  } catch {
+    if (n === batRequete && note) note.innerHTML = `<div class="note warn" style="margin:10px 16px">Bâtiments indisponibles : réessayez avec « Recalculer », ou saisissez l'emprise à l'étape 3.</div>`;
+    return;
+  }
+  if (n !== batRequete) return;  // une requête plus récente est partie
+  const ecartes = new Set((loc.batiments || []).filter((b) => b.inclus === false).map((b) => b.id));
+  loc.batiments = data.batiments.map((b) => ({ ...b, inclus: !ecartes.has(b.id) }));
+  loc.batiments_source = data.source;
+  state.batimentsAvertissement = data.avertissement;
+  reporterEmpriseAvant(ancienne);
+  renderBatiments(); renderChips(); majCarte(); sauvegarderBientot();
+}
+
+function basculerBatiment(idx) {
+  const b = state.projet.localisation.batiments[idx];
+  if (!b) return;
+  const ancienne = emprisebatie();
+  b.inclus = b.inclus === false;
+  reporterEmpriseAvant(ancienne);
+  renderBatiments(); renderChips(); majCarte(); sauvegarderBientot();
+}
+
+function renderBatiments() {
+  const body = $("#btable-body");
+  if (!body) return;
+  const loc = state.projet.localisation;
+  const bats = loc.batiments || [];
+  $("#bati-source").textContent = loc.batiments_source ? `(source : ${loc.batiments_source})` : "(emprise au sol)";
+  $("#bati-note").innerHTML = state.batimentsAvertissement
+    ? `<div class="note warn" style="margin:10px 16px">${esc(state.batimentsAvertissement)}</div>` : "";
+  body.innerHTML = "";
+  if (!loc.batiments_source) {
+    body.innerHTML = `<tr><td colspan="4" style="color:var(--faint)">Sélectionnez des parcelles : les bâtiments qui s'y trouvent apparaîtront ici.</td></tr>`;
+    return;
+  }
+  if (!bats.length) {
+    body.innerHTML = `<tr><td colspan="4" style="color:var(--faint)">Aucun bâtiment sur les parcelles : emprise bâtie 0 m².</td></tr>`;
+    return;
+  }
+  bats.forEach((b, idx) => {
+    const tr = document.createElement("tr");
+    const h = b.hauteur_m ? ` <small>· h ${String(b.hauteur_m).replace(".", ",")} m</small>` : "";
+    const cheval = b.a_cheval ? ` <small style="color:var(--amber)">à cheval sur la limite</small>` : "";
+    tr.innerHTML = `<td><input type="checkbox" ${b.inclus !== false ? "checked" : ""} aria-label="Compter ce bâtiment" /></td>
+      <td>${esc(libelleBatiment(b))}${h}${cheval}</td>
+      <td class="num"><b>${fmtM2(Math.round(b.surface_parcelles_m2))}</b></td>
+      <td class="num">${fmtM2(Math.round(b.surface_m2))}</td>`;
+    if (b.inclus === false) tr.style.opacity = "0.5";
+    tr.querySelector("input").addEventListener("change", () => basculerBatiment(idx));
+    body.appendChild(tr);
+  });
+  const tot = document.createElement("tr");
+  tot.innerHTML = `<td></td><td><b>Emprise bâtie retenue</b></td><td class="num"><b>${fmtM2(emprisebatie())}</b></td><td></td>`;
+  body.appendChild(tot);
 }
 
 async function ajouterParcelleManuelle() {
@@ -722,7 +977,7 @@ async function ajouterParcelleManuelle() {
     }
   }
   $("#add-section").value = ""; $("#add-numero").value = "";
-  renderParcelles(); renderChips(); majCarte(); sauvegarderBientot();
+  renderParcelles(); renderChips(); majCarte(); sauvegarderBientot(); chargerBatimentsBientot();
 }
 
 function renderChips() {
@@ -740,6 +995,11 @@ function renderChips() {
   chips.push(surf
     ? `<span class="chip">Surface terrain <b>${fmtM2(surf)}</b></span>`
     : `<span class="chip off">Surface —</span>`);
+
+  const bati = emprisebatie(loc);
+  if (bati != null) {
+    chips.push(`<span class="chip" title="Bâtiments existants sur les parcelles · ${esc(loc.batiments_source)}">Emprise bâtie <b>${fmtM2(bati)}</b></span>`);
+  }
 
   if (u.zonage) {
     if (!u.zonage.disponible) chips.push(`<span class="chip off">PLU indisponible</span>`);
@@ -841,9 +1101,18 @@ const DESTINATIONS_ENERGIE = [
 function renderEtapeCaracteristiques(main) {
   const lecture = state.projet.meta?.plan_lecture;
   const proposes = state.projet.meta?.plan_champs_proposes || [];
+  const fve = state.projet.meta?.fve;
+  const fveProposes = fve?.proposes || [];
   main.innerHTML = `
     <div class="crumb">Étape 3 / 5</div>
     <h1>Caractéristiques de l'ombrière</h1>
+    ${fve ? `<div class="note source-note">
+      <b>Repris de la FVE</b>${fve.fichier ? ` (${esc(fve.fichier)})` : ""} :
+      ${esc(resumeLectureFve(fve))}.
+      ${fveProposes.length ? "Les cases concernées sont surlignées en vert. Corrigez-les librement : la fiche propose, elle n'impose pas."
+                           : "Aucune case n'a été remplie : les valeurs étaient déjà saisies, ou le gabarit n'a pas été reconnu."}
+      ${(fve.manquant || []).length ? `<br /><small>Non trouvé dans la fiche : ${esc((fve.manquant || []).map(libelleChamp).join(", "))}.</small>` : ""}
+      </div>` : ""}
     ${lecture ? `<div class="note plan-note">Lu sur le plan de masse${lecture.reference_plan ? ` (${esc(lecture.reference_plan)})` : ""} :
       ${esc(resumeLecturePlan(lecture))} <span class="link" id="btn-plan-appliquer">Tout appliquer</span></div>` : ""}
     <h2 style="font-size:17px;color:var(--gv-navy);margin:20px 0 8px">Type d'ombrière</h2>
@@ -857,12 +1126,49 @@ function renderEtapeCaracteristiques(main) {
       ${champ("Puissance (kWc)", "ombriere.puissance_kwc", { type: "number", step: "1" })}
       ${champ("Orientation (° azimut)", "ombriere.orientation", { type: "number", step: "1", placeholder: "0 = Nord, 90 = Est" })}
       ${champ("Entraxe (m)", "ombriere.entraxe_m", { type: "number", step: "0.1" })}
-      ${champ("Pente (°)", "ombriere.pente_deg", { type: "number", step: "0.5" })}
+      ${champ("Pente (°)", "ombriere.pente_deg", { type: "number", step: "0.5", placeholder: "5 par défaut (catalogue)" })}
       ${champ("Hauteur bas de pente (m)", "ombriere.garde_au_sol_m", { type: "number", step: "0.05" })}
       ${champ("Hauteur maximale (m)", "ombriere.hauteur_hors_tout_m", { type: "number", step: "0.05" })}
+      ${champ("Largeur d'ombrière (m)", "ombriere.largeur_m", { type: "number", step: "0.1", placeholder: "profondeur au sens du Cerfa" })}
       ${champ("Puissance module (Wc)", "ombriere.module_puissance_wc", { type: "number", step: "5" })}
       ${champ("Dimensions module (mm)", "ombriere.module_dimensions", { placeholder: "Ex. : 1762 x 1134" })}
+      ${champ("Modèle de module", "ombriere.type_module", { placeholder: "Ex. : AIKO-A490-MCES4Dw" })}
+      ${champ("Modules par rampant", "ombriere.nb_modules_rampant",
+              { type: "number", step: "1", placeholder: "désigne la coupe type DP3" })}
+      ${champ("Nombre total de modules", "ombriere.nb_modules_total",
+              { type: "number", step: "1", placeholder: "sert à l'emprise au sol" })}
       ${champ("Nombre de places couvertes", "ombriere.nb_places", { type: "number", step: "1" })}
+      ${champ("Puissance AC / raccordement (kVA)", "ombriere.puissance_raccordement_kva",
+              { type: "number", step: "1", placeholder: "cadre 4.2.1 · « Puissance AC » de la FVE" })}
+      ${champ("Nombre d'ombrières", "ombriere.nb_ombrieres",
+              { type: "number", step: "1", placeholder: "notice de sécurité ERP, §4.1" })}
+      ${champ("Nombre d'onduleurs", "ombriere.nb_onduleurs",
+              { type: "number", step: "1", placeholder: "bloc « Onduleurs » de la FVE" })}
+      ${champ("Modèle d'onduleur", "ombriere.modele_onduleur",
+              { placeholder: "Ex. : SUNGROW SG50CX-P2", list: "modeles-onduleur" })}
+    </div>
+    <datalist id="modeles-onduleur">
+      ${MODELES_ONDULEUR.map((m) => `<option value="SUNGROW ${esc(m)}"></option>`).join("")}
+    </datalist>
+
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:22px 0 4px">Emprise au sol</h2>
+    <p class="sub" style="max-width:760px;margin:0 0 10px">Cadre 4.3 du Cerfa : la projection
+      verticale du volume construit, débords et surplomb inclus (art. R.420-1).
+      L'emprise créée est <b>estimée d'après la FVE</b> — nombre total de modules × surface
+      d'un module — et reste modifiable. C'est un minorant : les débords de structure ne sont
+      pas comptés.${estimationEmprise() ? ` Calcul : ${estimationEmprise()}.` : ""}
+      ${emprisebatie() != null
+        ? `L'avant-travaux est <b>pré-remplie avec l'emprise bâtie relevée à l'étape 1</b>
+           (${fmtM2(emprisebatie())}, ${esc(state.projet.localisation.batiments_source)}) : vérifiez-la,
+           une ombrière ou un abri déjà en place n'y figure pas toujours.`
+        : `L'avant-travaux se remplit d'après les bâtiments trouvés sur les parcelles à l'étape 1.`}
+      La supprimée reste à vous : l'outil ne sait pas ce qui sera démoli.</p>
+    <div class="formgrid" style="max-width:760px">
+      ${champ("Emprise avant travaux (m²)", "ombriere.emprise_avant_m2",
+              { type: "number", step: "1", placeholder: "0 si le parking est nu" })}
+      ${champ("Emprise créée (m²)", "ombriere.emprise_creee_m2", { type: "number", step: "1" })}
+      ${champ("Emprise supprimée (m²)", "ombriere.emprise_supprimee_m2",
+              { type: "number", step: "1", placeholder: "0 si rien n'est démoli" })}
     </div>
 
     <h2 style="font-size:17px;color:var(--gv-navy);margin:22px 0 8px">Destination de l'électricité</h2>
@@ -885,9 +1191,71 @@ function renderEtapeCaracteristiques(main) {
     sauvegarderBientot();
   });
   brancherChamps(main);
-  marquerChampsProposes(main, proposes);
+  marquerChampsProposes(main, [...proposes, ...fveProposes]);
   $("#btn-plan-appliquer")?.addEventListener("click", () => appliquerLecturePlan(lecture));
   $("#btn-suivant").addEventListener("click", async () => { await sauvegarder(); allerEtape(4); });
+}
+
+// Libellés des champs d'ombrière, pour parler au rédacteur dans ses mots
+// plutôt qu'avec les clés du modèle (« garde_au_sol_m »).
+const LIBELLES_OMBRIERE = {
+  puissance_kwc: "puissance crête",
+  garde_au_sol_m: "hauteur bas de pente",
+  hauteur_hors_tout_m: "hauteur maximale",
+  pente_deg: "pente",
+  largeur_m: "largeur d'ombrière",
+  entraxe_m: "entraxe",
+  module_puissance_wc: "puissance module",
+  module_dimensions: "dimensions module",
+  type_module: "modèle de module",
+  nb_places: "places couvertes",
+  orientation: "orientation",
+  nb_modules_rampant: "modules par rampant",
+  nb_modules_total: "nombre total de modules",
+  emprise_creee_m2: "emprise au sol créée",
+  puissance_raccordement_kva: "puissance AC (raccordement)",
+  nb_ombrieres: "nombre d'ombrières",
+  nb_onduleurs: "nombre d'onduleurs",
+  modele_onduleur: "modèle d'onduleur",
+};
+// Onduleurs dont la fiche technique Sungrow est embarquée (annexe 7.4 de la
+// notice de sécurité ERP, app/notices_erp.py:FICHES_ONDULEUR).
+const MODELES_ONDULEUR = ["SG36CX-P2", "SG40CX-P2", "SG50CX-P2", "SG125CX-P2", "SG150CX"];
+const UNITES_OMBRIERE = {
+  puissance_kwc: " kWc", garde_au_sol_m: " m", hauteur_hors_tout_m: " m",
+  pente_deg: "°", largeur_m: " m", entraxe_m: " m", module_puissance_wc: " Wc",
+  orientation: "°", emprise_creee_m2: " m²", puissance_raccordement_kva: " kVA",
+};
+
+function libelleChamp(cle) {
+  return LIBELLES_OMBRIERE[cle] || cle;
+}
+
+// Détail du calcul d'emprise, affiché pour que le chiffre ne tombe pas du
+// ciel : le rédacteur doit pouvoir le refaire de tête et le contester.
+// Doit rester aligné sur lecture_fve.appliquer_lecture, qui l'écrit.
+const MODULE_DEFAUT_MM = [1762, 1134];
+
+function estimationEmprise() {
+  const o = state.projet.ombriere || {};
+  if (!o.nb_modules_total) return "";
+  const m = /(\d{3,5})\s*[x×*]\s*(\d{3,5})/.exec(o.module_dimensions || "");
+  const [l, h] = m ? [Number(m[1]), Number(m[2])] : MODULE_DEFAUT_MM;
+  const unitaire = (l * h) / 1e6;
+  const total = o.nb_modules_total * unitaire;
+  return `${o.nb_modules_total} modules × ${l} × ${h} mm `
+    + `(${unitaire.toFixed(2).replace(".", ",")} m²) ≈ ${total.toFixed(1).replace(".", ",")} m²`;
+}
+
+// résumé lisible de la lecture de la FVE (bannière étape 3)
+function resumeLectureFve(fve) {
+  const champs = fve?.champs || {};
+  const bits = Object.keys(champs).map((cle) => {
+    // virgule décimale : le reste du dossier (Cerfa, notice) est en français
+    const val = typeof champs[cle] === "number" ? String(champs[cle]).replace(".", ",") : champs[cle];
+    return `${libelleChamp(cle)} ${val}${UNITES_OMBRIERE[cle] || ""}`;
+  });
+  return bits.join(" · ") || "aucune valeur reconnue";
 }
 
 // résumé lisible de la lecture du plan (bannière étape 3)
@@ -943,13 +1311,46 @@ const PIECES_UPLOAD = [
   { code: "dp8", titre: "DP8 · Photo paysage lointain", note: "" },
 ];
 
+// Bilan de la reprise, affiché sous la carte FVE (étape 2). Dit ce qui a été
+// pris et où aller le relire : sans ça, la fiche partait dans le vide, et rien
+// à l'écran ne disait que les caractéristiques venaient d'être pré-remplies.
+function resumeRepriseFve(fve) {
+  const champs = fve.proposes || [];
+  const bits = [];
+  if (champs.length) {
+    bits.push(`${champs.length} valeur${champs.length > 1 ? "s" : ""} reprise${champs.length > 1 ? "s" : ""} `
+      + `à l'étape 3 (${champs.map(libelleChamp).join(", ")})`);
+  }
+  const pieces = fve.images || [];
+  if (pieces.length) bits.push(`${pieces.map((c) => c.toUpperCase()).join(" et ")} déposée${pieces.length > 1 ? "s" : ""}`);
+  if (fve.coupe) bits.push(`coupe type en DP3 (${fve.coupe})`);
+  let texte = bits.length
+    ? `${esc(bits.join(" · "))}. À relire, tout reste modifiable.`
+    : "Aucune valeur reprise : gabarit non reconnu, ou champs déjà remplis.";
+  // Dire POURQUOI aucune coupe n'a été déposée : sans ça, le silence laisse
+  // croire que la fiche n'a rien donné, alors que c'est la configuration qui
+  // n'est pas au catalogue (nombre de modules ou point bas).
+  if (fve.coupe_refus) texte += `<br /><span style="color:var(--amber)">${esc(fve.coupe_refus)}</span>`;
+  return texte;
+}
+
 async function uploaderPieceBE(code, file) {
   const fd = new FormData();
   fd.append("fichier", file);
+  const adresse = `/api/projets/${state.projet.id}/documents/${code}`;
   let resp;
-  try { resp = await fetch(`/api/projets/${state.projet.id}/documents/${code}`, { method: "POST", body: fd }); }
-  catch { toast("Serveur injoignable.", "err"); return; }
+  try {
+    resp = await apresSauvegarde(async () => {
+      const envoyer = () => fetch(adresse, { method: "POST", body: fd }).catch(() => null);
+      let r = await envoyer();
+      // dossier lié : copie serveur perdue (veille), renvoyée puis nouvel essai
+      if (r && r.status === 404 && (await retablirCopie(adresse))) r = await envoyer();
+      return r;
+    });
+  } catch { return; }   // sauvegarde préalable refusée : api() l'a déjà signalé
+  if (!resp) { toast("Serveur injoignable.", "err"); return; }
   if (!resp.ok) { toast((await resp.json()).detail || "Échec de l'envoi.", "err"); return; }
+  apresEcriture(adresse, "POST");
   const data = await resp.json();
   state.projet = data.projet; state.evaluation = data.evaluation;
   const deposees = data.fve_images || [];
@@ -986,8 +1387,18 @@ function renderEtapePieces(main) {
     </div>`;
   const box = $("#slots");
   $("#btn-suivant-pieces").addEventListener("click", () => allerEtape(3));
+  const fve = state.projet.meta?.fve;
   for (const piece of [PIECE_FVE, ...PIECES_UPLOAD]) {
     const doc = state.projet.documents?.[piece.code];
+    // Une pièce déposée par la FVE le dit, et reste remplaçable : le BE garde
+    // la main sur son dossier (routes_documents.py écrit `origine: "fve"`).
+    const deFve = doc?.origine === "fve";
+    // La coupe type du catalogue est PROVISOIRE : elle est cotée pour sa
+    // configuration et porte le cartouche du dossier dont elle est issue.
+    // Elle se signale autrement qu'une image extraite de la fiche.
+    const duCatalogue = doc?.origine === "catalogue";
+    const valide = !!doc?.valide_humain;
+    const bilan = piece.code === "fve" && fve ? resumeRepriseFve(fve) : "";
     const div = document.createElement("div");
     div.className = "card upload-slot dropzone-slot";
     div.dataset.code = piece.code;
@@ -995,7 +1406,20 @@ function renderEtapePieces(main) {
       <div class="bd" style="display:flex;align-items:center;gap:14px">
         <span class="st ${doc ? "prete" : "en_attente"}" style="width:10px;height:10px;border-radius:50%;flex:none;background:${doc ? "var(--gv-green)" : "var(--gv-grey)"}"></span>
         <span style="flex:1"><b style="color:var(--gv-navy)">${esc(piece.titre)}</b>
-          <small style="display:block;color:var(--muted)">${doc ? esc(doc.nom_fichier) + " · " + esc((doc.date || "").slice(0, 10)) : esc(piece.note || "glisser un fichier ici")}</small></span>
+          ${deFve ? '<span class="chip fve-chip">reprise de la FVE</span>' : ""}
+          ${duCatalogue ? (valide
+              ? '<span class="chip ok">coupe type validée</span>'
+              : '<span class="chip catalogue-chip">coupe type — provisoire</span>') : ""}
+          <small style="display:block;color:var(--muted)">${doc ? esc(doc.nom_fichier) + " · " + esc((doc.date || "").slice(0, 10)) : esc(piece.note || "glisser un fichier ici")}</small>
+          ${bilan ? `<small style="display:block;color:var(--gv-navy);margin-top:4px">${bilan}</small>` : ""}
+          ${deFve ? '<small style="display:block;color:var(--muted)">Téléversez votre propre image pour la remplacer.</small>' : ""}
+          ${duCatalogue && !valide ? `<small style="display:block;color:var(--amber)">Choisie d'après la FVE. Vérifiez qu'elle
+             correspond au projet et que son cartouche convient, puis validez-la : sans ça, le dépôt reste bloqué.</small>` : ""}
+          ${duCatalogue && valide ? `<small style="display:block;color:var(--gv-green-d)">Validée le
+             ${esc((doc.valide_le || "").slice(0, 10))}${doc.valide_par ? " par " + esc(doc.valide_par) : ""}.</small>` : ""}</span>
+        ${duCatalogue ? (valide
+            ? `<button class="btn" data-devalider="${piece.code}" title="Revenir sur la validation">Dévalider</button>`
+            : `<button class="btn primary" data-valider="${piece.code}">Valider la coupe</button>`) : ""}
         ${doc ? `<a class="btn" href="/api/projets/${state.projet.id}/documents/${piece.code}" target="_blank">Voir</a>
                  <button class="btn" data-del="${piece.code}">Retirer</button>` : ""}
         <label class="btn navy" style="cursor:pointer">${doc ? "Remplacer" : "Téléverser"}
@@ -1003,10 +1427,15 @@ function renderEtapePieces(main) {
       </div>`;
     (piece.code === "fve" ? $("#slot-fve") : box).appendChild(div);
   }
-  box.querySelectorAll("input[type=file]").forEach((inp) => {
+  // Les écouteurs se branchent sur `main`, PAS sur `box` : la carte FVE est
+  // rangée dans #slot-fve, en dehors de #slots. Tant qu'on interrogeait `box`,
+  // elle n'avait NI bouton « Téléverser » actif, NI glisser-déposer, NI
+  // « Retirer » — le fichier n'était jamais envoyé, et rien n'était donc repris
+  // de la fiche. C'est la cause de la panne signalée le 16/09/2026.
+  main.querySelectorAll("input[type=file]").forEach((inp) => {
     inp.addEventListener("change", () => { if (inp.files.length) uploaderPieceBE(inp.dataset.code, inp.files[0]); });
   });
-  box.querySelectorAll(".dropzone-slot").forEach((slot) => {
+  main.querySelectorAll(".dropzone-slot").forEach((slot) => {
     const code = slot.dataset.code;
     ["dragover", "dragenter"].forEach((ev) => slot.addEventListener(ev, (e) => { e.preventDefault(); slot.classList.add("over"); }));
     ["dragleave", "drop"].forEach((ev) => slot.addEventListener(ev, (e) => { e.preventDefault(); slot.classList.remove("over"); }));
@@ -1015,9 +1444,27 @@ function renderEtapePieces(main) {
       if (f) uploaderPieceBE(code, f);
     });
   });
-  box.querySelectorAll("[data-del]").forEach((btn) => {
+  // Valider une pièce déposée automatiquement : le BE dit qu'il l'a regardée
+  // et qu'elle convient. C'est ce qui lève l'anomalie bloquante du dépôt
+  // (app/coherence.py:_controler_pieces_provisoires).
+  const basculerValidation = async (code, valide) => {
+    const data = await apresSauvegarde(() => api(
+      `/api/projets/${state.projet.id}/documents/${code}/valider?valide=${valide ? 1 : 0}`,
+      { method: "PUT" }));
+    state.projet = data.projet; state.evaluation = data.evaluation;
+    toast(valide ? "Coupe validée : le dépôt n'est plus bloqué."
+                 : "Validation retirée.", valide ? "ok" : "warn");
+    render();
+  };
+  main.querySelectorAll("[data-valider]").forEach((btn) =>
+    btn.addEventListener("click", () => basculerValidation(btn.dataset.valider, true).catch(() => {})));
+  main.querySelectorAll("[data-devalider]").forEach((btn) =>
+    btn.addEventListener("click", () => basculerValidation(btn.dataset.devalider, false).catch(() => {})));
+
+  main.querySelectorAll("[data-del]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      const data = await api(`/api/projets/${state.projet.id}/documents/${btn.dataset.del}`, { method: "DELETE" });
+      const data = await apresSauvegarde(() =>
+        api(`/api/projets/${state.projet.id}/documents/${btn.dataset.del}`, { method: "DELETE" }));
       state.projet = data.projet; state.evaluation = data.evaluation;
       render();
     });
@@ -1032,7 +1479,8 @@ const NOTICE_SECTIONS = [
   ["insertion", "4. Insertion paysagère et aspect extérieur"],
   ["reglementaire", "5. Contexte réglementaire, servitudes et risques"],
   ["acces_reseaux", "6. Accès, réseaux et raccordement"],
-  ["chantier", "7. Chantier et remise en état"],
+  ["eaux_pluviales", "7. Gestion des eaux pluviales"],
+  ["chantier", "8. Chantier et remise en état"],
 ];
 
 let noticeVars = [];
@@ -1061,7 +1509,7 @@ function renderEtapeNotice(main) {
     <h1>Notice + Cerfa</h1>
     <div class="actionsrow" style="margin:0 0 16px">
       <button class="btn navy" id="btn-gen-notice">Générer / remplir la notice</button>
-      <button class="btn" id="btn-regen-notice" title="Écrase les 7 sections avec la notice type remplie">Tout regénérer</button>
+      <button class="btn" id="btn-regen-notice" title="Écrase les 8 sections avec la notice type remplie">Tout regénérer</button>
       <label class="chip ${n.valide_humain ? "ok" : ""}" style="cursor:pointer;padding:8px 14px">
         <input type="checkbox" id="chk-valide" ${n.valide_humain ? "checked" : ""} style="margin-right:6px" />
         Notice relue et validée
@@ -1069,7 +1517,10 @@ function renderEtapeNotice(main) {
     </div>
     <div class="home-list" id="notice-sections"></div>
 
-    <h2 style="font-size:17px;color:var(--gv-navy);margin:26px 0 12px">Informations pour le Cerfa</h2>
+    <h2 style="font-size:17px;color:var(--gv-navy);margin:26px 0 4px">Informations pour le Cerfa</h2>
+    <p class="sub" style="max-width:820px;margin:0 0 12px">
+      Maître d'ouvrage pré-rempli avec les coordonnées de Greenvolt Next France.
+      À ne modifier que si le dossier est déposé pour un tiers.</p>
     <div class="formgrid" style="max-width:820px">
       ${champ("Type de maître d'ouvrage", "mo.type", { select: ["Société", "Collectivité", "Particulier"] })}
       ${champ("Raison sociale / nom", "mo.raison_sociale")}
@@ -1082,7 +1533,8 @@ function renderEtapeNotice(main) {
 
   brancherChamps(main);  // champs maître d'ouvrage (Cerfa)
   const generer = async (force) => {
-    const data = await api(`/api/projets/${state.projet.id}/notice/generer?force=${force}`, { method: "POST" });
+    const data = await apresSauvegarde(() =>
+      api(`/api/projets/${state.projet.id}/notice/generer?force=${force}`, { method: "POST" }));
     state.projet = data.projet; state.evaluation = data.evaluation;
     noticeVars = data.variables || noticeVars;
     toast("Notice remplie.", "ok");
@@ -1153,6 +1605,35 @@ const PLANCHES_APERCU = [
   ["dp1_aerien", "DP1 · Vue aérienne"],
 ];
 
+// Bilan du pré-remplissage du Cerfa (étape 5). Le formulaire fait 20 pages et
+// 386 cases : sans ce bilan, la seule façon de savoir ce qui reste à remplir
+// était de tout relire. Trois blocs : ce qui est porté, ce qui manque encore
+// faute de donnée, et ce que l'outil ne remplira jamais — avec la raison.
+function renderRapportCerfa(rapport, titre = "Bilan du pré-remplissage — Cerfa 16702") {
+  const box = $("#rapport-cerfa");
+  if (!box) return;
+  if (!rapport) { box.innerHTML = ""; return; }
+  const aFaire = rapport.a_completer || [];
+  const jamais = rapport.hors_portee || [];
+  box.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="hd"><span class="ti-title">${esc(titre)}</span>
+        <span class="chip ok">${rapport.remplis} cases remplies</span></div>
+      <div class="bd">
+        ${aFaire.length ? `
+          <b style="color:var(--gv-navy);font-size:13px">À compléter — la donnée manque dans le projet</b>
+          <ul class="rapport-liste">${aFaire.map((a) => `<li>${esc(a)}</li>`).join("")}</ul>`
+        : `<b style="color:var(--gv-green-d);font-size:13px">Rien ne manque côté projet : toutes les
+             données que l'outil sait porter au formulaire y sont.</b>`}
+        <b style="color:var(--gv-navy);font-size:13px;display:block;margin-top:14px">À remplir à la main — hors de portée de l'outil</b>
+        <ul class="rapport-liste muted">${jamais.map((h) =>
+          `<li><b>${esc(h.cadre)}</b> · ${esc(h.quoi)} <span class="sub">— ${esc(h.pourquoi)}</span></li>`).join("")}</ul>
+        <p class="sub" style="margin:12px 0 0">Le PDF reste un <b>brouillon</b> : il n'est
+          ni signé, ni coché sur les déclarations qui engagent le déclarant.</p>
+      </div>
+    </div>`;
+}
+
 function renderEtapeExport(main) {
   main.innerHTML = `
     <div class="crumb">Étape 5 / 5</div>
@@ -1160,12 +1641,41 @@ function renderEtapeExport(main) {
 
     <div class="actionsrow" style="margin:14px 0 8px">
       <button class="btn" id="btn-cerfa">Pré-remplir le Cerfa 16702</button>
+      <button class="btn" id="btn-cerfa-erp" title="Autorisation de travaux ERP (accessibilité, sécurité incendie) : le parking dépend d'un établissement recevant du public">Cerfa 13824 (ERP)</button>
       <button class="btn navy" id="btn-pptx">Assembler le dossier (PPTX)</button>
       <button class="btn primary" id="btn-depot" title="Contrôle bloquant : refuse tant que toutes les pièces ne sont pas prêtes">Assembler pour dépôt</button>
       <button class="btn" id="btn-pdf">Exporter en PDF</button>
+      <button class="btn" id="btn-pages" title="Découpe le PDF en une page par pièce, pour un dépôt en ligne pièce par pièce">Pages séparées (ZIP)</button>
       <button class="btn" id="btn-nettoyer" title="Supprime les fichiers régénérables (caches, images non retenues) du dossier projet">🧹 Nettoyer</button>
     </div>
+    <div style="display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap;margin:6px 0 12px">
+    <div class="card" style="margin:0;max-width:760px;flex:1 1 520px">
+      <div class="hd"><span class="ti-title">Autorisation ERP — notices accessibilité et sécurité</span></div>
+      <div class="bd">
+        <div class="sub" style="margin-bottom:6px">Type et catégorie d'ERP (type M, magasin de vente ;
+          la catégorie dépend de l'effectif, donnée de l'exploitant)</div>
+        <div class="actionsrow" id="erp-categorie" style="margin:0 0 10px;gap:14px">
+          ${[1, 2, 3, 4, 5].map((c) => `<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="checkbox" value="${c}" ${state.projet.erp?.categorie === c ? "checked" : ""} /> M${c}</label>`).join("")}
+          <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;margin-left:10px"
+            title="Notices : « Type M » à la place du type et de la catégorie (une seule case cochée parmi M1 à M5 et Type M)">
+            <input type="checkbox" id="erp-type-m" ${state.projet.erp?.type_m_seul ? "checked" : ""} /> Type M</label>
+        </div>
+        <button class="btn" id="btn-notices-erp" title="Notices Word adaptées au projet : adresse, indice du jour, classement ERP, §4.1 et annexes (plan de masse, fiches modules et onduleur)">Notices ERP (Word)</button>
+        <button class="btn" id="btn-notices-erp-pdf" title="Les deux notices (sécurité et accessibilité) en PDF, sommaire mis à jour">Notices ERP (PDF)</button>
+      </div>
+    </div>
+    <div class="card" style="margin:0;flex:0 0 220px;border:2px solid #d32f2f"
+      title="Pensez à vérifier ou changer cette valeur avant de générer la notice de sécurité">
+      <div class="hd"><span class="ti-title" style="color:#d32f2f">Notice de sécurité, §4.1</span></div>
+      <div class="bd">
+        ${champ("Nombre d'ombrières", "ombriere.nb_ombrieres",
+                { type: "number", step: "1", placeholder: "même champ qu'à l'étape 3" })}
+      </div>
+    </div>
+    </div>
     <div id="export-liens" class="sub" style="min-height:20px"></div>
+    <div id="rapport-cerfa"></div>
     <div class="gallery" id="gallery">
       ${PLANCHES_APERCU.map(([code, titre]) => `
         <div class="card"><div class="hd"><span class="ti-title">${esc(titre)}</span>
@@ -1199,7 +1709,61 @@ function renderEtapeExport(main) {
     }
   };
   const btnCerfa = $("#btn-cerfa"), btnPptx = $("#btn-pptx"), btnPdf = $("#btn-pdf");
-  const btnDepot = $("#btn-depot"), btnNettoyer = $("#btn-nettoyer");
+  const btnDepot = $("#btn-depot"), btnNettoyer = $("#btn-nettoyer"), btnPages = $("#btn-pages");
+  const btnCerfaErp = $("#btn-cerfa-erp");
+  // cases M1 à M5 : une seule cochée à la fois (re-cliquer décoche)
+  main.querySelectorAll("#erp-categorie input[value]").forEach((cb) => cb.addEventListener("change", () => {
+    main.querySelectorAll("#erp-categorie input").forEach((autre) => { if (autre !== cb) autre.checked = false; });
+    state.projet.erp = state.projet.erp || { type: "M" };
+    state.projet.erp.categorie = cb.checked ? Number(cb.value) : null;
+    if (cb.checked) state.projet.erp.type_m_seul = false;
+    sauvegarderBientot();
+  }));
+  // case « Type M » : exclusive avec M1-M5, « Type M » dans les deux notices
+  $("#erp-type-m").addEventListener("change", (e) => {
+    state.projet.erp = state.projet.erp || { type: "M" };
+    state.projet.erp.type_m_seul = e.target.checked;
+    if (e.target.checked) {
+      state.projet.erp.categorie = null;
+      main.querySelectorAll("#erp-categorie input[value]").forEach((cb) => { cb.checked = false; });
+    }
+    sauvegarderBientot();
+  });
+  const btnNoticesErp = $("#btn-notices-erp");
+  btnNoticesErp.addEventListener("click", actionLongue(btnNoticesErp, async () => {
+    await sauvegarder();      // la catégorie qui vient d'être cochée doit partir avec
+    const data = await api(`/api/projets/${state.projet.id}/notices-erp`, { method: "POST" });
+    state.projet = data.projet; state.evaluation = data.evaluation;
+    renderChrome();
+    const t = data.telechargements;
+    liens.innerHTML = `Notices ERP générées — <a href="${esc(t.accessibilite)}" download>notice d'accessibilité</a>
+      · <a href="${esc(t.securite)}" download>notice de sécurité</a> (Word, à relire).`
+      + (data.avertissements.length ? `<br />${esc(data.avertissements.join(" ; "))}` : "");
+    toast("Notices ERP générées.", "ok");
+  }));
+  const btnNoticesErpPdf = $("#btn-notices-erp-pdf");
+  btnNoticesErpPdf.addEventListener("click", actionLongue(btnNoticesErpPdf, async () => {
+    await sauvegarder();
+    liens.textContent = "Export des notices en PDF (Word)…";
+    const data = await api(`/api/projets/${state.projet.id}/notices-erp/pdf`, { method: "POST" });
+    state.projet = data.projet; state.evaluation = data.evaluation;
+    renderChrome();
+    const t = data.telechargements;
+    liens.innerHTML = `Notices ERP en PDF — <a href="${esc(t.securite)}" target="_blank">notice de sécurité</a>
+      · <a href="${esc(t.accessibilite)}" target="_blank">notice d'accessibilité</a>`
+      + (data.avertissements.length ? `<br />${esc(data.avertissements.join(" ; "))}` : "");
+    toast("Notices ERP exportées en PDF.", "ok");
+  }));
+  btnCerfaErp.addEventListener("click", actionLongue(btnCerfaErp, async () => {
+    const data = await apresSauvegarde(() =>
+      api(`/api/projets/${state.projet.id}/cerfa-erp`, { method: "POST" }));
+    state.projet = data.projet; state.evaluation = data.evaluation;
+    renderChrome();
+    liens.innerHTML = `Cerfa ${esc(data.cerfa)} (autorisation ERP) pré-rempli (${data.champs_remplis} champs) —
+      <a href="/api/projets/${state.projet.id}/cerfa-erp.pdf" target="_blank">ouvrir le PDF</a> (brouillon à relire).`;
+    renderRapportCerfa(data.rapport, "Bilan du pré-remplissage — Cerfa 13824 (ERP)");
+    toast("Cerfa 13824 pré-rempli.", "ok");
+  }));
   btnDepot.addEventListener("click", actionLongue(btnDepot, async () => {
     liens.textContent = "Contrôle de complétude puis assemblage…";
     const data = await api(`/api/projets/${state.projet.id}/dossier?depot=1`, { method: "POST" });
@@ -1214,12 +1778,13 @@ function renderEtapeExport(main) {
     toast(`Nettoyage : ${d.fichiers_supprimes} fichiers, ${d.mo_liberes} Mo libérés.`, "ok");
   }));
   btnCerfa.addEventListener("click", actionLongue(btnCerfa, async () => {
-    const data = await api(`/api/projets/${state.projet.id}/cerfa`, { method: "POST" });
+    const data = await apresSauvegarde(() =>
+      api(`/api/projets/${state.projet.id}/cerfa`, { method: "POST" }));
     state.projet = data.projet; state.evaluation = data.evaluation;
     renderChrome();
     liens.innerHTML = `Cerfa ${esc(data.cerfa)} pré-rempli (${data.champs_remplis} champs) —
-      <a href="/api/projets/${state.projet.id}/cerfa.pdf" target="_blank">ouvrir le PDF</a> (brouillon à relire).`
-      + ((data.avertissements || []).length ? `<br />Avertissements : ${esc(data.avertissements.join(" ; "))}` : "");
+      <a href="/api/projets/${state.projet.id}/cerfa.pdf" target="_blank">ouvrir le PDF</a> (brouillon à relire).`;
+    renderRapportCerfa(data.rapport);
     toast("Cerfa pré-rempli.", "ok");
   }));
   btnPptx.addEventListener("click", actionLongue(btnPptx, async () => {
@@ -1239,6 +1804,18 @@ function renderEtapeExport(main) {
       + `<a href="${esc(data.telechargement)}" download>relancer</a>`;
     toast("PDF téléchargé.", "ok");
   }));
+  // Pages séparées : les portails d'urbanisme réclament les pièces une par
+  // une. On liste les fichiers produits, c'est ce que le BE va téléverser.
+  btnPages.addEventListener("click", actionLongue(btnPages, async () => {
+    liens.textContent = "Découpage du PDF en pages…";
+    const data = await api(`/api/projets/${state.projet.id}/dossier/pages`, { method: "POST" });
+    telechargerFichier(data.telechargement, data.fichier);
+    liens.innerHTML = `Archive téléchargée : <b>${esc(data.fichier)}</b> — `
+      + `${data.pages.length} page${data.pages.length > 1 ? "s" : ""} `
+      + `<a href="${esc(data.telechargement)}" download>relancer</a>`
+      + `<ul class="rapport-liste">${data.pages.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>`;
+    toast(`${data.pages.length} pages découpées.`, "ok");
+  }));
 }
 
 // déclenche le téléchargement d'un fichier (atterrit dans le dossier Téléchargements)
@@ -1254,21 +1831,93 @@ function telechargerFichier(url, nom) {
 // ---------------- init ----------------
 // saisie non sauvegardée (autosave débouncé à 900 ms) : avertir avant de
 // fermer/rafraîchir l'onglet plutôt que de perdre les derniers champs
+// (dossier lié : idem tant que le résultat n'est pas écrit sur le poste)
 window.addEventListener("beforeunload", (e) => {
-  if (state.dirty) { e.preventDefault(); e.returnValue = ""; }
+  if (state.dirty || DossierLie.enCours()) { e.preventDefault(); e.returnValue = ""; }
 });
+
+// Bandeau du mode web : il dit OÙ vivent les projets, avant que quelqu'un ne
+// monte un dossier complet puis ferme son onglet. Trois cas : dossier du poste
+// lié (le serveur ne garde qu'une copie de travail), dossier à reconnecter
+// (le navigateur redemande l'accès à chaque session), ou espace temporaire.
+let infosSession = null;
+
+function texteEtatSynchro() {
+  const e = DossierLie.etat;
+  if (e.code === "enregistrement") return "Enregistrement sur votre PC…";
+  if (e.code === "conflit") {
+    return "⚠ Le dossier a changé sur votre PC pendant votre travail (synchro OneDrive, "
+      + "un collègue) : vos dernières modifications n'y ont pas été écrites. "
+      + "Rouvrez le projet depuis la liste, c'est la version du PC qui fait foi.";
+  }
+  if (e.code === "erreur") return `⚠ Enregistrement sur votre PC impossible : ${e.message}.`;
+  if (e.code === "enregistre" && e.date) {
+    return `Enregistré sur votre PC à ${e.date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}.`;
+  }
+  return "Vos projets sont lus et enregistrés sur ce PC ; le serveur n'en garde qu'une copie de travail temporaire.";
+}
+
+function majBandeau() {
+  const moi = infosSession;
+  const box = $("#bandeau-ephemere");
+  if (!moi?.ephemere || !box) return;
+  const h = moi.duree_vie_h;
+  box.classList.toggle("lie", DossierLie.actif);
+  box.classList.toggle("alerte", DossierLie.actif && ["conflit", "erreur"].includes(DossierLie.etat.code));
+  if (DossierLie.actif) {
+    box.innerHTML = `<b>Dossier lié : ${esc(DossierLie.nom)}.</b> <span>${esc(texteEtatSynchro())}</span>
+      <button class="btn btn-sm" data-lien="changer">Changer de dossier</button>`;
+  } else if (DossierLie.aReconnecter) {
+    box.innerHTML = `<b>Dossier « ${esc(DossierLie.nom)} » à reconnecter.</b>
+      Le navigateur redemande l'accès à votre dossier à chaque session.
+      <button class="btn btn-sm navy" data-lien="reconnecter">Reconnecter</button>
+      <button class="btn btn-sm" data-lien="changer">Choisir un autre dossier</button>`;
+  } else if (DossierLie.disponible) {
+    box.innerHTML = `<b>Espace de travail temporaire.</b>
+      Rien n'est conservé sur le serveur (effacé après ${esc(h)} h d'inactivité).
+      Liez votre dossier PROJETS pour enregistrer vos projets sur ce PC.
+      <button class="btn btn-sm navy" data-lien="lier">Lier mon dossier PROJETS</button>`;
+  } else {
+    box.innerHTML = `<b>Espace de travail temporaire.</b>
+      Vos dossiers ne sont pas conservés sur le serveur et disparaissent après ${esc(h)} h d'inactivité.
+      Téléchargez votre dossier à l'étape « Aperçu &amp; export » avant de partir.
+      Pour enregistrer directement sur votre PC, ouvrez l'outil dans Edge ou Chrome.`;
+  }
+  box.hidden = false;
+  box.querySelectorAll("[data-lien]").forEach((b) =>
+    b.addEventListener("click", () => actionDossier(b.dataset.lien)));
+}
+
+async function actionDossier(quoi) {
+  try {
+    if (quoi === "reconnecter") {
+      if (!(await DossierLie.reconnecter())) toast("Accès refusé : le dossier reste déconnecté.", "warn");
+    } else {
+      if (state.dirty) await sauvegarder();
+      await DossierLie.lier();
+      toast(`Dossier « ${DossierLie.nom} » lié : vos projets y sont enregistrés.`, "ok");
+    }
+  } catch (e) {
+    if (e?.name !== "AbortError") toast(`Liaison impossible : ${e.message}`, "err");
+  }
+  majBandeau();
+  // la liste change de source : on y retourne
+  state.projet = null; state.evaluation = null; state.etape = 0;
+  render();
+}
+
 // Bandeau de session : affiché seulement sur une instance partagée. En local,
 // il n'y a personne à déconnecter, la topbar reste inchangée.
 (async () => {
   try {
     const moi = await (await fetch("/api/moi")).json();
     if (moi.ephemere) {
-      // Mode web : rien n'est conserve cote serveur. Le dire AVANT que
-      // quelqu'un ne monte un dossier complet puis ferme son onglet.
-      $("#bandeau-texte").textContent =
-        `Vos dossiers ne sont pas conservés sur le serveur et disparaissent après `
-        + `${moi.duree_vie_h} h d'inactivité.`;
-      $("#bandeau-ephemere").hidden = false;
+      infosSession = moi;
+      await DossierLie.init(moi);
+      DossierLie.onEtat(majBandeau);
+      majBandeau();
+      // la liste affichée au chargement venait de l'espace serveur
+      if (DossierLie.actif && state.etape === 0) render();
     }
     if (!moi.utilisateur) return;
     $("#session-nom").textContent = moi.utilisateur;

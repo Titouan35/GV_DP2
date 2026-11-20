@@ -204,7 +204,7 @@ def dessiner_coupe(projet: dict) -> Image.Image:
     # titre (pas de cartouche : posé par le PPTX)
     dr.text((box[0] + 14, box[1] + 10),
             f"Coupe {libelle_coupe(p['famille'])}  ·  pente {p['pente_deg']:g}°  ·  "
-            f"acier galvanisé, bandes bleues  ·  modules full black",
+            f"acier galvanisé, bandes bleues  ·  modules photovoltaïques",
             font=police(30, True), fill=NAVY)
 
     m_par_px = 1 / k

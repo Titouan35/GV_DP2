@@ -7,6 +7,7 @@ PROJETS/ est gitignoré (données client, jamais versionnées).
 from __future__ import annotations
 
 import os
+import re
 import threading
 from contextvars import ContextVar
 from pathlib import Path
@@ -127,11 +128,65 @@ def definir_espace(chemin: Path | None):
     return _ESPACE.set(chemin)
 
 
+# Forme d'un identifiant de projet : le slug du nom et un suffixe aléatoire
+# (routes_projets.creer_projet), donc minuscules, chiffres et tirets. Rien qui
+# puisse désigner un autre dossier : ni « . », ni « / », ni « \ ».
+_RE_PROJET_ID = re.compile(r"[a-z0-9-]+")
+
+
+class IdentifiantProjetInvalide(Exception):
+    """Identifiant de projet mal formé arrivé jusqu'aux chemins du disque.
+
+    Volontairement PAS une ValueError : plusieurs routes traduisent une
+    ValueError en message métier (« régime PC »…), qui masquerait celle-ci.
+    """
+
+
+def projet_id_valide(projet_id) -> bool:
+    return isinstance(projet_id, str) and bool(_RE_PROJET_ID.fullmatch(projet_id))
+
+
 def assets_dir(projet_id: str):
-    """Dossier des fichiers du projet (planches générées, uploads, exports)."""
+    """Dossier des fichiers du projet (planches générées, uploads, exports).
+
+    Refuse un identifiant mal formé (20/11/2026) : ce dossier est CRÉÉ s'il
+    n'existe pas, et un `..\\` dans l'identifiant le plaçait hors de l'espace.
+    Les routes le refusent déjà en 400 (routes_projets.exiger_projet_id) ;
+    ce contrôle est le dernier rempart pour tout autre appelant.
+    """
+    if not projet_id_valide(projet_id):
+        raise IdentifiantProjetInvalide(f"Identifiant de projet invalide : {projet_id!r}")
     d = espace() / f"{projet_id}.assets"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def chemin_dans_espace(relatif) -> Path | None:
+    """Chemin d'une pièce du projet (`documents[code]["fichier"]`), ou None.
+
+    Renvoie None si le chemin sort de l'espace de travail. Ce n'est pas une
+    précaution de principe (relevé le 20/11/2026) : `documents` arrive TEL QUEL
+    du navigateur à chaque sauvegarde (PUT /api/projets/{id}), et `fichier`
+    servait ensuite à lire et à SUPPRIMER sans contrôle. Un chemin absolu
+    remplace même la base (`Path("a") / "C:/x"` vaut `C:/x`). En mode web,
+    public et sans compte, n'importe quel visiteur pouvait ainsi effacer un
+    fichier du serveur. Toute lecture ou suppression d'une pièce passe donc par
+    ici.
+
+    Le contrôle se fait sur le chemin résolu (`..`, liens), mais on renvoie le
+    chemin non résolu, comme avant : les appelants et les tests le comparent.
+    """
+    if not relatif or not isinstance(relatif, str):
+        return None
+    base = espace()
+    try:
+        racine = base.resolve()
+        cible = (base / relatif).resolve()
+    except (OSError, ValueError):
+        return None
+    if racine not in cible.parents:
+        return None
+    return base / relatif
 DP_DIR = REPO_ROOT.parent                     # Innovation/OUTILS/DP
 # Coupes types Solstyce START PLAINE : dossier externe ../COUPES en dev local,
 # repli sur la copie embarquée dans le package (indispensable en conteneur, où
@@ -143,7 +198,7 @@ COUPES_DIR = _COUPES_EXTERNE if _COUPES_EXTERNE.exists() else _COUPES_BUNDLE
 APP_NAME = "GV_DP"
 APP_TITLE = "Déclaration Préalable · Ombrières"
 VERSION = "0.1.0"
-PORT = 8420
+PORT = 8421  # 8421 depuis le 03/11/2026 (8420 restait tenu par un ancien serveur)
 
 # --- APIs open data (validées par test réel, cf. PLAN_OUTIL_DP.md §10) ---
 GEOCODAGE_URL = "https://data.geopf.fr/geocodage/search"
@@ -152,6 +207,14 @@ APICARTO_GPU_ZONE_URL = "https://apicarto.ign.fr/api/gpu/zone-urba"
 APICARTO_GPU_MUNICIPALITY_URL = "https://apicarto.ign.fr/api/gpu/municipality"
 APICARTO_GPU_SUP_S_URL = "https://apicarto.ign.fr/api/gpu/assiette-sup-s"
 GEORISQUES_URL = "https://georisques.gouv.fr/api/v1"
+# Bâtiments existants (emprise au sol avant travaux, app/geo/batiments.py) :
+# BD TOPO en WFS, secours cadastre Etalab (un fichier par commune).
+GEOPF_WFS_URL = "https://data.geopf.fr/wfs/ows"
+BDTOPO_BATIMENT_LAYER = "BDTOPO_V3:batiment"
+ETALAB_BATIMENTS_URL = (
+    "https://cadastre.data.gouv.fr/data/etalab-cadastre/latest/geojson/"
+    "communes/{dep}/{insee}/cadastre-{insee}-batiments.json.gz"
+)
 
 # WMTS Géoplateforme (couches libres, sans clé)
 WMTS_URL = "https://data.geopf.fr/wmts"
@@ -167,6 +230,56 @@ CRS_LAMBERT93 = 2154
 
 # --- Réglementaire (décret 2024-1023, demandes >= 01/12/2024) ---
 SEUIL_PC_KWC = 3000.0   # >= 3 MWc => Permis de Construire
+
+# Dimensions d'un module photovoltaïque, en millimètres, quand le projet ne
+# les précise pas. Sert à estimer l'emprise au sol créée du cadre 4.3 du Cerfa
+# (nombre de modules x surface unitaire, décision du 16/09/2026). Valeur du
+# module courant du catalogue Greenvolt, l'AIKO A490 : 1762 x 1134 mm.
+MODULE_DIMENSIONS_DEFAUT_MM = (1762, 1134)
+
+# --- Maître d'ouvrage (constante d'entreprise, 16/09/2026) ---
+# GV_DP ne monte que des dossiers pour Greenvolt Next France : le maître
+# d'ouvrage ne change pas d'un projet à l'autre. Le BE le ressaisissait à la
+# main dans chaque dossier, avec le risque de faute d'un formulaire officiel
+# (SIRET, courriel de suivi). Ces valeurs deviennent le défaut de tout nouveau
+# projet et comblent les champs restés vides des projets existants
+# (models.MaitreOuvrage.completer_defauts). Elles restent MODIFIABLES à
+# l'étape 4 : un dossier monté pour un tiers reste possible.
+MAITRE_OUVRAGE_DEFAUT = {
+    "type": "Société",
+    "raison_sociale": "GREENVOLT NEXT FRANCE",
+    "representant": "Monsieur MANSO NETO Joao",
+    "siret": "980 024 244 00033",
+    "adresse": "2-4 Rue Joseph Nicéphore Niepce, Parc Everest III, 69740 GENAS",
+    "email": "urbanisme@next.greenvolt.com",
+    # 10 chiffres collés : c'est la forme qu'attend le peigne du Cerfa, et
+    # cerfa._telephone_cerfa normalise de toute façon ce qui serait saisi
+    # autrement (« +33(0)6 81 19 42 76 » décalait tout le numéro).
+    "telephone": "0681194276",
+}
+
+# Découpage de CETTE adresse dans les cases du Cerfa, arrêté une fois à la
+# main. Le découpage automatique (cerfa._adresse_demandeur) ne peut pas savoir
+# que « Parc Everest III » est un complément et non la voie : il entasserait
+# tout dans « Voie », case qui s'arrête à 40 caractères, et le formulaire
+# partirait avec « ...Parc Ever ». Le Cerfa a une case « Lieu-dit » pour ça.
+# Représentant légal découpé pour les formulaires qui séparent civilité, nom
+# et prénom (13824 : « Madame/Monsieur », « Nom », « Prénom » ; 16702 : D2N/D2P).
+# Le découpage d'un nom libre n'est pas devinable (« MANSO NETO » est un nom
+# composé) : il est arrêté ici, à la main, pour le représentant par défaut.
+REPRESENTANT_MO_CERFA = {
+    "civilite": "Monsieur",
+    "nom": "MANSO NETO",
+    "prenom": "Joao",
+}
+
+ADRESSE_MO_CERFA = {
+    "D3N_numero": "2-4",
+    "D3V_voie": "Rue Joseph Nicéphore Niepce",
+    "D3W_lieudit": "Parc Everest III",
+    "D3C_code": "69740",
+    "D3L_localite": "GENAS",
+}
 
 # APIs sans SLA : timeout court + erreurs propres remontées à l'UI
 HTTP_TIMEOUT = 20.0

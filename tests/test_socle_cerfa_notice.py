@@ -315,7 +315,7 @@ def test_cerfa_sans_famille_n_affirme_pas_de_cotes_catalogue(
 # -------------------------------------------------------------------- Notice
 
 
-def test_notice_conserve_les_sept_sections_dans_l_ordre():
+def test_notice_conserve_les_huit_sections_dans_l_ordre():
     """L'ordre des sections est le plan de la notice DP11 imprimée.
 
     generer_sections itère sur TEMPLATES : une section retirée ou déplacée
@@ -326,7 +326,7 @@ def test_notice_conserve_les_sept_sections_dans_l_ordre():
 
     # Assert
     assert list(sections) == [cle for cle, _ in SECTIONS]
-    assert len(sections) == 7
+    assert len(sections) == 8
 
 
 def test_notice_ne_laisse_aucune_balise_non_remplie():
@@ -427,7 +427,7 @@ def _creer_projet(client, **surcharges) -> dict:
     return reponse.json()["projet"]
 
 
-def test_route_notice_genere_les_sept_sections(client):
+def test_route_notice_genere_les_huit_sections(client):
     """La route de génération de la notice reste opérationnelle.
 
     routes_dossier.py importe insertion_ia en tête de fichier : si le retrait

@@ -73,20 +73,28 @@ def parametres_effectifs(ombriere: dict) -> dict:
     """Fusionne le type du catalogue et les paramètres saisis par l'utilisateur.
 
     Les valeurs saisies (largeur, pente, hauteurs...) priment sur les valeurs
-    par défaut du catalogue. Quand les DEUX hauteurs sont saisies, elles font
-    foi et la pente est recalculée depuis le profil (hauteurs > pente) ; sinon
-    la hauteur manquante est dérivée de la pente.
+    par défaut du catalogue. Une pente SAISIE (ou lue sur la FVE) n'est jamais
+    réécrite : c'est la donnée du bureau d'études. La pente n'est déduite des
+    deux hauteurs que lorsqu'elle n'a pas été renseignée ; sinon la hauteur
+    manquante est dérivée de la pente.
+
+    Correction du 12/11/2026 : la règle « hauteurs > pente » remplaçait les 6°
+    de la FVE de Bourges par 1,9° (atan((3,92 - 3,50) / 12,35)), parce que la
+    hauteur maximale saisie (3,92 m, cote catalogue) ne correspondait pas à la
+    profondeur réelle de 12,35 m. L'écart entre les cotes est désormais signalé
+    par le contrôle de cohérence (app/coherence.py), pas résolu en silence.
     """
     famille = ombriere.get("famille")
     base = dict(CATALOGUE.get(famille, CATALOGUE["START PLAINE Bas"]))
     base["famille"] = famille or "START PLAINE Bas"
 
     profondeur = ombriere.get("largeur_m") or base["profondeur_m"]
-    pente = ombriere.get("pente_deg") or base["pente_deg"]
+    pente_saisie = ombriere.get("pente_deg")
+    pente = pente_saisie or base["pente_deg"]
     h_bas = ombriere.get("garde_au_sol_m") or base["h_bas_m"]
     h_haut_saisie = ombriere.get("hauteur_hors_tout_m")
-    if h_haut_saisie and ombriere.get("garde_au_sol_m"):
-        # les deux hauteurs priment : pente déduite du profil réel
+    if h_haut_saisie and ombriere.get("garde_au_sol_m") and not pente_saisie:
+        # pente non renseignée : déduite du profil réel
         # (pente continue sur toute la profondeur, y compris en Double : T)
         h_haut = h_haut_saisie
         if profondeur > 0 and h_haut > h_bas:

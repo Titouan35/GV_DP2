@@ -155,9 +155,16 @@ def test_aucune_case_de_consentement_n_est_cochee(assets):
 
 
 def test_l_email_est_quand_meme_repris(assets):
-    """Ne pas cocher le consentement ne doit pas faire perdre l'adresse mail."""
+    """Ne pas cocher le consentement ne doit pas faire perdre l'adresse mail.
+
+    Le formulaire a DEUX cases séparées par un « @ » déjà imprimé (relevé sur
+    le gabarit le 16/09/2026) : partie locale à gauche, domaine à droite. Ce
+    test attendait l'adresse entière dans la première, ce qui produisait
+    « f@example.fr @ » à l'impression et laissait la seconde vide.
+    """
     valeurs, _ = remplir(projet())
-    assert valeurs["D5GE1_email"] == "f@example.fr"
+    assert valeurs["D5GE1_email"] == "f"
+    assert valeurs["D5GE2_email"] == "example.fr"
 
 
 # --------------------------------------------- doctrine : ne rien affirmer

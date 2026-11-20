@@ -19,11 +19,16 @@
 
 FROM python:3.13-slim
 
+# TZ : les fichiers de presence (.lock) portent une heure LOCALE, sans fuseau
+# (app/verrou.py). Avec le dossier lie, ils circulent entre les postes (heure
+# de Paris) et ce serveur : en UTC, il aurait juge perimee la presence d'un
+# collegue arrivee d'un poste, et les postes auraient juge perimee la sienne.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8420 \
-    GVDP_MODE=web
+    GVDP_MODE=web \
+    TZ=Europe/Paris
 
 # Variables utiles (voir HEBERGEMENT.md) :
 #   GVDP_SECRET   signature des cookies d'espace. Sans elle, une valeur est
@@ -31,15 +36,18 @@ ENV PYTHONUNBUFFERED=1 \
 #                 chaque redeploiement, sans risque de securite.
 #   GVDP_WEB_DIR  ou vivent les espaces. Par defaut le dossier temporaire du
 #                 systeme, ce qui convient : rien n'est cense survivre.
-#   GVDP_COMPTES  facultatif. Le mode web n'exige PAS de compte, puisqu'aucun
-#                 dossier client n'est au repos ; en ajouter reste possible
-#                 pour restreindre l'acces a l'equipe.
+#   GVDP_COMPTES  le mode web n'en exige pas, puisqu'aucun dossier client n'est
+#                 au repos. Mais pour l'equipe, avec le dossier lie, ils sont
+#                 INDISPENSABLES : sans compte, tout le monde s'appelle « ? »
+#                 et personne ne voit qu'un collegue a ouvert un dossier.
 
 # Polices pour le rendu des planches (Pillow). Pas de LibreOffice.
+# tzdata : sans lui, TZ=Europe/Paris retomberait sans un mot sur UTC.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-dejavu \
         fonts-liberation \
         curl \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

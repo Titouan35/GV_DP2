@@ -10,6 +10,8 @@ commande continuent de fonctionner sans session.
 """
 from __future__ import annotations
 
+import html
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -19,7 +21,17 @@ router = APIRouter(tags=["connexion"])
 
 
 def _page(message: str = "", champ: str = "") -> str:
-    """Formulaire de connexion, aux couleurs Greenvolt, sans dépendance."""
+    """Formulaire de connexion, aux couleurs Greenvolt, sans dépendance.
+
+    `champ` est l'identifiant SAISI, renvoyé dans le formulaire après un échec :
+    il vient du visiteur et doit être échappé. Sans cela (relevé le 20/11/2026),
+    un site tiers pouvait poster `"><script>…` sur /connexion, route ouverte
+    dans tous les modes, et exécuter du script sur l'origine de l'outil, donc
+    lire ou supprimer les dossiers via l'API. `message` est échappé aussi, par
+    principe : aucune valeur ne doit entrer dans ce HTML sans passer par là.
+    """
+    message = html.escape(message or "")
+    champ = html.escape(champ or "", quote=True)
     alerte = (f'<p class="err">{message}</p>' if message else "")
     return f"""<!doctype html>
 <html lang="fr"><head>

@@ -6,15 +6,17 @@ paramètres, l'UI force toujours regen).
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from .. import config
 from ..geo.client import GeoApiError
 from ..planches import GENERATEURS
-from .routes_projets import _charger
+from .routes_projets import _charger, exiger_projet_id
 
-router = APIRouter(prefix="/api/projets", tags=["planches"])
+# Toutes les routes portent {projet_id} : validé avant la route (exiger_projet_id)
+router = APIRouter(prefix="/api/projets", tags=["planches"],
+                   dependencies=[Depends(exiger_projet_id)])
 
 
 def generer_planche(projet_id: str, code: str, regen: bool = False):
