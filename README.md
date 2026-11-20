@@ -76,8 +76,9 @@ tests/             # pytest ; tests réseau marqués `live`, exclus par défaut
 - [x] **Dossier lié** (20/11/2026, `app/static/js/dossier_lie.js`,
       `app/api/routes_synchro.py`) : en ligne, Edge et Chrome lisent et
       écrivent les projets dans le dossier PROJETS du poste (le OneDrive
-      partagé). Le serveur n'en garde qu'une copie de travail. Cible
-      d'hébergement : Koyeb, offre gratuite, pas à pas dans `HEBERGEMENT.md`.
+      partagé). Le serveur n'en garde qu'une copie de travail. Hébergé sur
+      Render, offre gratuite (https://gv-dp2.onrender.com), pas à pas dans
+      `HEBERGEMENT.md`.
 
 ## Le parcours (5 étapes)
 

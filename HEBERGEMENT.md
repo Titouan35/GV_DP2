@@ -108,27 +108,31 @@ pris pour un collègue par sa propre présence.
 
 ---
 
-## Koyeb, pas à pas (offre gratuite)
+## Render, pas à pas (offre gratuite)
 
-Vérifié le 20/11/2026 : une instance gratuite par organisation, 512 Mo de
-mémoire, 0,1 vCPU, 2 Go de disque, région **Francfort**, pas de volume
-persistant (inutile ici). Elle se met en veille après **1 h** sans visite ;
-la première requête la réveille en quelques secondes, et le dossier lié
-renvoie de lui-même la copie de travail perdue.
+En service depuis le 20/11/2026 : le service `GV_DP2`, à l'adresse
+https://gv-dp2.onrender.com, construit depuis la branche `main` du dépôt
+GitHub `Titouan35/GV_DP2` (public : le code est lisible de tous, les dossiers
+clients n'y sont pas).
+
+Offre gratuite, relevée le 20/11/2026 : 512 Mo de mémoire, 0,1 CPU, région
+**Francfort**, disque éphémère (sans importance ici), 750 h de service par mois
+et par espace de travail, **5 Go de bande passante sortante par mois**. Le
+service se met en veille après **15 min** sans visite et met environ une minute
+à se réveiller ; le dossier lié renvoie de lui-même la copie de travail perdue.
 
 ### 0. Mettre le code sur GitHub
 
-Koyeb construit l'image depuis un dépôt GitHub (privé accepté) ; le dépôt
-`origin` de ce dossier convient. Avant de pousser, vérifie que **tous** les
-modules de `app/` sont suivis : le 20/11/2026, plusieurs fichiers récents
-(`cerfa_erp.py`, `coupes_dp3.py`, `decoupe_pdf.py`, `routes_synchro.py`, …)
-n'étaient pas encore dans git, et l'image ne démarrerait pas sans eux.
+Render construit l'image depuis le dépôt GitHub. Avant de pousser, vérifie que
+**tous** les modules de `app/` sont suivis : le 20/11/2026, plusieurs fichiers
+récents (`cerfa_erp.py`, `coupes_dp3.py`, `decoupe_pdf.py`, `routes_synchro.py`,
+…) n'étaient pas encore dans git, et l'image ne démarrait pas sans eux.
 
 ```
 git add -A
 git status        # PROJETS/, runtime/ et .venv/ ne doivent PAS apparaître
-git commit -m "Mode web : dossier lié"
-git push
+git commit -m "..."
+git push <dépôt> <branche>:main
 ```
 
 `PROJETS/` est exclu par `.gitignore` et `.dockerignore` : aucun dossier client
@@ -152,48 +156,75 @@ Secret de signature des sessions :
 %LOCALAPPDATA%\GV_DP\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-### 2. Créer le service dans Koyeb
+### 2. Réglages du service
 
-Dans le tableau de bord : **Create Web Service → GitHub**, puis le dépôt.
+Onglet **Settings** du service, tels qu'en service le 20/11/2026 :
 
 | Réglage | Valeur |
 |---|---|
-| Builder | **Dockerfile** |
-| Dockerfile location | `Dockerfile.web` |
+| Runtime | **Docker** |
+| Dockerfile Path | `./Dockerfile.web` (surtout pas `./Dockerfile`, qui embarque LibreOffice : 2 Go de mémoire) |
+| Branch | `main` |
+| Region | **Frankfurt (EU Central)** |
 | Instance | **Free** |
-| Region | **Frankfurt** |
-| Port exposé | `8420`, protocole HTTP, route `/` |
-| Health check | HTTP, port `8420`, chemin `/api/sante` |
-| Variables | `GVDP_SECRET` et `GVDP_COMPTES`, en **Secret** (pas en texte clair) |
+| Health Check Path | `/api/sante` |
+| Docker Command | vide : l'image démarre d'elle-même |
 
-Le déploiement construit l'image (quelques minutes), puis donne une adresse
-`https://<service>-<organisation>.koyeb.app`. Le HTTPS est fourni par Koyeb ;
-le navigateur l'exige d'ailleurs pour lier un dossier.
+Le port n'a pas à être réglé : Render impose le sien (10000) par la variable
+`PORT`, et l'image écoute sur `${PORT}`.
 
-### 3. Vérifier
+Onglet **Environment** : `GVDP_SECRET` et `GVDP_COMPTES`. Tant qu'ils
+manquent, l'outil est ouvert à quiconque a l'adresse, et tout le monde
+s'appelle « ? » dans les fichiers de présence.
+
+Modifier un réglage ou une variable relance le déploiement du commit **déjà
+en service**, pas du dernier commit de `main` (constaté le 20/11/2026).
+
+### 3. Déployer une nouvelle version
+
+Le 20/11/2026, un push sur `main` n'a déclenché aucun déploiement, alors que
+l'onglet Settings affiche « Auto-Deploy : On Commit ». Tous les déploiements
+avaient d'ailleurs été lancés à la main. Donc, après chaque push :
+
+1. **Manual Deploy → Deploy latest commit** ;
+2. sur la page du déploiement, vérifier que **SOURCE** porte bien le commit
+   attendu ;
+3. attendre « Live » : environ 75 s mesurées le 20/11/2026.
+
+Piste pour rétablir le déploiement automatique : vérifier sur GitHub
+(Settings → Applications → Render) que l'application Render a bien accès au
+dépôt `GV_DP2`.
+
+### 4. Vérifier
 
 ```
-curl https://<adresse>/api/sante
+curl https://gv-dp2.onrender.com/api/sante
 ```
 
 La réponse doit contenir `"mode":"web"` et `"authentification":"comptes"`.
 Puis, dans Edge : se connecter, cliquer « Lier mon dossier PROJETS », choisir
 le dossier OneDrive `PROJETS`, ouvrir un projet et l'assembler.
 
-### Points à surveiller au premier essai
+### Points à surveiller
 
-- **La durée de l'assemblage.** Mesuré sur un poste le 20/11/2026 sur un
-  dossier réel : 6 s de calcul pur, 13 à 25 s au total avec les planches
-  cartographiques. Avec 0,1 vCPU, compter de l'ordre de dix fois plus de
-  calcul. D'après un message du personnel Koyeb sur leur forum (pas dans la
-  documentation officielle), une requête est coupée au bout de **120 s**. Si
-  l'assemblage échoue sur un délai dépassé, il faudra le rendre asynchrone ou
-  passer sur une instance payante.
-- **Le disque de 2 Go.** Il porte l'image et les copies de travail. Une
-  dizaine de projets ouverts dans la même demi-journée tient sans peine ; la
-  purge à 12 h et la mise en veille vident le reste.
-- **Le réveil.** Après 1 h sans visite, la première page met quelques
-  secondes à répondre.
+- **La mémoire.** Le service s'est arrêté cinq fois les 14 et 15/09/2026
+  (« Ran out of memory », onglet Events) : les plans A0 étaient rendus à
+  pleine résolution. Corrigé le 20/11/2026 (`images.rendre_page_pdf`). Pics
+  mesurés ensuite sur deux dossiers réels : 293 Mo pour un assemblage qui
+  regénère les planches, 130 à 290 Mo pour le reste. Un nouvel arrêt mémoire
+  se lit dans l'onglet Events, avec l'heure : c'est elle qui désigne
+  l'opération en cause.
+- **La bande passante (5 Go par mois).** Avec le dossier lié, chaque
+  assemblage renvoie au poste le PPTX et les planches : 18 Mo pour un dossier
+  réel. Cela laisse de l'ordre de 250 assemblages par mois, moins les
+  ouvertures de pages et les téléchargements. Au-delà, Render facture si une
+  carte est enregistrée, et suspend le service sinon.
+- **La durée de l'assemblage.** 6 s de calcul pur sur un poste, 13 à 25 s au
+  total avec les planches cartographiques ; avec 0,1 CPU, compter environ
+  une minute. Render ne coupe une requête qu'au bout de 100 minutes, d'après
+  son forum (pas dans la documentation officielle).
+- **Le réveil.** Après 15 min sans visite, la première page met environ une
+  minute à répondre.
 
 ---
 

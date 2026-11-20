@@ -49,7 +49,7 @@ router = APIRouter(prefix="/api/synchro", tags=["synchro"])
 # Une pièce déposée est limitée à 40 Mo (routes_documents), mais le dossier
 # contient aussi ce que l'outil produit : le PPTX assemblé d'un projet réel
 # pèse 6 Mo, une FVE 28 Mo. La marge couvre les deux sans laisser un envoi
-# remplir le disque de l'hébergeur (2 Go sur l'offre gratuite Koyeb).
+# remplir le disque de l'hébergeur.
 TAILLE_MAX = 150 * 1024 * 1024
 
 # Au-delà, une liste de projets n'est plus une liste mais un envoi massif.

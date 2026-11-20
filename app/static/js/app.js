@@ -1483,6 +1483,17 @@ const NOTICE_SECTIONS = [
   ["chantier", "8. Chantier et remise en état"],
 ];
 
+// Point 7 « Gestion des eaux pluviales » optionnel (demande du 12/11/2026),
+// décoché par défaut. Même règle que notice.sections_actives côté serveur :
+// décoché, la section disparaît de l'écran et du dossier, et la numérotation
+// reste continue (« Chantier » devient le point 7). Son texte reste stocké et
+// revient tel quel si on recoche.
+function sectionsNotice(n) {
+  return NOTICE_SECTIONS
+    .filter(([cle]) => cle !== "eaux_pluviales" || n?.eaux_pluviales)
+    .map(([cle, titre], i) => [cle, `${i + 1}. ${titre.slice(titre.indexOf(". ") + 2)}`]);
+}
+
 let noticeVars = [];
 
 // surligne dans un texte les valeurs concrètes du projet (relecture)
@@ -1509,7 +1520,12 @@ function renderEtapeNotice(main) {
     <h1>Notice + Cerfa</h1>
     <div class="actionsrow" style="margin:0 0 16px">
       <button class="btn navy" id="btn-gen-notice">Générer / remplir la notice</button>
-      <button class="btn" id="btn-regen-notice" title="Écrase les 8 sections avec la notice type remplie">Tout regénérer</button>
+      <button class="btn" id="btn-regen-notice" title="Écrase toutes les sections avec la notice type remplie">Tout regénérer</button>
+      <label class="chip ${n.eaux_pluviales ? "ok" : ""}" style="cursor:pointer;padding:8px 14px"
+             title="Décoché, ce point n'apparaît ni ici ni dans le dossier, et les points suivants sont renumérotés. Son texte est conservé.">
+        <input type="checkbox" id="chk-eaux-pluviales" ${n.eaux_pluviales ? "checked" : ""} style="margin-right:6px" />
+        Inclure « Gestion des eaux pluviales »
+      </label>
       <label class="chip ${n.valide_humain ? "ok" : ""}" style="cursor:pointer;padding:8px 14px">
         <input type="checkbox" id="chk-valide" ${n.valide_humain ? "checked" : ""} style="margin-right:6px" />
         Notice relue et validée
@@ -1546,6 +1562,17 @@ function renderEtapeNotice(main) {
     state.projet.notice.valide_humain = e.target.checked;
     sauvegarder(false).catch(() => {});
   });
+  $("#chk-eaux-pluviales").addEventListener("change", (e) => {
+    state.projet.notice.eaux_pluviales = e.target.checked;
+    e.target.closest("label").classList.toggle("ok", e.target.checked);
+    // ajouter ou retirer un point change la notice relue : comme pour une
+    // retouche du texte, la validation tombe
+    state.projet.notice.valide_humain = false;
+    const chk = $("#chk-valide");
+    if (chk) { chk.checked = false; chk.closest("label").classList.remove("ok"); }
+    renderNoticeSections();
+    sauvegarder().catch(() => {});
+  });
 
   renderNoticeSections();
   api(`/api/projets/${state.projet.id}/notice/variables`)
@@ -1558,7 +1585,7 @@ function renderNoticeSections() {
   if (!box) return;
   const n = state.projet.notice || { sections: {} };
   box.innerHTML = "";
-  for (const [cle, titre] of NOTICE_SECTIONS) {
+  for (const [cle, titre] of sectionsNotice(n)) {
     const txt = n.sections?.[cle] || "";
     const div = document.createElement("div");
     div.className = "card notice-sec";
