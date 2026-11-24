@@ -19,6 +19,11 @@
 
 FROM python:3.13-slim
 
+# MALLOC_ARENA_MAX : sans lui, chaque fil d'execution du serveur peut garder
+# sa propre reserve de memoire apres une generation, et l'ensemble ne
+# redescend pas (voir app/memoire.py). 2 reserves suffisent ici.
+ENV MALLOC_ARENA_MAX=2
+
 # TZ : les fichiers de presence (.lock) portent une heure LOCALE, sans fuseau
 # (app/verrou.py). Avec le dossier lie, ils circulent entre les postes (heure
 # de Paris) et ce serveur : en UTC, il aurait juge perimee la presence d'un

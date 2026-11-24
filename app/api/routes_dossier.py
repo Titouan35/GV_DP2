@@ -8,8 +8,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import (cerfa_erp, coherence, config, decoupe_pdf, lecture_fve, nomenclature, notice,
-               notices_erp, regles)
+from .. import (cerfa_erp, coherence, config, decoupe_pdf, lecture_fve, memoire, nomenclature,
+               notice, notices_erp, regles)
 from ..assemblage import generer_dossier
 from ..cerfa import NUMERO_CERFA, preremplir
 from ..cerfa import rapport as cerfa_rapport
@@ -129,6 +129,7 @@ def telecharger_cerfa_erp(projet_id: str):
 
 
 @router.post("/projets/{projet_id}/notices-erp")
+@memoire.lourde("notices ERP")
 def generer_notices_erp(projet_id: str):
     """Notices accessibilité et sécurité de l'autorisation ERP (app/notices_erp.py).
 
@@ -169,6 +170,7 @@ def generer_notices_erp(projet_id: str):
 
 
 @router.post("/projets/{projet_id}/notices-erp/pdf")
+@memoire.lourde("notices ERP en PDF")
 def exporter_notices_erp_pdf(projet_id: str):
     """Les deux notices ERP en PDF (Word sur le poste, LibreOffice ailleurs).
 
@@ -225,6 +227,7 @@ def telecharger_cerfa(projet_id: str):
 
 
 @router.post("/projets/{projet_id}/dossier")
+@memoire.lourde("assemblage du dossier")
 def assembler_dossier(projet_id: str, depot: int = 0):
     """Assemble le PPTX. `depot=1` = contrôle bloquant : refuse (409) tant que
     toutes les pièces ne sont pas prêtes, pour qu'un dossier incomplet ne
@@ -270,6 +273,7 @@ def telecharger_dossier(projet_id: str):
 
 
 @router.post("/projets/{projet_id}/dossier/pdf")
+@memoire.lourde("dossier en PDF")
 def convertir_dossier_pdf(projet_id: str):
     chemin_pptx = config.assets_dir(projet_id) / f"Dossier_DP_{projet_id}.pptx"
     if not chemin_pptx.exists():
@@ -285,6 +289,7 @@ def convertir_dossier_pdf(projet_id: str):
 
 
 @router.post("/projets/{projet_id}/dossier/pages")
+@memoire.lourde("découpe en pages")
 def decouper_dossier_en_pages(projet_id: str):
     """Une page par pièce, regroupées en archive.
 

@@ -7,11 +7,11 @@ Lancement : `Lancer GV_DP.bat` ou
 """
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config, securite, session_web
+from . import config, memoire, securite, session_web
 from .api import (
     routes_connexion,
     routes_documents,
@@ -32,6 +32,15 @@ app = FastAPI(title=config.APP_TITLE, version=config.VERSION)
 # la page de connexion elle-meme dispose d'un espace en mode web.
 app.add_middleware(securite.Authentification)
 app.add_middleware(session_web.EspaceEphemere)
+
+
+@app.exception_handler(memoire.ServeurOccupe)
+def serveur_occupe(request: Request, exc: memoire.ServeurOccupe):
+    """File des opérations lourdes pleine trop longtemps (app/memoire.py) :
+    503 avec un message lisible, que l'interface affiche tel quel."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)},
+                        headers={"Retry-After": "60"})
+
 
 app.include_router(routes_connexion.router)
 app.include_router(routes_geo.router)

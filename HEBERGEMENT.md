@@ -211,9 +211,26 @@ le dossier OneDrive `PROJETS`, ouvrir un projet et l'assembler.
   (« Ran out of memory », onglet Events) : les plans A0 étaient rendus à
   pleine résolution. Corrigé le 20/11/2026 (`images.rendre_page_pdf`). Pics
   mesurés ensuite sur deux dossiers réels : 293 Mo pour un assemblage qui
-  regénère les planches, 130 à 290 Mo pour le reste. Un nouvel arrêt mémoire
-  se lit dans l'onglet Events, avec l'heure : c'est elle qui désigne
-  l'opération en cause.
+  regénère les planches, 130 à 290 Mo pour le reste. Nouveaux arrêts en
+  novembre (« exceeded its memory limit ») : deux opérations lourdes sur deux
+  projets différents pouvaient tourner en même temps, et doubler ce pic.
+  Depuis le 24/11/2026 (`app/memoire.py`) :
+  - **une seule opération lourde à la fois** sur tout le serveur
+    (assemblage, notices ERP, planches, dépôt et aperçu des pièces, export et
+    découpe PDF) ; les autres attendent leur tour, et reçoivent « Réessayez
+    dans une minute » (503) au-delà de 5 min d'attente. Réglable par
+    `GVDP_OPERATIONS_LOURDES` (nombre simultané) et `GVDP_ATTENTE_MAX_S` ;
+  - la mémoire est rendue au système après chacune (`malloc_trim`, et
+    `MALLOC_ARENA_MAX=2` dans l'image) ;
+  - **deux lignes par opération dans les Logs** de Render, au début puis à
+    la fin : `GV_DP mémoire | assemblage du dossier [projet] : 41.2 s
+    (attente 0.0 s) | 150 Mo avant, pic 290 Mo, 160 Mo après libération`.
+    La ligne de fin passe en WARNING au-delà de 400 Mo
+    (`GVDP_MEMOIRE_ALERTE_MO`).
+
+  En cas de nouvel arrêt : relever l'heure dans l'onglet Events, puis
+  chercher dans l'onglet Logs la ligne `GV_DP mémoire | début …` restée sans
+  ligne de fin juste avant. Elle désigne l'opération et le projet en cause.
 - **La bande passante (5 Go par mois).** Avec le dossier lié, chaque
   assemblage renvoie au poste le PPTX et les planches : 18 Mo pour un dossier
   réel. Cela laisse de l'ordre de 250 assemblages par mois, moins les
