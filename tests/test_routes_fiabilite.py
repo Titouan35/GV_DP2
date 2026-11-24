@@ -90,9 +90,31 @@ def test_verrou_optimiste_409(client):
     assert client.get(f"/api/projets/{pid}").json()["projet"]["nom"] == "Version A"
 
 
-def test_modifie_par_renseigne(client):
+def test_modifie_par_renseigne(client, monkeypatch):
+    """Sans en-tête, l'auteur est le compte du poste. L'environnement est fixé
+    ici : dans un conteneur, ni USERNAME ni USER n'existent forcément, et le
+    test échouait selon la machine qui le lançait."""
+    monkeypatch.setenv("USERNAME", "poste-be")
+    monkeypatch.delenv("USER", raising=False)
     pid = _creer_projet(client)
-    assert client.get(f"/api/projets/{pid}").json()["projet"]["modifie_par"]
+    assert client.get(f"/api/projets/{pid}").json()["projet"]["modifie_par"] == "poste-be"
+
+
+def test_modifie_par_prefere_l_entete(client, monkeypatch):
+    """En ligne, l'identité vient de l'en-tête X-Utilisateur, pas du compte du
+    serveur (qui désignerait « root » pour tout le monde)."""
+    monkeypatch.setenv("USERNAME", "compte-serveur")
+    r = client.post("/api/projets", json={"nom": "Entete"},
+                    headers={"X-Utilisateur": "Camille"})
+    assert r.json()["projet"]["modifie_par"] == "Camille"
+
+
+def test_modifie_par_vide_plutot_que_devine(client, monkeypatch):
+    """Ni en-tête ni compte : on laisse vide, on n'invente pas d'auteur."""
+    monkeypatch.delenv("USERNAME", raising=False)
+    monkeypatch.delenv("USER", raising=False)
+    pid = _creer_projet(client)
+    assert client.get(f"/api/projets/{pid}").json()["projet"]["modifie_par"] is None
 
 
 def test_nettoyer_purge_les_caches(client):
