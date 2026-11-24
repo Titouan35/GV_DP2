@@ -3,6 +3,11 @@
 # polices vectorielles pour le rendu des planches (Pillow).
 FROM python:3.13-slim
 
+# MALLOC_ARENA_MAX : sans lui, chaque fil d'execution du serveur peut garder
+# sa propre reserve de memoire apres une generation, et l'ensemble ne
+# redescend pas (voir app/memoire.py). 2 reserves suffisent ici.
+ENV MALLOC_ARENA_MAX=2
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONIOENCODING=utf-8 \
     PIP_NO_CACHE_DIR=1 \

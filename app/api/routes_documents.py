@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from PIL import Image, ImageOps
 
-from .. import config, coupes_dp3, lecture_fve, lecture_plan, regles
+from .. import config, coupes_dp3, images, lecture_fve, lecture_plan, memoire, regles
 from .routes_projets import _charger, _utilisateur, exiger_projet_id, projet_a_modifier
 
 # Toutes les routes portent {projet_id} : validé avant la route (exiger_projet_id)
@@ -29,6 +29,8 @@ EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".pptx"}
 # n'entre donc pas dans regles.PIECES_DP et ne compte pas dans la complétude.
 CODE_FVE = "fve"
 TAILLE_MAX = 40 * 1024 * 1024  # 40 Mo
+# Aperçu d'une pièce PDF : plus grand côté rendu (A4 et A3 gardent leurs 200 dpi).
+COTE_MAX_APERCU = 3400
 
 # en-têtes (magic bytes) attendus par extension : un fichier renommé .pdf qui
 # n'en est pas un plantait plus loin dans pypdfium avec une erreur obscure
@@ -182,6 +184,7 @@ async def uploader(projet_id: str, code: str, fichier: UploadFile):
         _enregistrer_depot, projet_id, code, ext, fichier.filename, contenu)
 
 
+@memoire.lourde("dépôt d'une pièce")
 def _enregistrer_depot(projet_id: str, code: str, ext: str,
                        nom_fichier: str | None, contenu: bytes) -> dict:
     """Écrit la pièce et met le projet à jour, sous le verrou du projet."""
@@ -305,6 +308,7 @@ def telecharger_document(projet_id: str, code: str):
 
 
 @router.get("/{projet_id}/documents/{code}/image")
+@memoire.lourde("aperçu d'une pièce")
 def apercu_document_image(projet_id: str, code: str):
     """Rend la pièce en PNG (1re page si PDF) pour l'outil de mesure du plan."""
     from fastapi.responses import FileResponse
@@ -323,7 +327,9 @@ def apercu_document_image(projet_id: str, code: str):
     with config.PDFIUM_LOCK:
         pdf = pdfium.PdfDocument(str(chemin))
         try:
-            pdf[0].render(scale=200 / 72).to_pil().save(sortie)
+            # plafonné comme les autres rendus (images.rendre_page_pdf) : un plan
+            # A0 à 200 dpi faisait 6 600 x 9 400 px, près de 190 Mo à lui seul
+            images.rendre_page_pdf(pdf[0], 200, COTE_MAX_APERCU).save(sortie)
         finally:
             pdf.close()
     return FileResponse(sortie, media_type="image/png")

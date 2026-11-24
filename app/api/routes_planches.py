@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from .. import config
+from .. import config, memoire
 from ..geo.client import GeoApiError
 from ..planches import GENERATEURS
 from .routes_projets import _charger, exiger_projet_id
@@ -26,14 +26,18 @@ def generer_planche(projet_id: str, code: str, regen: bool = False):
     chemin = config.assets_dir(projet_id) / f"{code}.png"
     if chemin.exists() and not regen:
         return chemin
-    projet = _charger(projet_id).model_dump()
-    try:
-        image = GENERATEURS[code](projet)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except GeoApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    image.save(chemin, "PNG")
+    # dans la file des opérations lourdes, mais APRÈS le cache : relire une
+    # planche déjà faite n'a pas à attendre la fin d'un assemblage
+    with memoire.operation_lourde(f"planche {code} [{projet_id}]"):
+        projet = _charger(projet_id).model_dump()
+        try:
+            image = GENERATEURS[code](projet)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except GeoApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        image.save(chemin, "PNG")
+        del image
     return chemin
 
 
