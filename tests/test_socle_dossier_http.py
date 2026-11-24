@@ -263,3 +263,27 @@ def test_index_est_servi_sans_cache(client):
     # Assert
     assert r.status_code == 200
     assert "no-store" in r.headers.get("cache-control", "").lower()
+
+
+def test_sans_libreoffice_le_word_reste_telechargeable(client, monkeypatch):
+    """Version en ligne (Dockerfile.web, sans LibreOffice) : les notices Word
+    se génèrent et se téléchargent ; seul l'export PDF est refusé, avec un
+    message qui renvoie vers Word et non vers le .pptx. /api/moi l'annonce
+    pour que l'interface grise les boutons PDF."""
+    # Arrange
+    monkeypatch.setattr(export_pdf.sys, "platform", "linux")
+    monkeypatch.setattr(export_pdf, "_binaire_libreoffice", lambda: None)
+    projet_id = _creer_projet(client)
+
+    # Act
+    word = client.post(f"/api/projets/{projet_id}/notices-erp")
+    pdf = client.post(f"/api/projets/{projet_id}/notices-erp/pdf")
+
+    # Assert
+    assert word.status_code == 200
+    for url in word.json()["telechargements"].values():
+        r = client.get(url)
+        assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert pdf.status_code == 501
+    assert "Word" in pdf.json()["detail"] and ".pptx" not in pdf.json()["detail"]
+    assert client.get("/api/moi").json()["export_pdf"] is False

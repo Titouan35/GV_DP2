@@ -15,7 +15,7 @@ import html
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import securite, session_web
+from .. import export_pdf, securite, session_web
 
 router = APIRouter(tags=["connexion"])
 
@@ -123,4 +123,6 @@ def moi(request: Request):
         "mode": securite.mode(),
         "ephemere": session_web.actif(),
         "duree_vie_h": session_web.DUREE_VIE_H,
+        # sans convertisseur (image web), l'interface grise les boutons PDF
+        "export_pdf": export_pdf.disponible(),
     })

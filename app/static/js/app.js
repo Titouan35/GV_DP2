@@ -10,6 +10,7 @@ const state = {
   geocodeResults: [],
   suggestions: [],   // parcelles proposées depuis l'adresse, à valider
   dirty: false,
+  exportPdf: true,   // faux sur un serveur sans convertisseur (cf. /api/moi)
 };
 
 const STEPS = [
@@ -1738,6 +1739,15 @@ function renderEtapeExport(main) {
   const btnCerfa = $("#btn-cerfa"), btnPptx = $("#btn-pptx"), btnPdf = $("#btn-pdf");
   const btnDepot = $("#btn-depot"), btnNettoyer = $("#btn-nettoyer"), btnPages = $("#btn-pages");
   const btnCerfaErp = $("#btn-cerfa-erp");
+  // Sans convertisseur (version en ligne, sans LibreOffice), les boutons PDF
+  // sont grisés et disent quoi faire, au lieu de renvoyer une erreur au clic.
+  if (!state.exportPdf) {
+    [[btnPdf, "le PPTX depuis PowerPoint"], [btnPages, "le PPTX depuis PowerPoint"],
+     [$("#btn-notices-erp-pdf"), "les notices Word depuis Word"]].forEach(([b, quoi]) => {
+      b.disabled = true;
+      b.title = `Export PDF indisponible sur la version en ligne : téléchargez ${quoi}, puis enregistrez en PDF.`;
+    });
+  }
   // cases M1 à M5 : une seule cochée à la fois (re-cliquer décoche)
   main.querySelectorAll("#erp-categorie input[value]").forEach((cb) => cb.addEventListener("change", () => {
     main.querySelectorAll("#erp-categorie input").forEach((autre) => { if (autre !== cb) autre.checked = false; });
@@ -1938,6 +1948,8 @@ async function actionDossier(quoi) {
 (async () => {
   try {
     const moi = await (await fetch("/api/moi")).json();
+    state.exportPdf = moi.export_pdf !== false;
+    if (state.etape === 5) render();
     if (moi.ephemere) {
       infosSession = moi;
       await DossierLie.init(moi);
