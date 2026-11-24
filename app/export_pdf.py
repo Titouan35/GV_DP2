@@ -98,13 +98,33 @@ try {{
         raise RuntimeError(f"Export PDF via Word échoué : {detail or 'erreur inconnue'}")
 
 
+def _binaire_libreoffice() -> str | None:
+    return shutil.which("soffice") or shutil.which("libreoffice")
+
+
+def disponible() -> bool:
+    """Un convertisseur PDF est-il présent ? Sur Windows on suppose Office
+    (poste BE) ; ailleurs, il faut LibreOffice. L'image web (Dockerfile.web)
+    n'en a pas : l'interface grise alors les boutons PDF au lieu de laisser
+    l'utilisateur tomber sur une erreur."""
+    return sys.platform == "win32" or _binaire_libreoffice() is not None
+
+
 def _export_libreoffice(chemin_pptx: Path, chemin_pdf: Path) -> None:
     """Conversion Linux/macOS via LibreOffice headless (soffice/libreoffice)."""
-    binaire = shutil.which("soffice") or shutil.which("libreoffice")
+    binaire = _binaire_libreoffice()
     if not binaire:
+        # le message nomme le BON logiciel : pour une notice ERP, c'est Word,
+        # pas PowerPoint (l'ancien message renvoyait au .pptx dans tous les cas)
+        if chemin_pptx.suffix.lower() == ".docx":
+            raise RuntimeError(
+                "Export PDF indisponible sur ce serveur (LibreOffice absent). Les notices "
+                "restent téléchargeables en Word : bouton « Notices ERP (Word) », puis "
+                "Fichier > Enregistrer sous > PDF dans Word."
+            )
         raise RuntimeError(
-            "LibreOffice introuvable : installez-le (paquet libreoffice) ou exportez "
-            "le .pptx en PDF à la main."
+            "Export PDF indisponible sur ce serveur (LibreOffice absent). Le dossier "
+            "reste téléchargeable en PPTX : exportez-le en PDF depuis PowerPoint."
         )
     # profil utilisateur isolé : sans lui, deux conversions simultanées se
     # disputent le profil par défaut (« another instance is running »).
